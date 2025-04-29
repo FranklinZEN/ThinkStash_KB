@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run linting first
+npm run lint
+
+# Run lint-staged on staged files
+npx lint-staged

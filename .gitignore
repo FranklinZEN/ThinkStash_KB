@@ -62,4 +62,49 @@ docker-data/
 *.ntvs*
 *.njsproj
 *.sln
-*.sw? 
+*.sw?
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local Env Files
+.env*.local
+.env
+
+# Log files
+*.log
+logs
+*.log.*
+
+# Prisma
+# Ignore generated client
+/node_modules/@prisma/client
+# Optional: Ignore local SQLite database files
+*.db
+*.db-journal*
+
+# Editor directories and files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+
+# Optional: IJ related files
+.idea
+*.iml
+
+# Optional: Jest cache directory
+.jest-cache
+
+# Optional: Storybook build outputs
+/storybook-static
+
+# Optional: Cypress artifacts
+/cypress/videos/
+/cypress/screenshots/ 

@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial project setup (placeholder for upcoming Stage 1 features).
-- Established initial documentation structure (ADR Template, Dev Log).
-- Started refined development plan based on PRD/TDD/Epic review.
+- User Authentication (Epic KC-AUTH): Implemented user registration, login (email/password via NextAuth CredentialsProvider), session management (JWT), profile view/update APIs and pages.
+- Knowledge Card CRUD (Epic KC-CARD-CREATE): Implemented creation, reading, updating, and deletion of knowledge cards.
+- Rich Text Editing: Integrated BlockNote.js (`@blocknote/react` + `@blocknote/mantine`) for card content, storing content as JSON.
+- Basic Tagging: Added schema and backend logic for many-to-many tagging of cards.
+- Core backend/frontend testing setup (Jest).
+- Foundational project setup (Next.js, Prisma, Chakra UI, Docker, Code Quality tools).
 
 ### Changed
 - N/A
@@ -21,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A
 
 ### Fixed
-- N/A
+- Resolved issues with BlockNote editor initialization and `editable` state management on card detail/edit pages.
+- Corrected BlockNote content loading logic in card detail page (`replaceBlocks` vs `tryParseMarkdownToBlocks`).
+- Fixed BlockNote import issues (`useBlockNote` vs `BlockNoteView` sources).
+- Ensured BlockNote editor is editable by default on the new card page.
 
 ### Security
-- N/A 
+- Implemented password hashing using bcryptjs. 

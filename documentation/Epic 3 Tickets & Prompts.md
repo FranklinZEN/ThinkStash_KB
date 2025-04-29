@@ -286,13 +286,239 @@ Overall, this epic provides a solid foundation for card creation and management 
 
 **18\. Ticket: KC-CARD-TEST-FE-1-BLOCK: Write Unit Tests for Card Frontend Components**
 
-* **Prompt:** Write unit tests for the key Card frontend components using Jest and React Testing Library as specified in **JIRA Ticket KC-CARD-TEST-FE-1-BLOCK**.  
-  1. Create test files alongside components (BlockEditor.test.tsx, TagInput.test.tsx, pages/cards/new/page.test.tsx, etc.).  
-  2. Mock fetch, next/navigation (useRouter, useParams), @chakra-ui/react (useToast), next-auth/react (useSession).  
-  3. **BlockEditor:** Test rendering, props (initialContent, editable), onChange callback.  
-  4. **TagInput:** Test adding (Enter/Comma), removing, duplicates, onChange, value prop.  
-  5. **Create/Edit Pages:** Test form rendering, state changes, submit handler logic (mocking fetch, router, toast), error handling, pre-population (edit).  
-  6. **Display Page:** Test data fetching (useEffect, mock fetch/useParams), rendering based on fetch state (loading, error, success), rendering read-only content.  
-  7. **List Page:** Test data fetching (useEffect, mock fetch), rendering based on fetch state (loading, error, empty, list), rendering card links.  
-  8. **Delete Logic (in Display Page):** Test dialog opening, confirm action (mock fetch, toast, router), cancel action.  
+* **Prompt:** Write unit tests for the key Card frontend components using Jest and React Testing Library as specified in **JIRA Ticket KC-CARD-TEST-FE-1-BLOCK**.
+  1. Create test files alongside components (BlockEditor.test.tsx, TagInput.test.tsx, pages/cards/new/page.test.tsx, etc.).
+  2. Mock fetch, next/navigation (useRouter, useParams), @chakra-ui/react (useToast), next-auth/react (useSession).
+  3. **BlockEditor:** Test rendering, props (initialContent, editable), onChange callback.
+  4. **TagInput:** Test adding (Enter/Comma), removing, duplicates, onChange, value prop.
+  5. **Create/Edit Pages:** Test form rendering, state changes, submit handler logic (mocking fetch, router, toast), error handling, pre-population (edit).
+  6. **Display Page:** Test data fetching (useEffect, mock fetch/useParams), rendering based on fetch state (loading, error, success), rendering read-only content.
+  7. **List Page:** Test data fetching (useEffect, mock fetch), rendering based on fetch state (loading, error, empty, list), rendering card links.
+  8. **Delete Logic (in Display Page):** Test dialog opening, confirm action (mock fetch, toast, router), cancel action.
   9. Follow testing practices from **Testing Strategy Section 2.1/2.2** and **Coding Standards Section 5.4**. Use renderWithProviders test utility.
+
+**19\. Ticket: KC-CARD-FE-8: Display Folder Name on Card List Items [Implemented]**
+
+*   **Epic:** KC-CARD-CREATE / KC-ANALYTICS (UI Aspect)
+*   **PRD Requirement(s):** Implied Usability Enhancement
+*   **Team:** FE / BE
+*   **Dependencies (Functional):** KC-CARD-FE-6-BLOCK (Basic Card List UI), KC-CARD-BE-4-BLOCK (List Cards API), KC-ORG (Folders exist)
+*   **UX/UI Design Link:** \[Link to updated Figma/mockups showing folder name on card] (Requires UX input)
+*   **Description (Functional):** When viewing the list of cards (e.g., on the dashboard or main view at /), display the name of the folder that each card belongs to, if any. This provides users with immediate context about the card's organization.
+*   **Acceptance Criteria (Functional):**
+    *   The API endpoint for listing cards (GET /api/cards) includes the ID and name of the folder each card belongs to (if assigned).
+    *   The frontend component displaying the list of cards (e.g., CardListItem used in the dashboard) renders the folder name visually associated with the card item (e.g., below the title, as a badge).
+    *   Cards not assigned to any folder do not display a folder name.
+    *   The display matches the updated UX design.
+*   **Technical Approach / Implementation Notes (AI-Friendly Prompt):**
+    *   **Backend (KC-CARD-BE-4-BLOCK Revision):**
+        *   Modify the Prisma query within the GET `/api/cards` route handler (`app/api/cards/route.ts`).
+        *   Update the Prisma query to `include` the related folder's `id` and `name`:
+            ```prisma
+            // Inside prisma.knowledgeCard.findMany call:
+            include: {
+              folder: {
+                select: {
+                  id: true,   // Ensure ID is included
+                  name: true
+                }
+              }
+              // tags: { select: { name: true }, take: 3 }, // Example if tags are needed
+            }
+            ```
+        *   Ensure the API response structure now includes the `folder: { id: string, name: string } | null` field for each card. Update `CardListItem` interface in `src/stores/cardStore.ts`.
+    *   **Frontend (KC-CARD-FE-6-BLOCK Revision or KC-CARD-FE-8-BLOCK if refactored):**
+        *   Update the frontend type/interface used for card list items (`CardListItem` in `src/stores/cardStore.ts`) to include the optional `folder` object with `id` and `name`.
+        *   Modify the React component responsible for rendering individual card items in the list (e.g., `src/app/page.tsx` or `src/components/CardList.tsx`).
+        *   Within the component, check if `card.folder?.name` exists.
+        *   If present, render it using a suitable Chakra UI component (e.g., a small `Text` component, possibly with an icon, or a `Badge`) in the location specified by the UX design. Example:
+            ```tsx
+            // Inside CardBody:
+            {card.folder?.name && (
+              <Flex align="center" mt={1} opacity={0.7}>
+                 {/* Optional: <Icon as={FolderIcon} mr={1} /> */}
+                <Text fontSize="xs" ml={1}>
+                  {card.folder.name}
+                </Text>
+              </Flex>
+            )}
+            ```
+        *   Ensure the layout remains clean.
+*   **API Contract (if applicable):** Modifies response of `GET /api/cards`. Adds `folder: { id: string, name: string } | null` to each card object in the response array.
+*   **Data Model Changes (if applicable):** N/A (Uses existing relation)
+*   **Key Functions/Modules Involved:**
+    *   `app/api/cards/route.ts` (GET handler)
+    *   Frontend card list component (`src/app/page.tsx` or `src/components/CardList.tsx`)
+    *   `src/stores/cardStore.ts` (`CardListItem` interface)
+    *   Prisma Client (`findMany` with `include`)
+    *   Chakra UI components (`Text`, `Badge`, `Flex`, `Icon`?)
+*   **Testing Considerations (Technical):** Update backend tests for `GET /api/cards` to verify the folder field (id and name) is included/excluded correctly. Update frontend unit tests for the card list item to check for folder name rendering. E2E test the dashboard view to confirm folder names appear correctly.
+*   **Dependencies (Technical):** `KC-CARD-BE-4-BLOCK`, `KC-CARD-FE-6-BLOCK` / `KC-CARD-FE-8-BLOCK`
+
+**20\. Ticket: KC-ORG-FE-8: Display Card Count in Folder Tree [Implemented]**
+
+*   **Epic:** KC-ORG
+*   **PRD Requirement(s):** Implied Usability Enhancement
+*   **Team:** FE / BE
+*   **Dependencies (Functional):** KC-ORG-FE-1 (Folder Tree Display), KC-ORG-BE-1 (List Folders API)
+*   **UX/UI Design Link:** \[Link to updated Figma/mockups showing count in folder tree] (Requires UX input)
+*   **Description (Functional):** Enhance the folder tree display in the sidebar to show the number of cards contained within each folder directly next to the folder name, ensuring the count is visible even if the folder name is long.
+*   **Acceptance Criteria (Functional):**
+    *   The API endpoint for listing folders (GET /api/folders) includes the count of cards directly associated with each folder.
+    *   The frontend `FolderTree` component displays this count next to each folder name (e.g., in parentheses or a badge).
+    *   If a folder name is too long for the available space, it is truncated (e.g., with an ellipsis) to ensure the card count remains visible.
+    *   Folders containing zero cards display "0" or omit the count based on UX design.
+    *   The count reflects only cards directly within that folder, not recursively including cards in sub-folders (for Stage 1 simplicity).
+    *   *(Implicitly Fixed):* The count updates correctly after a card is moved into or out of a folder.
+*   **Technical Approach / Implementation Notes (AI-Friendly Prompt):**
+    *   **Backend (KC-ORG-BE-1 Revision):**
+        *   Modify the Prisma query within the `GET /api/folders` route handler (`app/api/folders/route.ts`).
+        *   Update the query to include a count of related cards using Prisma's `_count` feature:
+            ```prisma
+            // Inside prisma.folder.findMany call:
+            select: {
+              id: true,
+              name: true,
+              parentId: true,
+              updatedAt: true,
+              _count: { // Add this block
+                select: {
+                  cards: true // Select the count of related cards
+                }
+              }
+            }
+            ```
+        *   Ensure the API response structure now includes the `_count: { cards: number }` field for each folder. Update corresponding backend types/interfaces (`FolderWithCount`?).
+    *   **Frontend (KC-ORG-FE-1 / FolderTreeNode Revision):**
+        *   Update the frontend type/interface used for folder data (`FolderListItem` in `src/lib/folderUtils.ts`) to include the optional `_count: { cards: number }` field.
+        *   Modify the React component rendering individual folder nodes (`src/components/folders/FolderTreeNode.tsx`).
+        *   Change the `HStack` containing the folder name and action buttons to structure the name and count separately, allowing the name to truncate.
+        *   Use a `Flex` container with `justifyContent="space-between"` and `alignItems="center"` within the main `HStack` (replacing the simple `Text` for the name).
+        *   Inside the `Flex`, render the folder name using `Text` with `noOfLines={1}` and `title={node.name}`. Wrap this `Text` in a `Box` with `flex="1"` and `overflow="hidden"` to allow it to take available space and truncate.
+        *   Render the count (`node._count?.cards`) next to the name container (still inside the `Flex`) using a suitable component like `Badge` or `Text`, ensuring it doesn't shrink (`flexShrink={0}`).
+            ```tsx
+             // Inside the main HStack, replace the <Text>{node.name}</Text>:
+             <Flex flex={1} align="center" overflow="hidden" mr={1}> {/* Allow flex grow, hide overflow */}
+               <Text fontSize="sm" noOfLines={1} title={node.name} > {/* Truncate name */}
+                 {node.name}
+               </Text>
+             </Flex>
+             {/* Display Card Count */}
+             {typeof node._count?.cards === 'number' && (
+               <Badge
+                 fontSize="0.7em"
+                 colorScheme="gray"
+                 variant="subtle"
+                 flexShrink={0} // Prevent count from shrinking
+                 px={1.5} // Add some padding
+                 borderRadius="sm" // Optional styling
+               >
+                 {node._count.cards}
+               </Badge>
+             )}
+             {/* Spacer might be needed before action buttons depending on layout */}
+             <Spacer />
+             {/* Action Buttons (Edit/Delete) */}
+            ```
+        *   Adjust spacing (`mr`, `ml`, `px`) and ensure the expand/collapse icon and action buttons remain correctly positioned within the main `HStack`.
+    *   **API Contract (if applicable):** Modifies response of `GET /api/folders`. Adds `_count: { cards: number }` to each folder object in the response array.
+    *   **Data Model Changes (if applicable):** N/A (Uses existing relation)
+    *   **Key Functions/Modules Involved:**
+        *   `app/api/folders/route.ts` (GET handler)
+        *   `src/components/folders/FolderTreeNode.tsx`
+        *   `src/lib/folderUtils.ts` (`FolderListItem` interface)
+        *   Prisma Client (`findMany` with `_count`)
+        *   Chakra UI components (`Text`, `Badge`, `Flex`, `Box`)
+    *   **Testing Considerations (Technical):** Update backend tests for `GET /api/folders`. Update frontend unit tests for `FolderTreeNode` for count rendering and name truncation. E2E test with short/long names.
+    *   **Dependencies (Technical):** `KC-ORG-BE-1`, `KC-ORG-FE-1`
+
+**21\. Ticket: KC-ORG-FE-10: Ensure Card Data Includes Current Folder Info for Move Confirmation [Implemented]**
+
+*   **Epic:** KC-ORG / KC-CARD-CREATE
+*   **PRD Requirement(s):** Implied by KC-ORG-FE-9
+*   **Team:** FE / BE
+*   **Dependencies (Functional):** KC-CARD-FE-8 (API includes folder data), KC-CARD-FE-6-BLOCK (Card List UI)
+*   **UX/UI Design Link:** N/A
+*   **Description (Functional):** Ensure that the frontend component responsible for handling card move operations (e.g., the card list where dragging originates) has access to the `folderId` and `folderName` of the card being moved *before* the move is initiated. This data is needed to display the correct confirmation message in `KC-ORG-FE-9`.
+*   **Acceptance Criteria (Functional):**
+    *   The data structure representing a card within the frontend card list component includes `folder: { id: string, name: string } | null`. (Covered by KC-CARD-FE-8 changes).
+    *   When a drag operation (or other move initiation) starts for a card, its current `folder.id` and `folder.name` (or null if unassigned) are readily accessible to the event handler managing the move/drop confirmation logic.
+*   **Technical Approach / Implementation Notes (AI-Friendly Prompt):**
+    *   **Verify API Response:** Confirm that the backend API (`GET /api/cards`, modified by `KC-CARD-FE-8`) correctly returns the `folder { id, name }` object (or `null`) for each card. *(This should already be the case after implementing KC-CARD-FE-8)*.
+    *   **Update Frontend Types:** Ensure the TypeScript type/interface used for cards in the frontend state (e.g., `CardListItem` in `src/stores/cardStore.ts`) includes the optional `folder` object with `id` and `name`. *(This should also be the case after implementing KC-CARD-FE-8, but verify `id` is included if needed)*.
+    *   **Data Fetching/Storage:** Verify the data fetching logic (`fetchCards` in `src/stores/cardStore.ts` and its usage in `src/app/page.tsx`) stores the full card objects received from the API, including the folder details, in the store's state.
+    *   **Access Data During Move:** Ensure the component handling the drag start (`DraggableCardItem` in `src/components/dnd/DraggableCardItem.tsx`) includes the necessary card data (including `folder` info) in its `data` payload for the `useDraggable` hook. This makes the data available in the `active` object within the `onDragEnd` handler in `Layout.tsx`.
+        ```tsx
+        // In DraggableCardItem.tsx
+        const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+          id: card.id, // Pass the full card object, not just id
+          data: { type: 'card', cardData: card } // Pass the full card object in data
+        });
+
+        // In Layout.tsx onDragEnd handler
+        const draggedCardData = active.data.current?.cardData as CardListItem | undefined;
+        const currentFolderId = draggedCardData?.folderId;
+        const currentFolderName = draggedCardData?.folder?.name;
+        ```
+*   **API Contract (if applicable):** Relies on the modified response from `GET /api/cards` (as defined in `KC-CARD-FE-8`).
+*   **Data Model Changes (if applicable):** N/A
+*   **Key Functions/Modules Involved:**
+    *   `src/app/api/cards/route.ts` (GET handler)
+    *   `src/stores/cardStore.ts` (`CardListItem` interface, `fetchCards` logic)
+    *   `src/app/page.tsx` (Card list rendering and data usage)
+    *   `src/components/dnd/DraggableCardItem.tsx` (`useDraggable` hook setup)
+    *   `src/components/layout/Layout.tsx` (`onDragEnd` handler access to `active.data`)
+    *   TypeScript interfaces for card data.
+*   **Testing Considerations (Technical):** Update unit tests for `DraggableCardItem` to ensure `cardData` is passed correctly. Verify during E2E testing of `KC-ORG-FE-9` that the correct current folder name is retrieved and displayed in the confirmation dialog.
+*   **Dependencies (Technical):** `KC-CARD-FE-8` (ensures API provides the data), `KC-CARD-FE-6-BLOCK` (where data is fetched/stored), `DraggableCardItem` component.
+
+**22\. Ticket: KC-ORG-FE-9: Implement Confirmation Dialog for Moving Cards [Implemented]**
+
+*   **Epic:** KC-ORG
+*   **PRD Requirement(s):** Implied Usability Enhancement (Error Prevention)
+*   **Team:** FE
+*   **Dependencies (Functional):** KC-ORG-FE-6 (Move Card UI Logic - DND), KC-ORG-FE-10 (Card Folder Data Availability), KC-ORG-UX-1 (Confirmation Dialog Design - TBD)
+*   **UX/UI Design Link:** \[Link to Figma/mockups for Move Card Confirmation Dialog] (Requires UX input for dialog appearance)
+*   **Description (Functional):** Before executing the action to move a card to a different folder (or to/from the root level), present the user with a confirmation dialog displaying the intended move and require explicit confirmation.
+*   **Acceptance Criteria (Functional):**
+    *   When initiating a card move (dropping a card onto a folder/root area):
+        *   If the card is currently unassigned (`currentFolderId` is `null`) and the target is a folder: A dialog asks "Move card \[Card Title] to folder \[Target Folder Name]?".
+        *   If the card is assigned (`currentFolderId` exists) and the target is a different folder: A dialog asks "Move card \[Card Title] from folder \[Current Folder Name] to folder \[Target Folder Name]?".
+        *   If the card is assigned (`currentFolderId` exists) and the target is the root level (`targetFolderId` is `null`): A dialog asks "Remove card \[Card Title] from folder \[Current Folder Name]?". *(Note: Moving to root needs a specific drop target implementation)*.
+    *   Each dialog provides "Confirm" and "Cancel" options.
+    *   Clicking "Confirm" proceeds with the original move logic (calling the API).
+    *   Clicking "Cancel" aborts the move operation, leaving the card in its original location.
+*   **Technical Approach / Implementation Notes (AI-Friendly Prompt):**
+    *   **Modify `Layout.tsx`:**
+        *   Import `useDisclosure`, `AlertDialog`, related components, `useState`.
+        *   Add state variables to hold the details needed for the confirmed move: `const [moveDetails, setMoveDetails] = useState<{ cardId: string; cardTitle: string; targetFolderId: string | null; currentFolderId: string | null; currentFolderName: string | null; targetFolderName: string | null;} | null>(null);`
+        *   Import `useFolderStore` to access folder data by ID.
+        *   Use `const { isOpen, onOpen, onClose } = useDisclosure();` for the dialog.
+    *   **Refactor `handleDragEnd` in `Layout.tsx`:**
+        *   Inside the `if (isCard && isFolder)` block, *instead* of directly calling the `fetch` API:
+            *   Retrieve `draggedCardData` (including `title`), `currentFolderId`, `currentFolderName` from `active.data.current` (requires `KC-ORG-FE-10`).
+            *   Retrieve `targetFolderId` from `over.id`.
+            *   Find `targetFolderName` from the `useFolderStore` state: `const folders = useFolderStore.getState().folders; const targetFolder = folders.find(f => f.id === targetFolderId); const targetFolderName = targetFolder?.name;`
+            *   Store the necessary details for the move: `setMoveDetails({ cardId: active.id as string, cardTitle: draggedCardData?.title ?? 'this card', targetFolderId: over.id as string, currentFolderId: currentFolderId, currentFolderName: currentFolderName, targetFolderName: targetFolderName });`
+            *   Open the dialog: `onOpen();`
+    *   **Implement `confirmMove` function in `Layout.tsx`:**
+        *   `const confirmMove = async () => { if (!moveDetails) return; const { cardId, targetFolderId } = moveDetails; onClose(); // Close dialog first`
+        *   Place the existing `try/catch` block (containing the `fetch` PUT request to `/api/cards/{cardId}`, `fetchCards`, `fetchFolders`, and toasts) inside this `confirmMove` function, ensuring it uses `cardId` and `targetFolderId` from `moveDetails`.
+        *   Call `confirmMove` from the "Confirm" button's `onClick`.
+        *   Reset state after completion/error: `setMoveDetails(null);` in a `finally` block within `confirmMove`.
+    *   **Render `AlertDialog` in `Layout.tsx`:**
+        *   Add the `<AlertDialog>` component within the main return function of `Layout`.
+        *   Conditionally render its content based on `moveDetails`.
+        *   Dynamically set the `AlertDialogHeader` ("Confirm Move").
+        *   Dynamically create the message for `AlertDialogBody` based on `moveDetails.currentFolderId`, `moveDetails.currentFolderName`, `moveDetails.targetFolderId`, `moveDetails.targetFolderName`, and `moveDetails.cardTitle` (implementing the logic from Acceptance Criteria).
+        *   Add `AlertDialogFooter` with "Cancel" (`onClick={onClose}`) and "Confirm" (`onClick={confirmMove}`) buttons.
+        *   *(Future: Implement root drop target and associated confirmation message)*
+*   **API Contract (if applicable):** N/A (Frontend logic change)
+*   **Data Model Changes (if applicable):** N/A
+*   **Key Functions/Modules Involved:**
+    *   `src/components/layout/Layout.tsx` (`handleDragEnd`, new `confirmMove`, state management)
+    *   `src/stores/folderStore.ts` (Accessing folder names)
+    *   Chakra UI `AlertDialog`, `useDisclosure`, `Button`.
+    *   React `useState`.
+*   **Testing Considerations (Technical):** Unit test the logic generating the dialog message. Unit test `confirmMove` (mocking fetch, stores, onClose). E2E test the drag-and-drop move for relevant scenarios, verifying dialog appearance, messages, and Confirm/Cancel actions.
+*   **Dependencies (Technical):** `KC-ORG-FE-6` (existing DND), `KC-ORG-FE-10` (data availability).
