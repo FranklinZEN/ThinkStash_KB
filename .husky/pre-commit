@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
+# Tell ESLint v9+ to use legacy .eslintrc config
+export ESLINT_USE_FLAT_CONFIG=false
+
 # Run linting first
 npm run lint
 
