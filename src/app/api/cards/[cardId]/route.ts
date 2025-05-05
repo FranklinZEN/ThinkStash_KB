@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import { prisma } from '@/lib/prisma'; // Adjust path as necessary
+import prisma from '@/lib/prisma'; // Ensure this is the default import
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { getCurrentUserId } from '@/lib/sessionUtils';
@@ -44,44 +44,46 @@ async function verifyCardOwnership(userId: string, cardId: string) {
 }
 
 // --- GET Handler (Get Specific Card) ---
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { cardId: string } }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+export async function GET(request: NextRequest, { params }: { params: { cardId: string } }) {
+  const session = await getServerSession(authOptions);
 
-    // Get cardId from either path parameter or query parameter
-    const cardId = params.cardId || request.nextUrl.searchParams.get('cardId');
+  if (!session || !session.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // --- Fix: Await params --- 
+  const resolvedParams = await params;
+  console.log("[GET /api/cards/[cardId]] Resolved params:", resolvedParams); // Optional logging
+  // --- End Fix ---
+
+  try {
+    // Get cardId using the resolved params
+    const cardId = resolvedParams.cardId;
     if (!cardId) {
       return NextResponse.json({ error: 'Card ID is required' }, { status: 400 });
     }
+    console.log(`[GET /api/cards/[cardId]] cardId: ${cardId}`); // Optional logging
 
     const card = await prisma.knowledgeCard.findUnique({
       where: {
         id: cardId,
-        userId: session.user.id,
+        userId: session.user.id, // Ensure user owns the card
       },
       include: {
-        tags: true,
-        folder: true,
+        folder: true, // Include full folder data if needed
+        tags: true,   // Include full tag data if needed
       },
     });
 
     if (!card) {
-      return NextResponse.json({ error: 'Card not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Card not found or access denied' }, { status: 404 });
     }
 
     return NextResponse.json(card);
+
   } catch (error) {
     console.error('Error fetching card:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch card' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch card' }, { status: 500 });
   }
 }
 

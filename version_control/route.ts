@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import prisma from '@/lib/prisma'; // Use default import
+import { prisma } from '@/lib/prisma'; // Adjust path as necessary
 
 // --- GET Handler (List Cards) ---
 export async function GET(req: NextRequest) {

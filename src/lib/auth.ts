@@ -1,7 +1,7 @@
 // import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { prisma } from "./prisma"; // Restore singleton import
+import prisma from './prisma'; // Use default import
 // import { PrismaClient } from "@prisma/client"; // Remove direct import
 import bcrypt from 'bcryptjs';
 

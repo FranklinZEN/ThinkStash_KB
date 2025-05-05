@@ -68,7 +68,7 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
-    router.push(`/cards/${card.id}/edit`);
+    router.push(`/cards/${card.id}`);
   };
 
   const handleDelete = (e: React.MouseEvent) => {

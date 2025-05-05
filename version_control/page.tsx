@@ -29,7 +29,7 @@ import {
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
 
-// Import BlockNote components - STATICALLY
+// Import BlockNote components
 import { useBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
 import { BlockNoteEditor, PartialBlock } from "@blocknote/core";
@@ -63,12 +63,12 @@ export default function CardDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
 
-  // --- BlockNote Editor Setup --- Call hook unconditionally
+  // --- BlockNote Editor Setup ---
   const editor: BlockNoteEditor | null = useBlockNote({
-    // Set editable based on isEditing state - Passed to View instead
-    // editable: isEditing, 
+    // Set editable based on isEditing state
+    editable: isEditing,
     // Define the initial content (will be loaded from fetched data)
-    initialContent: undefined, // Start empty, load later
+    // initialContent: card ? card.content : undefined
     // onEditorContentChange: (editor) => {
     //   // Optional: Could implement auto-save or track changes here
     // }
@@ -76,7 +76,7 @@ export default function CardDetailPage() {
 
   // --- Data Fetching --- 
   const fetchCard = useCallback(async () => {
-    if (!cardId || status !== 'authenticated') return;
+    if (!cardId) return;
     setIsLoading(true);
     setError(null);
     try {
@@ -97,24 +97,10 @@ export default function CardDetailPage() {
       setCard(data);
       setTitle(data.title);
       
-      // Load content into editor once fetched and editor is ready
+      // Load content into editor once fetched
       if (editor && data.content) {
         try {
-          // Ensure content is in the correct format (PartialBlock[])
-          let contentToLoad: PartialBlock[];
-          if (typeof data.content === 'string') {
-             const trimmedContent = data.content.trim();
-             if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-               contentToLoad = JSON.parse(trimmedContent);
-             } else {
-               console.warn("Fetched content is string but not JSON, treating as paragraph.");
-               contentToLoad = [{ type: 'paragraph', content: data.content }];
-             }
-          } else {
-            contentToLoad = data.content as PartialBlock[];
-          }
-          // Use replaceBlocks API
-          await editor.replaceBlocks(editor.topLevelBlocks, contentToLoad);
+          await editor.replaceBlocks(editor.topLevelBlocks, data.content as PartialBlock[]);
         } catch (err) {
           console.error('Error loading content into editor:', err);
           // Don't throw here, just log the error
@@ -133,8 +119,7 @@ export default function CardDetailPage() {
     } finally {
       setIsLoading(false);
     }
-  // Fetch depends on cardId and auth status. Editor is dependency for loading content AFTER fetch.
-  }, [cardId, status, editor, toast]); 
+  }, [cardId, editor, toast]);
 
   useEffect(() => {
     if (status === 'authenticated' && cardId) {
@@ -142,8 +127,7 @@ export default function CardDetailPage() {
     } else if (status === 'unauthenticated') {
       router.push(`/api/auth/signin?callbackUrl=/cards/${cardId}`);
     }
-  // fetchCard is stable due to useCallback, so only run when these change.
-  }, [status, cardId, router, fetchCard]); 
+  }, [status, cardId, router, fetchCard]);
 
   // --- Save Changes --- 
   const handleSaveChanges = async () => {
@@ -154,26 +138,10 @@ export default function CardDetailPage() {
 
     // Basic check for changes (more robust checks might compare JSON deeply)
     const hasTitleChanged = title.trim() !== card.title;
-    // Normalize original content for comparison
-    let originalContentForComparison: PartialBlock[] | undefined;
-      if (originalContent) {
-        if (typeof originalContent === 'string') {
-          const trimmedContent = originalContent.trim();
-          if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-             originalContentForComparison = JSON.parse(trimmedContent);
-          } else {
-             originalContentForComparison = [{ type: 'paragraph', content: originalContent }]; 
-          }
-        } else {
-          originalContentForComparison = originalContent as PartialBlock[];
-        }
-      }
-    const hasContentChanged = JSON.stringify(currentContent) !== JSON.stringify(originalContentForComparison || []);
-
+    const hasContentChanged = JSON.stringify(currentContent) !== JSON.stringify(originalContent);
 
     if (!hasTitleChanged && !hasContentChanged) {
       toast({ title: 'No changes detected.', status: 'info', duration: 3000 });
-      setIsEditing(false); // Exit edit mode if no changes
       return;
     }
     if (!title.trim()) {
@@ -189,10 +157,8 @@ export default function CardDetailPage() {
       if (hasTitleChanged) updatePayload.title = title.trim();
       if (hasContentChanged) updatePayload.content = currentContent;
 
-      // Use PUT to replace the entire card data (or PATCH if API supports partial)
-      // Assuming PUT for now based on previous context
       const response = await fetch(`/api/cards/${cardId}`, {
-        method: 'PUT', 
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatePayload),
       });
@@ -202,10 +168,12 @@ export default function CardDetailPage() {
       if (response.ok) {
         setCard(updatedCard); // Update local state with response
         setTitle(updatedCard.title); // Update title state
-        setIsEditing(false); // Exit edit mode on successful save
+        // Update editor content ONLY IF it changed from the server response (unlikely unless concurrent edits)
+        // editor.replaceBlocks(editor.topLevelBlocks, updatedCard.content);
+
         toast({ title: 'Card updated successfully', status: 'success', duration: 3000 });
       } else {
-        throw new Error(updatedCard.error || 'Failed to update card');
+        throw new Error(updatedCard.message || 'Failed to update card');
       }
     } catch (err: any) {
       console.error('Save card error:', err);
@@ -245,7 +213,7 @@ export default function CardDetailPage() {
   };
 
   // --- Render Logic --- 
-  if (status === 'loading' || (isLoading && !error && !card)) { // Show loading if auth loading OR data loading (and no error/card yet)
+  if (status === 'loading' || (isLoading && !error)) {
     return (
       <Flex justify="center" align="center" height="80vh">
         <Spinner size="xl" />
@@ -254,7 +222,6 @@ export default function CardDetailPage() {
   }
 
   if (status === 'unauthenticated') {
-    // This case might be handled by the useEffect redirect, but keep as safety net
     return (
       <Flex justify="center" align="center" height="80vh">
         <Text>Redirecting to sign in...</Text>
@@ -262,7 +229,7 @@ export default function CardDetailPage() {
     );
   }
 
-  if (error && !card) { // Show error only if we failed to load the card completely
+  if (error) {
     return (
       <Container centerContent py={10}>
         <Heading size="lg" mb={4}>Error</Heading>
@@ -273,28 +240,13 @@ export default function CardDetailPage() {
   }
 
   if (!card) {
-    // Fallback if loading finished but card is still null (shouldn't happen ideally)
-    return <Text>Card not found or failed to load.</Text>;
+    // Should be covered by loading/error states, but as a fallback
+    return <Text>Card data not available.</Text>;
   }
 
   // Determine if content has changed (simple check for enabling save button)
-  // Normalize original content for comparison
-  let originalContentForComparisonCanSave: PartialBlock[] | undefined;
-      if (card.content) {
-        if (typeof card.content === 'string') {
-          const trimmedContent = card.content.trim();
-          if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-             originalContentForComparisonCanSave = JSON.parse(trimmedContent);
-          } else {
-             originalContentForComparisonCanSave = [{ type: 'paragraph', content: card.content }]; 
-          }
-        } else {
-          originalContentForComparisonCanSave = card.content as PartialBlock[];
-        }
-      }
-  const contentChanged = editor ? JSON.stringify(editor.document) !== JSON.stringify(originalContentForComparisonCanSave || []) : false;
-  const titleChanged = title.trim() !== (card.title || '');
-  const canSave = isEditing && (titleChanged || contentChanged);
+  const contentChanged = editor ? JSON.stringify(editor.document) !== JSON.stringify(card.content) : false;
+  const canSave = (title.trim() !== card.title && title.trim().length > 0) || contentChanged;
 
   return (
     <Container maxW="container.lg" py={8}>
@@ -311,44 +263,20 @@ export default function CardDetailPage() {
           mr={4}
         />
         <Spacer />
-        {isEditing ? (
-            <>
-              <Button 
-                colorScheme="green" 
-                onClick={handleSaveChanges} 
-                isLoading={isSaving}
-                isDisabled={!canSave || isSaving || isDeleting}
-                mr={2}
-              >
-                Save
-              </Button>
-              <Button 
-                variant="ghost" 
-                onClick={() => { 
-                  setIsEditing(false); 
-                  setTitle(card.title); // Revert title on cancel
-                  // Revert editor content might require re-fetching or complex state management
-                  // For now, just exit edit mode. User can save or refresh to discard.
-                }} 
-                isDisabled={isSaving || isDeleting}
-              >
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <Button
-              colorScheme="blue"
-              onClick={() => setIsEditing(true)} // Toggle edit/save
-              isDisabled={isSaving || isDeleting} // Disable Edit button when saving/deleting
-              mr={2}
-            >
-              Edit Card
-            </Button>
-          )
-        }
+        <Button
+            colorScheme="blue"
+            onClick={isEditing ? handleSaveChanges : () => setIsEditing(true)} // Toggle edit/save
+            isLoading={isSaving}
+            // Disable Save when not editing OR no changes OR saving/deleting
+            // Disable Edit button when saving/deleting
+            isDisabled={isEditing ? (!canSave || isSaving || isDeleting) : (isSaving || isDeleting)}
+            mr={2}
+          >
+            {isEditing ? "Save Changes" : "Edit Card"} {/* Change button text */}
+          </Button>
           <IconButton
             aria-label="Delete Card"
-            icon={<DeleteIcon />} // Keep delete separate
+            icon={<DeleteIcon />}
             colorScheme="red"
             onClick={onAlertOpen} // Open confirmation dialog
             isLoading={isDeleting}
@@ -358,17 +286,7 @@ export default function CardDetailPage() {
 
        <Box borderWidth="1px" borderRadius="md" p={1} minH="500px">
             {/* Pass editable prop based on isEditing state */} 
-            {editor ? 
-              <BlockNoteView 
-                editor={editor} 
-                editable={isEditing} 
-                theme="light" 
-              /> : 
-              <Flex justify="center" align="center" height="200px">
-                <Spinner size="md" />
-                <Text ml={3}>Loading Editor...</Text>
-              </Flex>
-             }
+            {editor ? <BlockNoteView editor={editor} editable={isEditing} theme="light" /> : <Text>Loading Editor...</Text>}
        </Box>
 
       {/* Delete Confirmation Dialog */}
@@ -400,6 +318,4 @@ export default function CardDetailPage() {
       </AlertDialog>
     </Container>
   );
-}
-
-
+} 

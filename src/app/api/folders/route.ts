@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import { prisma } from '@/lib/prisma'; // Adjust path as necessary
+import prisma from '@/lib/prisma'; // Use default import
 import { getCurrentUserId } from '@/lib/sessionUtils'; // Assuming session util is here
 import { z } from 'zod';
 import { Prisma } from '@prisma/client'; // Import Prisma for error handling
