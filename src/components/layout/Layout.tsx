@@ -218,9 +218,10 @@ export default function Layout({ children }: LayoutProps) {
               <ChakraLink
                 as="span"
                 _hover={{ textDecoration: 'none' }}
-                fontWeight="bold"
+                fontFamily="'Pacifico', cursive"
+                fontSize={{ base: '32px', md: '40px' }}
               >
-                Knowledge Cards
+                ThinkStash
               </ChakraLink>
             </Link>
             <Spacer />
@@ -262,18 +263,16 @@ export default function Layout({ children }: LayoutProps) {
             </HStack>
           </Flex>
         </Box>
-        {/* Main Content Area with Sidebar */}
-        <Flex flex="1" pt={headerHeight}>
+        {/* Main Content Area: Sidebar + Children */}
+        <Flex pt={headerHeight} flex="1">
           {' '}
-          {/* Add padding top equal to header height */}
-          {/* Conditionally render sidebar only when authenticated */}
+          {/* Flex container for sidebar and content */}
           {status === 'authenticated' && <FoldersSidebar />}
-          {/* Main content takes remaining space */}
           <Box
-            as="main"
-            flex="1"
-            p={6}
-            overflowY="auto" // Allow main content to scroll independently
+            flex="1" // Takes up remaining space
+            p={4} // Original padding for children
+            overflowY="auto" // If content is taller than viewport
+            bg="white" // Match children bg, or adjust as needed
           >
             {children}
           </Box>

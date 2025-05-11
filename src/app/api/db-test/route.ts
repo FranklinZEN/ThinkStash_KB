@@ -14,7 +14,7 @@ export async function GET(_req: NextRequest) {
   } catch (error: unknown) {
     console.error('DB Connection Test Error:', error);
     let message = 'An unknown error occurred during DB test.';
-    let stack = undefined;
+    let stack: string | undefined = undefined;
     if (error instanceof Error) {
       message = error.message;
       stack = error.stack;

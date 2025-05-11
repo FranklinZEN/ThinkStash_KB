@@ -219,8 +219,8 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
             <Box
               p={4}
               bg="white"
-              borderRadius="md"
-              boxShadow="sm"
+              boxShadow="inset 0px 16px 32px -8px rgba(12, 12, 13, 0.4)"
+              borderRadius="12px"
               position="relative"
               width="100%"
               minHeight="150px"

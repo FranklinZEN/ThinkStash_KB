@@ -23,6 +23,7 @@ import {
   MenuItem,
   MenuDivider,
   useColorModeValue,
+  Tooltip,
 } from '@chakra-ui/react';
 import {
   ChevronDownIcon,
@@ -83,6 +84,9 @@ export default function FolderTreeNode({
     onOpen: onCreateOpen,
     onClose: onCreateClose,
   } = useDisclosure();
+
+  const cardCount = node._count?.cards ?? 0;
+  const tooltipLabel = `${node.name} (${cardCount} card${cardCount === 1 ? '' : 's'})`;
 
   const {
     attributes,
@@ -185,132 +189,133 @@ export default function FolderTreeNode({
         />
       )}
 
-      <HStack
-        pl={level * 4}
-        py={1}
-        pr={2}
-        _hover={{ bg: hoverBg }}
-        bg={isSelected ? selectedBg : undefined}
-        cursor="pointer"
-        onClick={handleClick}
-        onKeyDown={handleKeyDown}
-        tabIndex={0}
-        spacing={1}
-        w="100%"
-        borderRadius="md"
-        transition="all 0.2s"
-        position="relative"
-        border={isOver ? `1px dashed ${borderColor}` : undefined}
-      >
-        {/* Drag Handle */}
-        <Box
-          {...attributes}
-          {...listeners}
-          cursor="grab"
-          p={1}
-          _hover={{ bg: 'gray.200' }}
+      <Tooltip label={tooltipLabel} placement="top" openDelay={500}>
+        <HStack
+          pl={level * 4}
+          py={1}
+          pr={2}
+          _hover={{ bg: hoverBg }}
+          bg={isSelected ? selectedBg : undefined}
+          cursor="pointer"
+          onClick={handleClick}
+          onKeyDown={handleKeyDown}
+          tabIndex={0}
+          spacing={1}
+          w="100%"
           borderRadius="md"
           transition="all 0.2s"
+          position="relative"
+          border={isOver ? `1px dashed ${borderColor}` : undefined}
         >
-          <DragHandleIcon boxSize={3} color="gray.500" />
-        </Box>
+          {/* Drag Handle */}
+          <Box
+            {...attributes}
+            {...listeners}
+            cursor="grab"
+            p={1}
+            _hover={{ bg: 'gray.200' }}
+            borderRadius="md"
+            transition="all 0.2s"
+          >
+            <DragHandleIcon boxSize={3} color="gray.500" />
+          </Box>
 
-        {/* Expand/Collapse Icon */}
-        <IconButton
-          aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
-          icon={
-            hasChildren ? (
-              isOpen ? (
-                <ChevronDownIcon />
+          {/* Expand/Collapse Icon */}
+          <IconButton
+            aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
+            icon={
+              hasChildren ? (
+                isOpen ? (
+                  <ChevronDownIcon />
+                ) : (
+                  <ChevronRightIcon />
+                )
               ) : (
-                <ChevronRightIcon />
+                <Box w="14px" />
               )
-            ) : (
-              <Box w="14px" />
-            )
-          }
-          size="xs"
-          variant="ghost"
-          isRound
-          isDisabled={!hasChildren}
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsOpen(!isOpen);
-          }}
-          mr={1}
-          flexShrink={0}
-        />
-
-        {/* Flex container for Name and Count */}
-        <Flex flex={1} align="center" overflow="hidden" mr={1}>
-          <Text
-            fontSize="sm"
-            noOfLines={1}
-            title={node.name}
-            fontWeight={level === 0 ? 'medium' : 'normal'}
-            color={isSelected ? 'blue.600' : undefined}
-          >
-            {node.name}
-          </Text>
-        </Flex>
-
-        {/* Display Card Count */}
-        {typeof node._count?.cards === 'number' && (
-          <Badge
-            fontSize="0.7em"
-            colorScheme={isSelected ? 'blue' : 'gray'}
-            variant="subtle"
-            flexShrink={0}
-            px={1.5}
-            borderRadius="sm"
-          >
-            {node._count.cards}
-          </Badge>
-        )}
-
-        {/* Context Menu */}
-        <Menu>
-          <MenuButton
-            as={IconButton}
-            aria-label="Folder actions"
-            icon={<HamburgerIcon />}
+            }
             size="xs"
             variant="ghost"
-            onClick={(e) => e.stopPropagation()}
+            isRound
+            isDisabled={!hasChildren}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsOpen(!isOpen);
+            }}
+            mr={1}
+            flexShrink={0}
           />
-          <MenuList onClick={(e) => e.stopPropagation()}>
-            <MenuItem
-              icon={<AddIcon />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCreateOpen();
-              }}
+
+          {/* Flex container for Name and Count */}
+          <Flex flex={1} align="center" overflow="hidden" mr={1}>
+            <Text
+              fontSize="sm"
+              noOfLines={1}
+              fontWeight={level === 0 ? 'medium' : 'normal'}
+              color={isSortableDragging ? 'transparent' : undefined}
             >
-              Create Subfolder
-            </MenuItem>
-            <MenuItem
-              icon={<EditIcon />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRenameOpen();
-              }}
+              {node.name}
+            </Text>
+          </Flex>
+
+          {/* Display Card Count */}
+          {typeof node._count?.cards === 'number' && (
+            <Badge
+              fontSize="0.7em"
+              colorScheme={isSelected ? 'blue' : 'gray'}
+              variant="subtle"
+              flexShrink={0}
+              px={1.5}
+              borderRadius="sm"
             >
-              Rename
-            </MenuItem>
-            <MenuDivider />
-            <MenuItem
-              icon={<DeleteIcon />}
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteAlertOpen();
-              }}
-              color="red.500"
-            >
-              Delete
-            </MenuItem>
-          </MenuList>
-        </Menu>
-      </HStack>
+              {node._count.cards}
+            </Badge>
+          )}
+
+          {/* Context Menu */}
+          <Menu>
+            <MenuButton
+              as={IconButton}
+              aria-label="Folder actions"
+              icon={<HamburgerIcon />}
+              size="xs"
+              variant="ghost"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <MenuList fontSize="sm">
+              <MenuItem
+                icon={<AddIcon />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateOpen();
+                }}
+              >
+                New Subfolder
+              </MenuItem>
+              <MenuItem
+                icon={<EditIcon />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRenameOpen();
+                }}
+              >
+                Rename
+              </MenuItem>
+              <MenuDivider />
+              <MenuItem
+                icon={<DeleteIcon />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteAlertOpen();
+                }}
+                color="red.500"
+              >
+                Delete
+              </MenuItem>
+            </MenuList>
+          </Menu>
+        </HStack>
+      </Tooltip>
 
       {/* Drop Indicator Below */}
       {isOver && dropDirection === 'below' && (

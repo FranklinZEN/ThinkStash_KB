@@ -192,7 +192,12 @@ export const authOptions: NextAuthOptions = {
   // Ensure NEXTAUTH_SECRET is set in .env
   secret: process.env.NEXTAUTH_SECRET,
   // Add other configurations like pages if needed
-  // pages: {
-  //   signIn: '/auth/signin',
-  // }
+  pages: {
+    signIn: '/auth/signin',
+    // You might want to add other custom pages here if you create them:
+    // signOut: '/auth/signout',
+    // error: '/auth/error', // For displaying authentication errors
+    // verifyRequest: '/auth/verify-request', // For email magic link sign in
+    // newUser: null, // or '/auth/new-user' // If you want to redirect new users to a specific page
+  },
 };

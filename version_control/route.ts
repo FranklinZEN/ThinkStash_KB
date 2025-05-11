@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Adjust path as necessary
+import { Prisma } from '@prisma/client'; // Import Prisma namespace from @prisma/client
 import type { BlockNoteDocument } from '@/types/blocknote'; // Import the type
 
 // --- GET Handler (List Cards) ---
@@ -55,14 +56,6 @@ export async function GET(_req: NextRequest) {
   }
 }
 
-// Define an interface for the card creation data
-interface CardCreateData {
-  title: string;
-  content: BlockNoteDocument | null; // Use the imported type
-  userId: string;
-  folderId?: string | null;
-}
-
 // --- POST Handler (Create Card) ---
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -96,9 +89,16 @@ export async function POST(req: NextRequest) {
     // --- End Validation ---
 
     // Prepare data for Prisma create
-    const data: CardCreateData = {
+    const prismaData: { 
+      title: string;
+      content: BlockNoteDocument | typeof Prisma.JsonNull;
+      userId: string;
+      folderId?: string;
+    } = {
       title: title.trim(),
-      content: content as BlockNoteDocument | null, // Assert type from body
+      // If content from body is null, use Prisma.JsonNull, otherwise use the content directly.
+      // The validation above should ensure content is either an object (BlockNoteDocument) or was explicitly null.
+      content: content === null ? Prisma.JsonNull : content as BlockNoteDocument,
       userId: userId,
     };
 
@@ -111,12 +111,12 @@ export async function POST(req: NextRequest) {
       if (!folder) {
         return NextResponse.json({ message: 'Folder not found or access denied' }, { status: 404 });
       }
-      data.folderId = folderId;
+      prismaData.folderId = folderId;
     }
 
     // Create the Knowledge Card
     const newCard = await prisma.knowledgeCard.create({
-      data: data, // Now strongly typed
+      data: prismaData, // Use the correctly typed prismaData
     });
 
     return NextResponse.json(newCard, { status: 201 });
