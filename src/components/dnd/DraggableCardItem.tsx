@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { CSSProperties } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { Box } from '@chakra-ui/react';
@@ -11,16 +11,20 @@ interface DraggableCardItemProps {
   children: React.ReactNode;
 }
 
-export default function DraggableCardItem({ card, children }: DraggableCardItemProps) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: card.id, // Use card.id for the draggable ID
-    data: {
-      type: 'card',
-      cardData: card
-    }
-  });
+export default function DraggableCardItem({
+  card,
+  children,
+}: DraggableCardItemProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: card.id, // Use card.id for the draggable ID
+      data: {
+        type: 'card',
+        cardData: card,
+      },
+    });
 
-  const style = {
+  const style: CSSProperties = {
     transform: CSS.Translate.toString(transform),
     opacity: isDragging ? 0.5 : 1, // Make it semi-transparent while dragging
     cursor: isDragging ? 'grabbing' : 'grab', // Change cursor
@@ -41,4 +45,4 @@ export default function DraggableCardItem({ card, children }: DraggableCardItemP
       {children} {/* Render the actual card content */}
     </Box>
   );
-} 
+}

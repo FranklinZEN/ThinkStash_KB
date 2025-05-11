@@ -5,7 +5,6 @@ import {
   InputLeftElement,
   InputRightElement,
   Button,
-  Kbd,
 } from '@chakra-ui/react';
 import { SearchIcon } from '@chakra-ui/icons';
 
@@ -14,7 +13,10 @@ interface SearchInputProps {
   placeholder?: string;
 }
 
-const SearchInput: React.FC<SearchInputProps> = ({ onSearchSubmit, placeholder = "Search cards..." }) => {
+const SearchInput: React.FC<SearchInputProps> = ({
+  onSearchSubmit,
+  placeholder = 'Search cards...',
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -46,7 +48,12 @@ const SearchInput: React.FC<SearchInputProps> = ({ onSearchSubmit, placeholder =
         pr="4.5rem"
       />
       <InputRightElement width="4.5rem">
-        <Button h="1.75rem" size="sm" onClick={handleSearch} isDisabled={!searchTerm.trim()}>
+        <Button
+          h="1.75rem"
+          size="sm"
+          onClick={handleSearch}
+          isDisabled={!searchTerm.trim()}
+        >
           Search
         </Button>
       </InputRightElement>
@@ -54,4 +61,4 @@ const SearchInput: React.FC<SearchInputProps> = ({ onSearchSubmit, placeholder =
   );
 };
 
-export default SearchInput; 
+export default SearchInput;

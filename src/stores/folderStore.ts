@@ -24,13 +24,17 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       const response = await fetch('/api/folders');
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Failed to fetch folders: ${response.statusText}`);
+        throw new Error(
+          errorData.error || `Failed to fetch folders: ${response.statusText}`,
+        );
       }
       const foldersData: FolderListItem[] = await response.json();
       set({ folders: foldersData, isLoading: false });
-    } catch (err: any) {
-      console.error("Folder fetch error:", err);
-      set({ error: err.message || 'Could not load folders.', isLoading: false });
+    } catch (err: unknown) {
+      console.error('Folder fetch error:', err);
+      const errorMessage =
+        err instanceof Error ? err.message : 'Could not load folders.';
+      set({ error: errorMessage, isLoading: false });
     }
   },
 
@@ -46,19 +50,23 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || `Failed to create folder: ${response.statusText} (Status: ${response.status})`);
+        throw new Error(
+          result.error ||
+            `Failed to create folder: ${response.statusText} (Status: ${response.status})`,
+        );
       }
 
       // Refresh the folder list on success
       await get().fetchFolders();
       success = true;
-
-    } catch (err: any) {
-      console.error("Add folder error:", err);
+    } catch (err: unknown) {
+      console.error('Add folder error:', err);
+      const errorMessage =
+        err instanceof Error ? err.message : 'Could not create folder.';
       // Set error state or rely on toast in component
-      set({ error: err.message || 'Could not create folder.' }); 
+      set({ error: errorMessage });
     } finally {
-       set({ isLoading: false }); // Reset general loading state
+      set({ isLoading: false }); // Reset general loading state
     }
     return success;
   },
@@ -76,18 +84,22 @@ export const useFolderStore = create<FolderState>((set, get) => ({
 
       if (!response.ok) {
         // Handle specific errors like 409 conflict
-        throw new Error(result.error || `Failed to rename folder: ${response.statusText} (Status: ${response.status})`);
+        throw new Error(
+          result.error ||
+            `Failed to rename folder: ${response.statusText} (Status: ${response.status})`,
+        );
       }
 
       // Refresh the folder list on success
       await get().fetchFolders();
       success = true;
-
-    } catch (err: any) {
-      console.error("Rename folder error:", err);
-      set({ error: err.message || 'Could not rename folder.' });
+    } catch (err: unknown) {
+      console.error('Rename folder error:', err);
+      set({
+        error: err instanceof Error ? err.message : 'Could not rename folder.',
+      });
     } finally {
-       set({ isLoading: false });
+      set({ isLoading: false });
     }
     return success;
   },
@@ -102,19 +114,23 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       const result = await response.json().catch(() => ({})); // Catch errors if body is empty (e.g., 204)
 
       if (!response.ok) {
-          // Handle specific errors like 400 (not empty)
-          throw new Error(result.error || `Failed to delete folder: ${response.statusText} (Status: ${response.status})`);
+        // Handle specific errors like 400 (not empty)
+        throw new Error(
+          result.error ||
+            `Failed to delete folder: ${response.statusText} (Status: ${response.status})`,
+        );
       }
 
       // Refresh the folder list on success
       await get().fetchFolders();
       success = true;
-
-    } catch (err: any) {
-        console.error("Delete folder error:", err);
-        set({ error: err.message || 'Could not delete folder.' });
+    } catch (err: unknown) {
+      console.error('Delete folder error:', err);
+      set({
+        error: err instanceof Error ? err.message : 'Could not delete folder.',
+      });
     } finally {
-         set({ isLoading: false });
+      set({ isLoading: false });
     }
     return success;
   },
@@ -134,4 +150,4 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       set({ error: error instanceof Error ? error.message : 'Unknown error' });
     }
   },
-})); 
+}));

@@ -7,10 +7,7 @@ import { useRouter, useParams } from 'next/navigation';
 import {
   Box,
   Button,
-  FormControl,
-  FormLabel,
   Input,
-  VStack,
   Heading,
   Spinner,
   useToast,
@@ -32,22 +29,29 @@ import { DeleteIcon } from '@chakra-ui/icons';
 // Import BlockNote components
 import { useBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
-import { BlockNoteEditor, PartialBlock } from "@blocknote/core";
+import { BlockNoteEditor } from "@blocknote/core";
 import "@blocknote/mantine/style.css";
+import type { BlockNoteDocument } from '@/types/blocknote';
 
 // Define type for Knowledge Card data
 interface KnowledgeCard {
   id: string;
   title: string;
-  content: any; // BlockNote JSON structure
+  content: BlockNoteDocument | string | null; // Updated to include string
   userId: string;
   folderId: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+// Define type for card update payload
+interface CardUpdatePayload {
+  title?: string;
+  content?: BlockNoteDocument | null;
+}
+
 export default function CardDetailPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const params = useParams();
   const cardId = params?.cardId as string; // Get cardId from route
@@ -65,13 +69,10 @@ export default function CardDetailPage() {
 
   // --- BlockNote Editor Setup ---
   const editor: BlockNoteEditor | null = useBlockNote({
-    // Set editable based on isEditing state
-    editable: isEditing,
+    // Set editable based on isEditing state - MOVED TO BlockNoteView props
+    // editable: isEditing, // This was causing the error
     // Define the initial content (will be loaded from fetched data)
     // initialContent: card ? card.content : undefined
-    // onEditorContentChange: (editor) => {
-    //   // Optional: Could implement auto-save or track changes here
-    // }
   });
 
   // --- Data Fetching --- 
@@ -98,20 +99,59 @@ export default function CardDetailPage() {
       setTitle(data.title);
       
       // Load content into editor once fetched
-      if (editor && data.content) {
+      if (editor && data.content !== null) { // Ensure data.content is not null
         try {
-          await editor.replaceBlocks(editor.topLevelBlocks, data.content as PartialBlock[]);
-        } catch (err) {
+          let contentToLoad: import("@blocknote/core").PartialBlock[] | undefined = undefined;
+
+          if (typeof data.content === 'string') {
+            console.warn("Received string content from API, attempting to parse or treat as plain text.");
+            const trimmedContent = data.content.trim();
+            if (trimmedContent.startsWith('[') && trimmedContent.endsWith(']')) { // Basic JSON array check
+              try {
+                const parsedContent = JSON.parse(trimmedContent);
+                // Add further validation if parsedContent is actually PartialBlock[]
+                if (Array.isArray(parsedContent)) {
+                  contentToLoad = parsedContent as import("@blocknote/core").PartialBlock[];
+                } else {
+                  console.warn("Parsed string content was not an array, treating as single paragraph.");
+                  contentToLoad = [{ type: 'paragraph', content: trimmedContent }];
+                }
+              } catch (e) {
+                console.warn("Fetched string content looked like JSON array but failed to parse:", e);
+                contentToLoad = [{ type: 'paragraph', content: trimmedContent }];
+              }
+            } else if (trimmedContent === "") { // Handle empty string case explicitly
+                contentToLoad = []; // or undefined, or a single empty paragraph
+            } else {
+              // If not a JSON string, treat as plain text for a single paragraph
+              contentToLoad = [{ type: 'paragraph', content: trimmedContent }];
+            }
+          } else if (Array.isArray(data.content)) { // If it's not a string, it should be BlockNoteDocument (Block[])
+            // Assuming BlockNoteDocument is compatible with PartialBlock[]
+            // This might need as import("@blocknote/core").PartialBlock[] if BlockNoteDocument is Block[]
+            contentToLoad = data.content as import("@blocknote/core").PartialBlock[];
+          }
+
+          if (contentToLoad) {
+            await editor.replaceBlocks(editor.topLevelBlocks, contentToLoad);
+          } else if (data.content === null || (Array.isArray(data.content) && data.content.length === 0)) {
+            // If content was null or an empty array, clear the editor
+            await editor.replaceBlocks(editor.topLevelBlocks, []);
+          }
+        } catch (err) { 
           console.error('Error loading content into editor:', err);
-          // Don't throw here, just log the error
         }
+      } else if (editor && data.content === null) {
+        // If content is explicitly null, clear the editor
+        await editor.replaceBlocks(editor.topLevelBlocks, []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) { // Changed from any
       console.error('Fetch card error:', err);
-      setError(err.message || 'Could not load card');
+      const errorMessage = err instanceof Error ? err.message : 'Could not load card data';
+      setError(errorMessage);
       toast({
         title: 'Error loading card',
-        description: err.message || 'Could not load card data',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
@@ -153,9 +193,9 @@ export default function CardDetailPage() {
     setError(null);
 
     try {
-      const updatePayload: any = {};
+      const updatePayload: CardUpdatePayload = {}; // Now strongly typed
       if (hasTitleChanged) updatePayload.title = title.trim();
-      if (hasContentChanged) updatePayload.content = currentContent;
+      if (hasContentChanged) updatePayload.content = currentContent as BlockNoteDocument; // Changed cast
 
       const response = await fetch(`/api/cards/${cardId}`, {
         method: 'PATCH',
@@ -175,10 +215,11 @@ export default function CardDetailPage() {
       } else {
         throw new Error(updatedCard.message || 'Failed to update card');
       }
-    } catch (err: any) {
+    } catch (err: unknown) { // Changed from any
       console.error('Save card error:', err);
-      setError(err.message || 'Could not save changes');
-      toast({ title: 'Error saving card', description: err.message, status: 'error', duration: 5000 });
+      const errorMessage = err instanceof Error ? err.message : 'Could not save changes';
+      setError(errorMessage);
+      toast({ title: 'Error saving card', description: errorMessage, status: 'error', duration: 5000 });
     } finally {
       setIsSaving(false);
     }
@@ -194,19 +235,20 @@ export default function CardDetailPage() {
         method: 'DELETE',
       });
 
-      const data = await response.json();
-
       if (response.ok) {
         toast({ title: 'Card deleted', status: 'success', duration: 3000 });
         router.push('/'); // Redirect to homepage after delete
         router.refresh();
       } else {
-        throw new Error(data.message || 'Failed to delete card');
+        // Ensure data is read for error message
+        const errorData = await response.json().catch(() => ({ message: 'Failed to delete card' }));
+        throw new Error(errorData.message || 'Failed to delete card');
       }
-    } catch (err: any) {
+    } catch (err: unknown) { // Changed from any
       console.error('Delete card error:', err);
-      setError(err.message || 'Could not delete card');
-      toast({ title: 'Error deleting card', description: err.message, status: 'error', duration: 5000 });
+      const errorMessage = err instanceof Error ? err.message : 'Could not delete card';
+      setError(errorMessage);
+      toast({ title: 'Error deleting card', description: errorMessage, status: 'error', duration: 5000 });
       setIsDeleting(false);
     }
     // No finally needed for setIsDeleting as we redirect on success
@@ -302,7 +344,7 @@ export default function CardDetailPage() {
             </AlertDialogHeader>
 
             <AlertDialogBody>
-              Are you sure you want to delete the card titled "{card.title}"? This action cannot be undone.
+              Are you sure you want to delete the card titled &quot;{card.title}&quot;? This action cannot be undone.
             </AlertDialogBody>
 
             <AlertDialogFooter>

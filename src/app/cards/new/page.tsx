@@ -18,7 +18,7 @@ import {
   Container,
 } from '@chakra-ui/react';
 import dynamic from 'next/dynamic'; // Import dynamic
-import { BlockNoteEditor } from "@blocknote/core"; // Keep type import
+import { BlockNoteEditor } from '@blocknote/core'; // Keep type import
 
 // Dynamically import the editor component with SSR disabled
 const BlockNoteEditorComponent = dynamic(
@@ -32,11 +32,15 @@ const BlockNoteEditorComponent = dynamic(
         <Text ml={3}>Loading Editor Component...</Text>
       </Flex>
     ),
-  }
+  },
 );
 
+interface ErrorResponse {
+  message?: string;
+}
+
 export default function NewCardPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const toast = useToast();
 
@@ -46,20 +50,27 @@ export default function NewCardPage() {
   const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
 
   // Callback to receive the editor instance from the child
-  const handleEditorChange = useCallback((editorInstance: BlockNoteEditor | null) => {
-    setEditor(editorInstance);
-  }, []);
+  const handleEditorChange = useCallback(
+    (editorInstance: BlockNoteEditor | null) => {
+      setEditor(editorInstance);
+    },
+    [],
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     // Check the editor state received from the child
     if (!editor) {
-      toast({ title: 'Editor not ready or failed to load', status: 'error', duration: 3000 });
+      toast({
+        title: 'Editor not ready or failed to load',
+        status: 'error',
+        duration: 3000,
+      });
       return;
     }
     if (!title.trim()) {
-        toast({ title: 'Title is required', status: 'warning', duration: 3000 });
-        return;
+      toast({ title: 'Title is required', status: 'warning', duration: 3000 });
+      return;
     }
 
     setIsSubmitting(true);
@@ -88,13 +99,18 @@ export default function NewCardPage() {
         router.push('/');
         router.refresh();
       } else {
-        throw new Error(newCard.message || 'Failed to create card.');
+        // Use newCard.message if available, otherwise a default message
+        const serverError =
+          (newCard as ErrorResponse)?.message || 'Failed to create card.';
+        throw new Error(serverError);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Create card error:', error);
+      const errorMessage =
+        error instanceof Error ? error.message : 'Could not save the card.';
       toast({
         title: 'Error creating card.',
-        description: error.message || 'Could not save the card.',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
@@ -116,9 +132,9 @@ export default function NewCardPage() {
   if (status === 'unauthenticated') {
     router.push('/api/auth/signin?callbackUrl=/cards/new');
     return (
-       <Flex justify="center" align="center" height="80vh">
-         <Text>Redirecting to sign in...</Text>
-       </Flex>
+      <Flex justify="center" align="center" height="80vh">
+        <Text>Redirecting to sign in...</Text>
+      </Flex>
     );
   }
 
@@ -143,7 +159,10 @@ export default function NewCardPage() {
           <FormControl isRequired>
             <FormLabel>Content</FormLabel>
             {/* Render the dynamically imported component and set it to editable */}
-            <BlockNoteEditorComponent onEditorChange={handleEditorChange} editable={true} />
+            <BlockNoteEditorComponent
+              onEditorChange={handleEditorChange}
+              editable={true}
+            />
           </FormControl>
 
           <Button
@@ -158,4 +177,4 @@ export default function NewCardPage() {
       </Box>
     </Container>
   );
-} 
+}

@@ -131,11 +131,12 @@ export default function Layout({ children }: LayoutProps) {
         isClosable: true,
       });
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Move card error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Could not move the card.';
       toast({
         title: 'Error Moving Card',
-        description: err.message || 'Could not move the card.',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,

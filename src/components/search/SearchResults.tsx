@@ -3,11 +3,10 @@ import {
   Box,
   Text,
   Spinner,
-  VStack,
   Alert,
   AlertIcon,
   AlertTitle,
-  SimpleGrid
+  SimpleGrid,
 } from '@chakra-ui/react';
 import CardListItem from '@/components/cards/CardListItem';
 import { KnowledgeCard, Folder } from '@prisma/client';
@@ -27,8 +26,13 @@ interface SearchResultsProps {
   mutateResults: () => void;
 }
 
-const SearchResults: React.FC<SearchResultsProps> = ({ results, isLoading, error, searchQuery, mutateResults }) => {
-
+const SearchResults: React.FC<SearchResultsProps> = ({
+  results,
+  isLoading,
+  error,
+  searchQuery,
+  mutateResults,
+}) => {
   if (isLoading) {
     return (
       <Box textAlign="center" p={5}>
@@ -50,13 +54,13 @@ const SearchResults: React.FC<SearchResultsProps> = ({ results, isLoading, error
   if (results.length === 0 && searchQuery) {
     return (
       <Text mt={4} color="gray.500">
-        No results found for "{searchQuery}".
+        No results found for &quot;{searchQuery}&quot;.
       </Text>
     );
   }
 
   if (results.length === 0 && !searchQuery) {
-      return null;
+    return null;
   }
 
   return (
@@ -68,4 +72,4 @@ const SearchResults: React.FC<SearchResultsProps> = ({ results, isLoading, error
   );
 };
 
-export default SearchResults; 
+export default SearchResults;

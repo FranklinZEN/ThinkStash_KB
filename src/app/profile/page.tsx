@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, FormEvent } from 'react';
-import { useSession, update } from 'next-auth/react'; // Import update if you want to update session
+import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import {
   Box,
@@ -29,7 +29,7 @@ interface UserProfile {
 }
 
 export default function ProfilePage() {
-  const { data: session, status, update: updateSession } = useSession(); // Get session and update function
+  const { status, update: updateSession } = useSession();
   const router = useRouter();
   const toast = useToast();
 
@@ -49,7 +49,9 @@ export default function ProfilePage() {
         .then(async (res) => {
           if (!res.ok) {
             const errorData = await res.json();
-            throw new Error(errorData.message || `HTTP error! status: ${res.status}`);
+            throw new Error(
+              errorData.message || `HTTP error! status: ${res.status}`,
+            );
           }
           return res.json();
         })
@@ -108,16 +110,17 @@ export default function ProfilePage() {
         // Optional: Update the session immediately with the new name
         // This avoids needing a page refresh/re-login to see the name change in the header
         await updateSession({ name: updatedProfile.name });
-
       } else {
         throw new Error(updatedProfile.message || 'Failed to update profile.');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Update profile error:', err);
-      setError(err.message || 'Could not update profile.');
+      const errorMessage =
+        err instanceof Error ? err.message : 'Could not update profile.';
+      setError(errorMessage);
       toast({
         title: 'Update failed.',
-        description: err.message || 'Could not save changes.',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
@@ -146,10 +149,10 @@ export default function ProfilePage() {
 
   if (error) {
     return (
-       <Alert status="error" borderRadius="md" mt={4} maxW="md" mx="auto">
-         <AlertIcon />
-         {error}
-       </Alert>
+      <Alert status="error" borderRadius="md" mt={4} maxW="md" mx="auto">
+        <AlertIcon />
+        {error}
+      </Alert>
     );
   }
 
@@ -159,46 +162,60 @@ export default function ProfilePage() {
   }
 
   return (
-    <Box maxW="lg" mx="auto" mt={10} p={8} borderWidth={1} borderRadius="lg" boxShadow="lg">
-      <Heading as="h1" size="xl" mb={6} textAlign="center">
+    <Box
+      maxW="lg"
+      mx="auto"
+      mt={10}
+      p={8}
+      borderWidth={1}
+      borderRadius="lg"
+      boxShadow="lg"
+    >
+      <Heading as="h1" size="xl" textAlign="center" mb={8}>
         Your Profile
       </Heading>
-      <VStack spacing={6} as="form" onSubmit={handleSaveChanges}>
-        <FormControl isReadOnly>
-          <FormLabel>Email address</FormLabel>
-          <Input type="email" value={profile.email || 'Not available'} isDisabled />
-        </FormControl>
+      <form onSubmit={handleSaveChanges}>
+        <VStack spacing={6}>
+          <FormControl isReadOnly>
+            <FormLabel>Email address</FormLabel>
+            <Input
+              type="email"
+              value={profile.email || 'Not available'}
+              isDisabled
+            />
+          </FormControl>
 
-        <FormControl isRequired>
-          <FormLabel>Name</FormLabel>
-          <Input
-            type="text"
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            placeholder="Your Name"
-            isDisabled={isUpdating}
-          />
-        </FormControl>
+          <FormControl isRequired>
+            <FormLabel>Name</FormLabel>
+            <Input
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Your Name"
+              isDisabled={isUpdating}
+            />
+          </FormControl>
 
-        <FormControl isReadOnly>
-          <FormLabel>Joined On</FormLabel>
-          <Input
-            type="text"
-            value={new Date(profile.createdAt).toLocaleDateString() || '-'}
-            isDisabled
-          />
-        </FormControl>
+          <FormControl isReadOnly>
+            <FormLabel>Joined On</FormLabel>
+            <Input
+              type="text"
+              value={new Date(profile.createdAt).toLocaleDateString() || '-'}
+              isDisabled
+            />
+          </FormControl>
 
-        <Button
-          type="submit"
-          colorScheme="blue"
-          width="full"
-          isLoading={isUpdating}
-          disabled={nameInput === profile.name || isUpdating}
-        >
-          Save Changes
-        </Button>
-      </VStack>
+          <Button
+            type="submit"
+            colorScheme="blue"
+            width="full"
+            isLoading={isUpdating}
+            disabled={nameInput === profile.name || isUpdating}
+          >
+            Save Changes
+          </Button>
+        </VStack>
+      </form>
     </Box>
   );
-} 
+}

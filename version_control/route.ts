@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import { prisma } from '@/lib/prisma'; // Adjust path as necessary
+import prisma from '@/lib/prisma'; // Adjust path as necessary
+import type { BlockNoteDocument } from '@/types/blocknote'; // Import the type
 
 // --- GET Handler (List Cards) ---
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const session = await getServerSession(authOptions);
 
   if (!session || !session.user?.id) {
@@ -54,6 +55,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// Define an interface for the card creation data
+interface CardCreateData {
+  title: string;
+  content: BlockNoteDocument | null; // Use the imported type
+  userId: string;
+  folderId?: string | null;
+}
+
 // --- POST Handler (Create Card) ---
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -87,9 +96,9 @@ export async function POST(req: NextRequest) {
     // --- End Validation ---
 
     // Prepare data for Prisma create
-    const data: any = {
+    const data: CardCreateData = {
       title: title.trim(),
-      content: content, // Prisma expects JSON compatible object/value
+      content: content as BlockNoteDocument | null, // Assert type from body
       userId: userId,
     };
 
@@ -107,18 +116,20 @@ export async function POST(req: NextRequest) {
 
     // Create the Knowledge Card
     const newCard = await prisma.knowledgeCard.create({
-      data: data,
+      data: data, // Now strongly typed
     });
 
     return NextResponse.json(newCard, { status: 201 });
 
-  } catch (error: any) {
+  } catch (error: unknown) { // Changed from any
     console.error('Create Card Error:', error);
     // Handle potential Prisma errors (e.g., unique constraint violation? unlikely here)
-    if (error.code === 'P2003') { // Foreign key constraint failed (e.g., invalid folderId)
+    // Check if error has a code property before accessing it
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2003') { // Foreign key constraint failed
         return NextResponse.json({ message: 'Invalid folderId provided' }, { status: 400 });
     }
-    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
+    return NextResponse.json({ message: errorMessage }, { status: 500 });
   } finally {
     // await prisma.$disconnect(); // Singleton pattern
   }

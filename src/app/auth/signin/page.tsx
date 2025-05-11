@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent, useEffect } from 'react';
+import { useState, FormEvent, useEffect, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation'; // Use next/navigation for App Router
 import {
@@ -17,7 +17,8 @@ import {
   AlertIcon,
 } from '@chakra-ui/react';
 
-export default function SignInPage() {
+// Renamed original component to SignInForm
+function SignInForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -86,57 +87,86 @@ export default function SignInPage() {
   };
 
   return (
-    <Box maxW="md" mx="auto" mt={10} p={8} borderWidth={1} borderRadius="lg" boxShadow="lg">
-      <VStack spacing={6} as="form" onSubmit={handleSubmit}>
-        <Heading as="h1" size="lg" textAlign="center">
-          Sign In
-        </Heading>
+    <Box
+      maxW="md"
+      mx="auto"
+      mt={10}
+      p={8}
+      borderWidth={1}
+      borderRadius="lg"
+      boxShadow="lg"
+    >
+      <form onSubmit={handleSubmit}>
+        <VStack spacing={6}>
+          <Heading as="h1" size="lg" textAlign="center">
+            Sign In
+          </Heading>
 
-        {error && (
-          <Alert status="error" borderRadius="md">
-            <AlertIcon />
-            {error}
-          </Alert>
-        )}
+          {error && (
+            <Alert status="error" borderRadius="md">
+              <AlertIcon />
+              {error}
+            </Alert>
+          )}
 
-        <FormControl isRequired>
-          <FormLabel>Email address</FormLabel>
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            isDisabled={isLoading}
-          />
-        </FormControl>
+          <FormControl isRequired>
+            <FormLabel>Email address</FormLabel>
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              isDisabled={isLoading}
+            />
+          </FormControl>
 
-        <FormControl isRequired>
-          <FormLabel>Password</FormLabel>
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="********"
-            isDisabled={isLoading}
-          />
-        </FormControl>
+          <FormControl isRequired>
+            <FormLabel>Password</FormLabel>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="********"
+              isDisabled={isLoading}
+            />
+          </FormControl>
 
-        <Button
-          type="submit"
-          colorScheme="blue"
-          width="full"
-          isLoading={isLoading}
-        >
-          Sign In
-        </Button>
-
-        <Text textAlign="center" pt={2}>
-          Don't have an account?{' '}
-          <Button variant="link" colorScheme="blue" onClick={() => router.push('/auth/signup')}>
-            Sign Up
+          <Button
+            type="submit"
+            colorScheme="blue"
+            width="full"
+            isLoading={isLoading}
+          >
+            Sign In
           </Button>
-        </Text>
-      </VStack>
+
+          <Text textAlign="center" pt={2}>
+            Don&apos;t have an account?{' '}
+            <Button
+              variant="link"
+              colorScheme="blue"
+              onClick={() => router.push('/auth/signup')}
+            >
+              Sign Up
+            </Button>
+          </Text>
+        </VStack>
+      </form>
     </Box>
   );
-} 
+}
+
+// New default export SignInPage that wraps SignInForm with Suspense
+export default function SignInPage() {
+  return (
+    <Suspense
+      fallback={
+        <Box maxW="md" mx="auto" mt={10} p={8} textAlign="center">
+          <Text>Loading page...</Text>
+        </Box>
+      }
+    >
+      <SignInForm />
+    </Suspense>
+  );
+}

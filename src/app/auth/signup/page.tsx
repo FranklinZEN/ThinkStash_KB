@@ -72,61 +72,75 @@ export default function SignUpPage() {
   };
 
   return (
-    <Box maxW="md" mx="auto" mt={10} p={8} borderWidth={1} borderRadius="lg" boxShadow="lg">
-      <VStack spacing={6} as="form" onSubmit={handleSubmit}>
-        <Heading as="h1" size="lg" textAlign="center">
-          Create Account
-        </Heading>
+    <Box
+      maxW="md"
+      mx="auto"
+      mt={10}
+      p={8}
+      borderWidth={1}
+      borderRadius="lg"
+      boxShadow="lg"
+    >
+      <form onSubmit={handleSubmit}>
+        <VStack spacing={6}>
+          <Heading as="h1" size="lg" textAlign="center">
+            Create Account
+          </Heading>
 
-        <FormControl isRequired>
-          <FormLabel>Email address</FormLabel>
-          <Input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            isDisabled={isLoading}
-          />
-        </FormControl>
+          <FormControl isRequired>
+            <FormLabel>Email address</FormLabel>
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              isDisabled={isLoading}
+            />
+          </FormControl>
 
-        <FormControl isRequired>
-          <FormLabel>Password</FormLabel>
-          <Input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="********"
-            isDisabled={isLoading}
-          />
-        </FormControl>
+          <FormControl isRequired>
+            <FormLabel>Password</FormLabel>
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="********"
+              isDisabled={isLoading}
+            />
+          </FormControl>
 
-        <FormControl>
-          <FormLabel>Name (Optional)</FormLabel>
-          <Input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your Name"
-            isDisabled={isLoading}
-          />
-        </FormControl>
+          <FormControl>
+            <FormLabel>Name (Optional)</FormLabel>
+            <Input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your Name"
+              isDisabled={isLoading}
+            />
+          </FormControl>
 
-        <Button
-          type="submit"
-          colorScheme="blue"
-          width="full"
-          isLoading={isLoading}
-        >
-          Sign Up
-        </Button>
-
-        <Text textAlign="center" pt={2}>
-          Already have an account?{' '}
-          <Button variant="link" colorScheme="blue" onClick={() => router.push('/api/auth/signin')}>
-            Sign In
+          <Button
+            type="submit"
+            colorScheme="blue"
+            width="full"
+            isLoading={isLoading}
+          >
+            Sign Up
           </Button>
-        </Text>
-      </VStack>
+
+          <Text textAlign="center" pt={2}>
+            Already have an account?{' '}
+            <Button
+              variant="link"
+              colorScheme="blue"
+              onClick={() => router.push('/api/auth/signin')}
+            >
+              Sign In
+            </Button>
+          </Text>
+        </VStack>
+      </form>
     </Box>
   );
-} 
+}

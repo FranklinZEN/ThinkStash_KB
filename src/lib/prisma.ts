@@ -11,11 +11,11 @@ declare global {
 const prisma =
   global.prisma ||
   new PrismaClient({
-    // Uncomment below to log Prisma queries (useful for debugging)
+    // Log Prisma queries (useful for debugging)
     log: ['query', 'info', 'warn', 'error'],
   });
 
 // In development, assign the instance to the global variable
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
 
-export default prisma; 
+export default prisma;

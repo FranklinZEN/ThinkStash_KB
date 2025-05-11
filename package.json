@@ -1,6 +1,9 @@
 {
   "scripts": {
     "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
     "test:fe": "npx jest --watch",
@@ -34,6 +37,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^15.3.2",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@types/bcryptjs": "^2.4.6",
@@ -42,6 +46,7 @@
     "@types/react": "19.1.2",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
     "@typescript-eslint/parser": "^8.31.0",
+    "cross-env": "^7.0.3",
     "eslint": "^9.25.1",
     "eslint-config-next": "^15.3.1",
     "eslint-config-prettier": "^10.1.2",

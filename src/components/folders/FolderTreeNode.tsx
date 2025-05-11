@@ -6,7 +6,6 @@ import {
   HStack,
   IconButton,
   Text,
-  Spacer,
   useDisclosure,
   AlertDialog,
   AlertDialogBody,
@@ -32,7 +31,7 @@ import {
   DeleteIcon,
   HamburgerIcon,
   AddIcon,
-  DragHandleIcon
+  DragHandleIcon,
 } from '@chakra-ui/icons';
 import { FolderTreeNode as FolderTreeNodeType } from '@/lib/folderUtils';
 import RenameFolderModal from './RenameFolderModal';
@@ -40,7 +39,7 @@ import { useFolderStore } from '@/stores/folderStore';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import CreateFolderModal from './CreateFolderModal';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface FolderTreeNodeProps {
   node: FolderTreeNodeType;
@@ -50,26 +49,40 @@ interface FolderTreeNodeProps {
   isDragging?: boolean;
   isOver?: boolean;
   dropDirection?: 'above' | 'below' | null;
+  selectedFolderId?: string | null;
 }
 
-export default function FolderTreeNode({ 
-  node, 
-  level, 
-  isSelected = false, 
-  onSelect, 
+export default function FolderTreeNode({
+  node,
+  level,
+  isSelected = false,
+  onSelect,
   isDragging = false,
   isOver = false,
-  dropDirection = null
+  dropDirection = null,
+  selectedFolderId,
 }: FolderTreeNodeProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { isOpen: isRenameOpen, onOpen: onRenameOpen, onClose: onRenameClose } = useDisclosure();
-  const { isOpen: isDeleteAlertOpen, onOpen: onDeleteAlertOpen, onClose: onDeleteAlertClose } = useDisclosure();
+  const {
+    isOpen: isRenameOpen,
+    onOpen: onRenameOpen,
+    onClose: onRenameClose,
+  } = useDisclosure();
+  const {
+    isOpen: isDeleteAlertOpen,
+    onOpen: onDeleteAlertOpen,
+    onClose: onDeleteAlertClose,
+  } = useDisclosure();
   const [isDeleting, setIsDeleting] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const toast = useToast();
   const deleteFolder = useFolderStore((state) => state.deleteFolder);
   const hasChildren = node.children && node.children.length > 0;
-  const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure();
+  const {
+    isOpen: isCreateOpen,
+    onOpen: onCreateOpen,
+    onClose: onCreateClose,
+  } = useDisclosure();
 
   const {
     attributes,
@@ -77,7 +90,7 @@ export default function FolderTreeNode({
     setNodeRef,
     transform,
     transition,
-    isDragging: isSortableDragging
+    isDragging: isSortableDragging,
   } = useSortable({ id: node.id });
 
   const style = {
@@ -92,22 +105,16 @@ export default function FolderTreeNode({
   const borderColor = useColorModeValue('gray.200', 'gray.600');
 
   const handleClick = (e: React.MouseEvent) => {
-    if (!(e.target instanceof SVGElement) && !(e.target instanceof HTMLButtonElement) && !(e.target as HTMLElement).closest('button')) {
+    if (
+      !(e.target instanceof SVGElement) &&
+      !(e.target instanceof HTMLButtonElement) &&
+      !(e.target as HTMLElement).closest('button')
+    ) {
       if (onSelect) {
         onSelect(node.id);
       }
       setIsOpen(!isOpen);
     }
-  };
-
-  const handleRenameClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onRenameOpen();
-  };
-
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onDeleteAlertOpen();
   };
 
   const handleConfirmDelete = async () => {
@@ -122,9 +129,14 @@ export default function FolderTreeNode({
       const storeError = useFolderStore.getState().error;
       const notEmptyMessage = 'Folder is not empty';
       const errorMessage = storeError?.includes(notEmptyMessage)
-                             ? 'Cannot delete a folder that contains cards or sub-folders.'
-                             : (storeError || 'Failed to delete folder.');
-      toast({ title: 'Error Deleting Folder', description: errorMessage, status: 'error', duration: 5000 });
+        ? 'Cannot delete a folder that contains cards or sub-folders.'
+        : storeError || 'Failed to delete folder.';
+      toast({
+        title: 'Error Deleting Folder',
+        description: errorMessage,
+        status: 'error',
+        duration: 5000,
+      });
     }
   };
 
@@ -151,10 +163,10 @@ export default function FolderTreeNode({
   };
 
   return (
-    <Box 
+    <Box
       ref={setNodeRef}
       style={style}
-      mx={1} 
+      mx={1}
       my="1px"
       role="treeitem"
       aria-expanded={hasChildren ? isOpen : undefined}
@@ -206,24 +218,37 @@ export default function FolderTreeNode({
         {/* Expand/Collapse Icon */}
         <IconButton
           aria-label={isOpen ? 'Collapse folder' : 'Expand folder'}
-          icon={hasChildren ? (isOpen ? <ChevronDownIcon /> : <ChevronRightIcon />) : <Box w="14px" />}
+          icon={
+            hasChildren ? (
+              isOpen ? (
+                <ChevronDownIcon />
+              ) : (
+                <ChevronRightIcon />
+              )
+            ) : (
+              <Box w="14px" />
+            )
+          }
           size="xs"
           variant="ghost"
           isRound
           isDisabled={!hasChildren}
-          onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsOpen(!isOpen);
+          }}
           mr={1}
           flexShrink={0}
         />
 
         {/* Flex container for Name and Count */}
         <Flex flex={1} align="center" overflow="hidden" mr={1}>
-          <Text 
-            fontSize="sm" 
-            noOfLines={1} 
+          <Text
+            fontSize="sm"
+            noOfLines={1}
             title={node.name}
-            fontWeight={level === 0 ? "medium" : "normal"}
-            color={isSelected ? "blue.600" : undefined}
+            fontWeight={level === 0 ? 'medium' : 'normal'}
+            color={isSelected ? 'blue.600' : undefined}
           >
             {node.name}
           </Text>
@@ -233,7 +258,7 @@ export default function FolderTreeNode({
         {typeof node._count?.cards === 'number' && (
           <Badge
             fontSize="0.7em"
-            colorScheme={isSelected ? "blue" : "gray"}
+            colorScheme={isSelected ? 'blue' : 'gray'}
             variant="subtle"
             flexShrink={0}
             px={1.5}
@@ -254,14 +279,33 @@ export default function FolderTreeNode({
             onClick={(e) => e.stopPropagation()}
           />
           <MenuList onClick={(e) => e.stopPropagation()}>
-            <MenuItem icon={<AddIcon />} onClick={(e) => { e.stopPropagation(); onCreateOpen(); }}>
+            <MenuItem
+              icon={<AddIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateOpen();
+              }}
+            >
               Create Subfolder
             </MenuItem>
-            <MenuItem icon={<EditIcon />} onClick={(e) => { e.stopPropagation(); onRenameOpen(); }}>
+            <MenuItem
+              icon={<EditIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRenameOpen();
+              }}
+            >
               Rename
             </MenuItem>
             <MenuDivider />
-            <MenuItem icon={<DeleteIcon />} onClick={(e) => { e.stopPropagation(); onDeleteAlertOpen(); }} color="red.500">
+            <MenuItem
+              icon={<DeleteIcon />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteAlertOpen();
+              }}
+              color="red.500"
+            >
               Delete
             </MenuItem>
           </MenuList>
@@ -301,6 +345,7 @@ export default function FolderTreeNode({
                   isDragging={isDragging}
                   isOver={isOver}
                   dropDirection={dropDirection}
+                  selectedFolderId={selectedFolderId}
                 />
               </motion.div>
             ))}
@@ -329,16 +374,22 @@ export default function FolderTreeNode({
               Delete Folder
             </AlertDialogHeader>
             <AlertDialogBody>
-              Are you sure you want to delete the folder "{node.name}"?
-              Cards within this folder will become uncategorized.
-              Sub-folders within this folder will be moved to the parent folder (or root if this folder is at the root).
-              This action cannot be undone.
+              {`Are you sure you want to delete the folder "${node.name}"? Cards within this folder will become uncategorized. Sub-folders within this folder will be moved to the parent folder (or root if this folder is at the root). This action cannot be undone.`}
             </AlertDialogBody>
             <AlertDialogFooter>
-              <Button ref={cancelRef} onClick={onDeleteAlertClose} isDisabled={isDeleting}>
+              <Button
+                ref={cancelRef}
+                onClick={onDeleteAlertClose}
+                isDisabled={isDeleting}
+              >
                 Cancel
               </Button>
-              <Button colorScheme="red" onClick={handleConfirmDelete} ml={3} isLoading={isDeleting}>
+              <Button
+                colorScheme="red"
+                onClick={handleConfirmDelete}
+                ml={3}
+                isLoading={isDeleting}
+              >
                 Delete
               </Button>
             </AlertDialogFooter>
@@ -353,4 +404,4 @@ export default function FolderTreeNode({
       />
     </Box>
   );
-} 
+}

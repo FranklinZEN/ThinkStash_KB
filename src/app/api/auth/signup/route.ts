@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma'; // Import singleton instance
+import prisma from '@/lib/prisma'; // Import singleton instance
 import bcrypt from 'bcryptjs';
 
 export async function POST(req: NextRequest) {
@@ -12,7 +12,10 @@ export async function POST(req: NextRequest) {
 
     // Basic validation
     if (!email || !password) {
-      return NextResponse.json({ message: 'Email and password are required' }, { status: 400 });
+      return NextResponse.json(
+        { message: 'Email and password are required' },
+        { status: 400 },
+      );
     }
 
     // Check if user already exists
@@ -21,7 +24,10 @@ export async function POST(req: NextRequest) {
     });
 
     if (existingUser) {
-      return NextResponse.json({ message: 'User already exists' }, { status: 409 });
+      return NextResponse.json(
+        { message: 'User already exists' },
+        { status: 409 },
+      );
     }
 
     // Hash password
@@ -37,13 +43,26 @@ export async function POST(req: NextRequest) {
     });
 
     // Exclude password from the response
-    const { password: _, ...userWithoutPassword } = newUser;
+    const userWithoutPassword = {
+      id: newUser.id,
+      email: newUser.email,
+      name: newUser.name,
+      // Add other fields as necessary, excluding password
+    };
 
     return NextResponse.json(userWithoutPassword, { status: 201 });
-
   } catch (error) {
     // Log the error with more detail
-    console.error('Signup Error:', error instanceof Error ? error.message : error);
-    return NextResponse.json({ message: 'Internal Server Error', error: error instanceof Error ? error.message : error }, { status: 500 });
+    console.error(
+      'Signup Error:',
+      error instanceof Error ? error.message : error,
+    );
+    return NextResponse.json(
+      {
+        message: 'Internal Server Error',
+        error: error instanceof Error ? error.message : error,
+      },
+      { status: 500 },
+    );
   }
-} 
+}
