@@ -1,8 +1,8 @@
 import { GET } from '@/app/api/folders/route'; // Import the handler
-import { prisma } from '@/lib/prisma'; // Import prisma to mock
+import prisma from '@/lib/prisma'; // Import prisma to mock
 import { getCurrentUserId } from '@/lib/sessionUtils'; // Import session util to mock
-import { NextResponse } from 'next/server';
-import { NextRequest } from 'next/server';
+import { _NextResponse } from 'next/server';
+import { _NextRequest } from 'next/server';
 import { POST } from '@/app/api/folders/route'; // Import POST handler
 import { Prisma } from '@prisma/client'; // Import Prisma for error codes
 

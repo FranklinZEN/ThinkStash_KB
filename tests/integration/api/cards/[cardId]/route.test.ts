@@ -1,8 +1,8 @@
-import { PUT, DELETE, GET } from '@/app/api/cards/[cardId]/route'; // Import handlers
-import { prisma } from '@/lib/prisma';
+import { PUT, _DELETE, _GET } from '@/app/api/cards/[cardId]/route'; // Import handlers
+import prisma from '@/lib/prisma';
 import { getCurrentUserId } from '@/lib/sessionUtils';
-import { NextResponse } from 'next/server';
-import { Prisma } from '@prisma/client';
+import { _NextResponse } from 'next/server';
+import { _Prisma } from '@prisma/client';
 
 // Mock dependencies
 jest.mock('@/lib/prisma', () => ({

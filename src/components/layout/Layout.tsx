@@ -2,9 +2,26 @@
 
 import React, {
   useState,
-  useRef // Add useRef
+  useRef, // Add useRef
 } from 'react';
-import { Box, Flex, Button, Text, HStack, Spacer, Spinner, Link as ChakraLink, useToast, useDisclosure, AlertDialog, AlertDialogBody, AlertDialogFooter, AlertDialogHeader, AlertDialogContent, AlertDialogOverlay } from '@chakra-ui/react';
+import {
+  Box,
+  Flex,
+  Button,
+  Text,
+  HStack,
+  Spacer,
+  Spinner,
+  Link as ChakraLink,
+  useToast,
+  useDisclosure,
+  AlertDialog,
+  AlertDialogBody,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogContent,
+  AlertDialogOverlay,
+} from '@chakra-ui/react';
 import { useSession, signOut } from 'next-auth/react';
 import Link from 'next/link';
 import FoldersSidebar from '@/components/FoldersSidebar'; // Import the sidebar
@@ -35,7 +52,11 @@ export default function Layout({ children }: LayoutProps) {
 
   // State for move confirmation dialog
   const [moveDetails, setMoveDetails] = useState<MoveDetails | null>(null);
-  const { isOpen: isMoveConfirmOpen, onOpen: onMoveConfirmOpen, onClose: onMoveConfirmClose } = useDisclosure();
+  const {
+    isOpen: isMoveConfirmOpen,
+    onOpen: onMoveConfirmOpen,
+    onClose: onMoveConfirmClose,
+  } = useDisclosure();
   const cancelRef = useRef<HTMLButtonElement>(null); // Ref for AlertDialog
 
   const handleSignOut = () => {
@@ -57,7 +78,9 @@ export default function Layout({ children }: LayoutProps) {
       if (isCard && isFolder) {
         const cardId = active.id as string;
         const targetFolderId = over.id as string;
-        const draggedCardData = active.data.current?.cardData as CardListItem | undefined;
+        const draggedCardData = active.data.current?.cardData as
+          | CardListItem
+          | undefined;
 
         if (!draggedCardData) {
           console.error('Card data not found in drag event');
@@ -67,12 +90,14 @@ export default function Layout({ children }: LayoutProps) {
         const cardTitle = draggedCardData.title ?? 'this card';
         const currentFolderId = draggedCardData.folder?.id ?? null;
         const currentFolderName = draggedCardData.folder?.name ?? null;
-        const targetFolder = folders.find(f => f.id === targetFolderId);
+        const targetFolder = folders.find((f) => f.id === targetFolderId);
         const targetFolderName = targetFolder?.name ?? null;
 
         // Only proceed if we're actually moving to a different folder
         if (currentFolderId !== targetFolderId) {
-          console.log(`Attempting to move card ${cardId} (${cardTitle}) from ${currentFolderName || 'Root'} to folder ${targetFolderName || 'Unknown'}`);
+          console.log(
+            `Attempting to move card ${cardId} (${cardTitle}) from ${currentFolderName || 'Root'} to folder ${targetFolderName || 'Unknown'}`,
+          );
 
           // Set details and open confirmation dialog
           setMoveDetails({
@@ -86,15 +111,17 @@ export default function Layout({ children }: LayoutProps) {
           onMoveConfirmOpen();
         }
       } else {
-        console.log('Invalid drop target:', { 
-          isCard, 
-          isFolder, 
-          activeData: active.data.current, 
-          overData: over.data.current 
+        console.log('Invalid drop target:', {
+          isCard,
+          isFolder,
+          activeData: active.data.current,
+          overData: over.data.current,
         });
       }
     } else {
-      console.log('Drag ended without a valid drop target or dropped on same item');
+      console.log(
+        'Drag ended without a valid drop target or dropped on same item',
+      );
     }
   };
 
@@ -105,7 +132,9 @@ export default function Layout({ children }: LayoutProps) {
     const { cardId, targetFolderId } = moveDetails;
     onMoveConfirmClose(); // Close dialog
 
-    console.log(`Confirming move of card ${cardId} to folder ${targetFolderId}`);
+    console.log(
+      `Confirming move of card ${cardId} to folder ${targetFolderId}`,
+    );
 
     try {
       // Call the API to update the card's folderId
@@ -117,7 +146,9 @@ export default function Layout({ children }: LayoutProps) {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Failed to move card: ${response.statusText}`);
+        throw new Error(
+          errorData.error || `Failed to move card: ${response.statusText}`,
+        );
       }
 
       // Refetch data using the store actions
@@ -130,12 +161,13 @@ export default function Layout({ children }: LayoutProps) {
         duration: 3000,
         isClosable: true,
       });
-
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Move card error:', err);
+      const errorMessage =
+        err instanceof Error ? err.message : 'Could not move the card.';
       toast({
         title: 'Error Moving Card',
-        description: err.message || 'Could not move the card.',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
@@ -151,49 +183,58 @@ export default function Layout({ children }: LayoutProps) {
     const { cardTitle, currentFolderName, targetFolderName } = moveDetails;
 
     if (currentFolderName && targetFolderName) {
-      return `Move card "${cardTitle}" from folder "${currentFolderName}" to folder "${targetFolderName}"?`;
+      return `Move card &quot;${cardTitle}&quot; from folder &quot;${currentFolderName}&quot; to folder &quot;${targetFolderName}&quot;?`;
     } else if (!currentFolderName && targetFolderName) {
-      return `Move card "${cardTitle}" to folder "${targetFolderName}"?`;
+      return `Move card &quot;${cardTitle}&quot; to folder &quot;${targetFolderName}&quot;?`;
     } else if (currentFolderName && !targetFolderName) {
       // This case (moving to root) is not fully handled by current drop logic
       // but we include the message for future implementation.
-      return `Remove card "${cardTitle}" from folder "${currentFolderName}"?`;
+      return `Remove card &quot;${cardTitle}&quot; from folder &quot;${currentFolderName}&quot;?`;
     }
     return 'Confirm move?'; // Fallback
   };
 
   return (
-    <DndContext onDragEnd={handleDragEnd} collisionDetection={closestCenter}> {/* Wrap with DndContext */}
+    <DndContext onDragEnd={handleDragEnd} collisionDetection={closestCenter}>
+      {' '}
+      {/* Wrap with DndContext */}
       <Flex direction="column" minHeight="100vh">
         {/* Header */}
-        <Box 
-          as="header" 
-          bg="blue.600" 
-          color="white" 
-          px={4} 
+        <Box
+          as="header"
+          bg="blue.600"
+          color="white"
+          px={4}
           boxShadow="sm"
           height={headerHeight} // Set fixed height
           display="flex" // Use flex for vertical alignment
           alignItems="center" // Vertically center header content
           position="fixed" // Make header sticky
-          width="100%" 
+          width="100%"
           zIndex="sticky" // Ensure header stays on top
         >
           <Flex alignItems="center" width="100%">
             <Link href="/" passHref>
-              <ChakraLink as="span" _hover={{ textDecoration: 'none' }} fontWeight="bold">
-                Knowledge Cards
+              <ChakraLink
+                as="span"
+                _hover={{ textDecoration: 'none' }}
+                fontFamily="'Pacifico', cursive"
+                fontSize={{ base: '32px', md: '40px' }}
+              >
+                ThinkStash
               </ChakraLink>
             </Link>
             <Spacer />
             <HStack spacing={4}>
-              {status === 'loading' && (
-                <Spinner size="sm" />
-              )}
+              {status === 'loading' && <Spinner size="sm" />}
               {status === 'unauthenticated' && (
                 <>
                   <Link href="/auth/signin">
-                    <Button variant="outline" colorScheme="whiteAlpha" size="sm">
+                    <Button
+                      variant="outline"
+                      colorScheme="whiteAlpha"
+                      size="sm"
+                    >
                       Sign In
                     </Button>
                   </Link>
@@ -207,9 +248,12 @@ export default function Layout({ children }: LayoutProps) {
               {status === 'authenticated' && session?.user && (
                 <>
                   <Link href="/profile">
-                     <Text cursor="pointer" _hover={{ textDecoration: 'underline' }}>
-                        Welcome, {session.user.name || session.user.email}
-                     </Text>
+                    <Text
+                      cursor="pointer"
+                      _hover={{ textDecoration: 'underline' }}
+                    >
+                      Welcome, {session.user.name || session.user.email}
+                    </Text>
                   </Link>
                   <Button colorScheme="red" onClick={handleSignOut} size="sm">
                     Sign Out
@@ -219,17 +263,16 @@ export default function Layout({ children }: LayoutProps) {
             </HStack>
           </Flex>
         </Box>
-        {/* Main Content Area with Sidebar */}
-        <Flex flex="1" pt={headerHeight}> {/* Add padding top equal to header height */}
-          {/* Conditionally render sidebar only when authenticated */}
+        {/* Main Content Area: Sidebar + Children */}
+        <Flex pt={headerHeight} flex="1">
+          {' '}
+          {/* Flex container for sidebar and content */}
           {status === 'authenticated' && <FoldersSidebar />}
-
-          {/* Main content takes remaining space */}
-          <Box 
-            as="main" 
-            flex="1" 
-            p={6} 
-            overflowY="auto" // Allow main content to scroll independently
+          <Box
+            flex="1" // Takes up remaining space
+            p={4} // Original padding for children
+            overflowY="auto" // If content is taller than viewport
+            bg="white" // Match children bg, or adjust as needed
           >
             {children}
           </Box>
@@ -241,7 +284,6 @@ export default function Layout({ children }: LayoutProps) {
         </Box>
         */}
       </Flex>
-
       {/* Move Confirmation Dialog */}
       {moveDetails && (
         <AlertDialog
@@ -256,9 +298,7 @@ export default function Layout({ children }: LayoutProps) {
                 Confirm Move
               </AlertDialogHeader>
 
-              <AlertDialogBody>
-                {getMoveConfirmationMessage()} 
-              </AlertDialogBody>
+              <AlertDialogBody>{getMoveConfirmationMessage()}</AlertDialogBody>
 
               <AlertDialogFooter>
                 <Button ref={cancelRef} onClick={onMoveConfirmClose}>
@@ -274,4 +314,4 @@ export default function Layout({ children }: LayoutProps) {
       )}
     </DndContext>
   );
-} 
+}

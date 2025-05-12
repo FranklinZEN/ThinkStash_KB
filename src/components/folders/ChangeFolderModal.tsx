@@ -10,7 +10,6 @@ import {
   ModalFooter,
   Button,
   VStack,
-  Text,
   useToast,
   Input,
   HStack,
@@ -41,13 +40,13 @@ export default function ChangeFolderModal({
 
   const handleMove = async (folderId: string | null) => {
     if (folderId === currentFolderId) {
-        toast({
-            title: "Card is already in this folder",
-            status: "info",
-            duration: 2000,
-            isClosable: true,
-        });
-        return;
+      toast({
+        title: 'Card is already in this folder',
+        status: 'info',
+        duration: 2000,
+        isClosable: true,
+      });
+      return;
     }
     try {
       await onConfirmMove(folderId);
@@ -65,23 +64,32 @@ export default function ChangeFolderModal({
 
   const handleCreateFolder = async () => {
     if (!newFolderName.trim()) {
-      toast({ title: "Folder name cannot be empty", status: "warning", duration: 2000 });
+      toast({
+        title: 'Folder name cannot be empty',
+        status: 'warning',
+        duration: 2000,
+      });
       return;
     }
     setIsCreatingFolder(true);
     const success = await addFolder(newFolderName.trim(), null);
 
     if (success) {
-        toast({ title: `Folder "${newFolderName.trim()}" created`, status: "success", duration: 2000 });
-        setNewFolderName('');
+      toast({
+        title: `Folder "${newFolderName.trim()}" created`,
+        status: 'success',
+        duration: 2000,
+      });
+      setNewFolderName('');
     } else {
-        const storeError = useFolderStore.getState().error;
-        toast({
-            title: 'Error Creating Folder',
-            description: storeError || 'Failed to create folder. See console for details.',
-            status: 'error',
-            duration: 5000,
-        });
+      const storeError = useFolderStore.getState().error;
+      toast({
+        title: 'Error Creating Folder',
+        description:
+          storeError || 'Failed to create folder. See console for details.',
+        status: 'error',
+        duration: 5000,
+      });
     }
     setIsCreatingFolder(false);
   };
@@ -135,11 +143,15 @@ export default function ChangeFolderModal({
           </VStack>
         </ModalBody>
         <ModalFooter>
-          <Button variant="ghost" onClick={onClose} isDisabled={isCreatingFolder}>
+          <Button
+            variant="ghost"
+            onClick={onClose}
+            isDisabled={isCreatingFolder}
+          >
             Cancel
           </Button>
         </ModalFooter>
       </ModalContent>
     </Modal>
   );
-} 
+}

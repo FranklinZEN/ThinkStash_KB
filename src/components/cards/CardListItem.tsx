@@ -4,52 +4,44 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Text,
-  Badge,
-  HStack,
   IconButton,
   Menu,
   MenuButton,
   MenuList,
   MenuItem,
   MenuDivider,
-  useDisclosure,
   AlertDialog,
+  AlertDialogOverlay,
+  AlertDialogContent,
+  AlertDialogHeader,
   AlertDialogBody,
   AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogContent,
-  AlertDialogOverlay,
   Button,
   useToast,
-  Flex,
-  VStack,
-  Modal,
-  ModalOverlay,
-  ModalContent,
-  ModalHeader,
-  ModalBody,
-  ModalCloseButton,
-  ModalFooter,
   Popover,
   PopoverTrigger,
   PopoverContent,
   PopoverArrow,
-  PopoverCloseButton,
-  PopoverHeader,
   PopoverBody,
 } from '@chakra-ui/react';
-import { EditIcon, DeleteIcon, ChevronRightIcon, ChevronLeftIcon, HamburgerIcon, RepeatIcon, StarIcon } from '@chakra-ui/icons';
+import {
+  StarIcon,
+  HamburgerIcon,
+  EditIcon,
+  DeleteIcon,
+  RepeatIcon,
+} from '@chakra-ui/icons';
 import { useRouter } from 'next/navigation';
-import { Card } from '@prisma/client';
-import { extractSnippetFromContent, type Block } from '@/lib/cardUtils';
-import ChangeFolderModal from '../folders/ChangeFolderModal';
-import { useFolders } from '@/hooks/useFolders';
+import { KnowledgeCard } from '@prisma/client';
+import { Block } from '@/types/blocknote';
+import { extractSnippetFromContent } from '@/lib/cardUtils';
+import ChangeFolderModal from '@/components/folders/ChangeFolderModal';
 import '@/styles/cardStyles.css';
 
 interface CardListItemProps {
-  card: Card & {
+  card: KnowledgeCard & {
     folder?: { id: string; name: string } | null;
-    tags: { name: string }[];
+    tags?: { name: string }[];
     isStarred: boolean;
   };
   mutate?: () => void;
@@ -58,17 +50,17 @@ interface CardListItemProps {
 export default function CardListItem({ card, mutate }: CardListItemProps) {
   const router = useRouter();
   const toast = useToast();
+  const [isLoading, setIsLoading] = useState(false);
+  const [isStarLoading, setIsStarLoading] = useState(false);
+  const [isStarred, setIsStarred] = useState(card.isStarred);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isStarred, setIsStarred] = useState(card.isStarred);
-  const [isStarLoading, setIsStarLoading] = useState(false);
-  const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const [formattedDate, setFormattedDate] = useState<string | null>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
-    router.push(`/cards/${card.id}/edit`);
+    router.push(`/cards/${card.id}`);
   };
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -84,7 +76,9 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
   const handleConfirmDelete = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/cards/${card.id}`, { method: 'DELETE' });
+      const response = await fetch(`/api/cards/${card.id}`, {
+        method: 'DELETE',
+      });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to delete card');
@@ -147,7 +141,9 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
     e.stopPropagation();
     setIsStarLoading(true);
     try {
-      const response = await fetch(`/api/cards/${card.id}/star`, { method: 'PUT' });
+      const response = await fetch(`/api/cards/${card.id}/star`, {
+        method: 'PUT',
+      });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to update star status');
@@ -178,12 +174,14 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
   useEffect(() => {
     const displayTimestamp = Math.max(
       new Date(card.updatedAt).getTime() || 0,
-      new Date(card.createdAt).getTime() || 0
+      new Date(card.createdAt).getTime() || 0,
     );
 
     if (displayTimestamp > 0) {
       const displayDate = new Date(displayTimestamp);
-      setFormattedDate(`${displayDate.toLocaleDateString()} ${displayDate.toLocaleTimeString()}`);
+      setFormattedDate(
+        `${displayDate.toLocaleDateString()} ${displayDate.toLocaleTimeString()}`,
+      );
     } else {
       setFormattedDate('No date');
     }
@@ -200,7 +198,7 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
       // Add more robust type checking if needed
       parsedContent = card.content as Block[]; // Still needs a cast potentially
     }
-  } catch (error) {
+  } catch {
     // Handle cases where content might be invalid JSON or unexpected type
     parsedContent = null;
   }
@@ -211,13 +209,18 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
   return (
     <Box position="relative" className="card">
       <Menu placement="bottom-end" isLazy>
-        <Popover trigger="hover" placement="bottom" openDelay={300} closeDelay={100}>
+        <Popover
+          trigger="hover"
+          placement="bottom"
+          openDelay={300}
+          closeDelay={100}
+        >
           <PopoverTrigger>
             <Box
               p={4}
               bg="white"
-              borderRadius="md"
-              boxShadow="sm"
+              boxShadow="inset 0px 16px 32px -8px rgba(12, 12, 13, 0.4)"
+              borderRadius="12px"
               position="relative"
               width="100%"
               minHeight="150px"
@@ -228,7 +231,9 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
             >
               <IconButton
                 aria-label={isStarred ? 'Unstar card' : 'Star card'}
-                icon={<StarIcon color={isStarred ? 'yellow.400' : 'gray.300'} />}
+                icon={
+                  <StarIcon color={isStarred ? 'yellow.400' : 'gray.300'} />
+                }
                 variant="ghost"
                 size="sm"
                 position="absolute"
@@ -288,7 +293,11 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
             Move to Folder
           </MenuItem>
           <MenuDivider />
-          <MenuItem icon={<DeleteIcon />} color="red.500" onClick={handleDelete}>
+          <MenuItem
+            icon={<DeleteIcon />}
+            color="red.500"
+            onClick={handleDelete}
+          >
             Delete
           </MenuItem>
         </MenuList>
@@ -305,13 +314,22 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
               Delete Card
             </AlertDialogHeader>
             <AlertDialogBody>
-              Are you sure you want to delete the card "{card.title}"? This action cannot be undone.
+              Are you sure you want to delete the card &quot;{card.title}&quot;?
+              This action cannot be undone.
             </AlertDialogBody>
             <AlertDialogFooter>
-              <Button ref={deleteCancelRef} onClick={() => setIsDeleteModalOpen(false)}>
+              <Button
+                ref={deleteCancelRef}
+                onClick={() => setIsDeleteModalOpen(false)}
+              >
                 Cancel
               </Button>
-              <Button colorScheme="red" onClick={handleConfirmDelete} ml={3} isLoading={isLoading}>
+              <Button
+                colorScheme="red"
+                onClick={handleConfirmDelete}
+                ml={3}
+                isLoading={isLoading}
+              >
                 Delete
               </Button>
             </AlertDialogFooter>
@@ -328,4 +346,4 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
       />
     </Box>
   );
-} 
+}

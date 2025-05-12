@@ -1,16 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import { prisma } from '@/lib/prisma'; // Adjust path as necessary
+import prisma from '@/lib/prisma'; // Ensure this is the default import
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { getCurrentUserId } from '@/lib/sessionUtils';
 
-interface RouteParams {
-  params: {
-    cardId: string;
-  };
-}
+// interface RouteParams { // This interface will be removed
+//   params: Promise<{ cardId: string }>;
+// }
 
 // Schema for validating route parameters
 const RouteContextSchema = z.object({
@@ -21,227 +19,358 @@ const RouteContextSchema = z.object({
 
 // Schema for validating the update request body (PATCH/PUT)
 // Allow partial updates: title, content, or folderId
-const UpdateCardSchema = z.object({
-  title: z.string().min(1, { message: 'Title cannot be empty' }).trim().optional(),
-  content: z.array(z.any()).min(1, { message: 'Content cannot be empty' }).optional(), // Basic check for non-empty array
-  folderId: z.string().cuid({ message: 'Invalid folder ID format' }).optional().nullable(), // Allow setting to null
-}).partial().refine(data => Object.keys(data).length > 0, {
-  message: 'At least one field (title, content, folderId) must be provided for update',
-});
-
-// Helper function to verify ownership
-async function verifyCardOwnership(userId: string, cardId: string) {
-  const card = await prisma.knowledgeCard.findUnique({
-    where: { id: cardId },
+const UpdateCardSchema = z
+  .object({
+    title: z
+      .string()
+      .min(1, { message: 'Title cannot be empty' })
+      .trim()
+      .optional(),
+    content: z
+      .array(z.any())
+      .min(1, { message: 'Content cannot be empty' })
+      .optional(), // Basic check for non-empty array
+    folderId: z
+      .string()
+      .cuid({ message: 'Invalid folder ID format' })
+      .optional()
+      .nullable(), // Allow setting to null
+    tags: z.array(z.string().trim()).optional(), // Added tags to schema, expect array of strings
+  })
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message:
+      'At least one field (title, content, folderId, tags) must be provided for update',
   });
-  if (!card) {
-    return { error: NextResponse.json({ message: 'Card not found' }, { status: 404 }), card: null };
-  }
-  if (card.userId !== userId) {
-    return { error: NextResponse.json({ message: 'Forbidden' }, { status: 403 }), card: null };
-  }
-  return { error: null, card: card };
-}
 
 // --- GET Handler (Get Specific Card) ---
 export async function GET(
   request: NextRequest,
-  { params }: { params: { cardId: string } }
+  context: { params: Promise<{ cardId: string }> },
 ) {
+  console.time('[GET /api/cards/[cardId]] Total Handler');
+  console.time('[GET /api/cards/[cardId]] Session Check');
+  const session = await getServerSession(authOptions);
+  console.timeEnd('[GET /api/cards/[cardId]] Session Check');
+
+  if (!session || !session.user?.id) {
+    console.timeEnd('[GET /api/cards/[cardId]] Total Handler'); // End total timer early on auth failure
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const userId = session.user.id;
+
+  console.time('[GET /api/cards/[cardId]] Resolve Params');
+  const resolvedParams = await context.params;
+  console.timeEnd('[GET /api/cards/[cardId]] Resolve Params');
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Get cardId from either path parameter or query parameter
-    const cardId = params.cardId || request.nextUrl.searchParams.get('cardId');
+    const cardId = resolvedParams.cardId;
     if (!cardId) {
-      return NextResponse.json({ error: 'Card ID is required' }, { status: 400 });
+      console.timeEnd('[GET /api/cards/[cardId]] Total Handler'); // End total timer early
+      return NextResponse.json(
+        { error: 'Card ID is required' },
+        { status: 400 },
+      );
     }
 
+    console.time('[GET /api/cards/[cardId]] Prisma findUnique');
     const card = await prisma.knowledgeCard.findUnique({
       where: {
         id: cardId,
-        userId: session.user.id,
+        userId: userId, // Ensure user owns the card
       },
       include: {
-        tags: true,
-        folder: true,
+        folder: true, // Include full folder data if needed
+        tags: true, // Include full tag data if needed
       },
     });
+    console.timeEnd('[GET /api/cards/[cardId]] Prisma findUnique');
 
     if (!card) {
-      return NextResponse.json({ error: 'Card not found' }, { status: 404 });
+      console.timeEnd('[GET /api/cards/[cardId]] Total Handler'); // End total timer early
+      return NextResponse.json(
+        { error: 'Card not found or access denied' },
+        { status: 404 },
+      );
     }
-
+    console.timeEnd('[GET /api/cards/[cardId]] Total Handler');
     return NextResponse.json(card);
   } catch (error) {
     console.error('Error fetching card:', error);
+    console.timeEnd('[GET /api/cards/[cardId]] Total Handler'); // End total timer on error
     return NextResponse.json(
       { error: 'Failed to fetch card' },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
 // --- PUT Handler (Update Specific Card) ---
-export async function PUT(req: NextRequest, context: { params: { cardId: string } }) {
-  console.log("[PUT /api/cards/] Handler Entered");
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ cardId: string }> },
+) {
+  console.log('[PUT /api/cards/] Handler Entered');
 
-  // Log the raw context object before validation
-  console.log("[PUT /api/cards/] Raw context received:", context);
+  console.log('[PUT /api/cards/] Raw context received:', context);
 
-  // WORKAROUND: Await the params object as it seems to be a Promise
   let resolvedParams;
   try {
     resolvedParams = await context.params;
-    console.log("[PUT /api/cards/] Resolved params:", resolvedParams);
+    console.log('[PUT /api/cards/] Resolved params:', resolvedParams);
   } catch (err) {
-    console.error("Error awaiting context.params:", err);
-    return NextResponse.json({ error: 'Failed to resolve route parameters' }, { status: 500 });
+    console.error('Error awaiting context.params:', err);
+    return NextResponse.json(
+      { error: 'Failed to resolve route parameters' },
+      { status: 500 },
+    );
   }
 
-  // Validate route parameters using the new schema and the RESOLVED params
-  const contextValidation = RouteContextSchema.safeParse({ params: resolvedParams }); // Validate { params: resolved_object }
+  const contextValidation = RouteContextSchema.safeParse({
+    params: resolvedParams,
+  });
   if (!contextValidation.success) {
-    // Log this failure
-    console.error("Route context validation failed (after await):", contextValidation.error.format());
-    return NextResponse.json({ errors: contextValidation.error.format() }, { status: 400 });
+    console.error(
+      'Route context validation failed (after await):',
+      contextValidation.error.format(),
+    );
+    return NextResponse.json(
+      { errors: contextValidation.error.format() },
+      { status: 400 },
+    );
   }
-  // Extract cardId after successful validation
   const { cardId } = contextValidation.data.params;
 
-  // Check authentication
   const userId = await getCurrentUserId();
   console.log(`[PUT /api/cards/${cardId}] Authenticated userId:`, userId);
   if (!userId) {
-    console.error("User ID not found, returning 401");
+    console.error('User ID not found, returning 401');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Validate request body
   let validatedData;
-  let body; // Define body outside try block
+  let body;
   try {
-    body = await req.json(); // Could fail here -> Exit 3 (400)
-    console.log("[PUT /api/cards/] Request body parsed:", body); // Add log here
+    body = await req.json();
+    console.log('[PUT /api/cards/] Request body parsed:', body);
 
     const validation = UpdateCardSchema.safeParse(body);
     if (!validation.success) {
-      // Log this failure
-      console.error("Request body validation failed:", validation.error.format());
-      return NextResponse.json({ errors: validation.error.format() }, { status: 400 }); // Exit 2 (400)
+      console.error(
+        'Request body validation failed:',
+        validation.error.format(),
+      );
+      return NextResponse.json(
+        { errors: validation.error.format() },
+        { status: 400 },
+      );
     }
-    console.log("[PUT /api/cards/] Request body validated successfully."); // Add log here
+    console.log('[PUT /api/cards/] Request body validated successfully.');
     validatedData = validation.data;
   } catch (error) {
-     // Log this failure
-    console.error("Error parsing request body:", error);
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 }); // Exit 3 (400)
+    console.error('Error parsing request body:', error);
+    return NextResponse.json(
+      { error: 'Invalid request body' },
+      { status: 400 },
+    );
   }
 
   try {
-    // Verify user owns the card they are trying to update
     const existingCard = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       select: { id: true },
     });
 
     if (!existingCard) {
-      return NextResponse.json({ error: 'Card not found or not owned by user' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Card not found or not owned by user' },
+        { status: 404 },
+      );
     }
 
-    // Add target folder ownership check if folderId is being updated
-    if (validatedData.folderId !== undefined && validatedData.folderId !== null) {
-        // Log the userId right before the check
-        console.log(`Checking folder ownership: folderId=${validatedData.folderId}, userId=${userId}`);
+    if (
+      validatedData.folderId !== undefined &&
+      validatedData.folderId !== null
+    ) {
+      console.log(
+        `Checking folder ownership: folderId=${validatedData.folderId}, userId=${userId}`,
+      );
 
-        const targetFolder = await prisma.folder.findUnique({
-          where: { id: validatedData.folderId, userId: userId }, // Check ownership
-          select: { id: true },
-        });
-        if (!targetFolder) {
-          return NextResponse.json({ error: 'Target folder not found or not owned by user' }, { status: 400 });
-        }
+      const targetFolder = await prisma.folder.findUnique({
+        where: { id: validatedData.folderId, userId: userId },
+        select: { id: true },
+      });
+      if (!targetFolder) {
+        return NextResponse.json(
+          { error: 'Target folder not found or not owned by user' },
+          { status: 400 },
+        );
+      }
     }
 
-    // Prepare update data (only include validated fields)
     const updateData: Prisma.KnowledgeCardUpdateInput = {};
-    if (validatedData.title !== undefined) updateData.title = validatedData.title;
-    if (validatedData.content !== undefined) updateData.content = validatedData.content;
-    if (validatedData.folderId !== undefined) updateData.folderId = validatedData.folderId; // Can be null
+    if (validatedData.title !== undefined)
+      updateData.title = validatedData.title;
+    if (validatedData.content !== undefined)
+      updateData.content = validatedData.content;
+    // if (validatedData.folderId !== undefined) updateData.folderId = validatedData.folderId;
 
-    // *** TODO: Handle Tag updates similar to KC-CARD-BE-2-BLOCK if tags are part of the update ***
-    // if (validatedData.tags !== undefined) {
-    //   const tagConnections = await getTagConnectionsForUpsert(validatedData.tags);
-    //   updateData.tags = { set: [], connectOrCreate: tagConnections };
-    // }
+    // Handle folderId update using relation syntax
+    if (validatedData.folderId !== undefined) {
+      // If folderId was part of the validated request data
+      if (validatedData.folderId === null) {
+        // To set folderId to null, disconnect the relation
+        updateData.folder = {
+          disconnect: true,
+        };
+      } else {
+        // To set folderId to a new ID, connect the relation
+        updateData.folder = {
+          connect: { id: validatedData.folderId },
+        };
+      }
+    }
 
-    // Attempt to update the card
+    // Handle tags update
+    if (validatedData.tags !== undefined) {
+      // If tags array is provided (even if empty)
+      const uniqueTrimmedTags = validatedData.tags
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0);
+      updateData.tags = {
+        set: [], // Disconnect all existing tags first
+        connectOrCreate: uniqueTrimmedTags.map((tagName: string) => ({
+          where: { name: tagName },
+          create: { name: tagName },
+        })),
+      };
+    }
+
     const updatedCard = await prisma.knowledgeCard.update({
       where: {
         id: cardId,
       },
       data: updateData,
-      include: { tags: true, folder: true }, // Include related data in response
+      include: { tags: true, folder: true },
     });
 
     return NextResponse.json(updatedCard);
-
   } catch (error) {
-    // Handle potential errors like foreign key constraints if folderId is invalid
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2003') { // Foreign key constraint failed
-         // This might occur if folderId is invalid AFTER the ownership check (race condition?)
-         // Or if other foreign key constraints fail
-         return NextResponse.json({ error: 'Invalid related data (e.g., folder ID)' }, { status: 400 });
+      if (error.code === 'P2003') {
+        return NextResponse.json(
+          { error: 'Invalid related data (e.g., folder ID)' },
+          { status: 400 },
+        );
       }
-       // Add other specific Prisma error codes if needed
     }
 
-    // Log unexpected errors
     console.error('Failed to update card:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 },
+    );
   }
 }
 
 // --- DELETE Handler (Delete Specific Card) ---
-export async function DELETE(req: NextRequest, { params }: RouteParams) {
-  // Validate route parameters
-  const paramsValidation = RouteContextSchema.safeParse({ params }); // Validate the structure { params: ... }
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ cardId: string }> },
+) {
+  let resolvedParams;
+  try {
+    resolvedParams = await context.params;
+  } catch (err) {
+    console.error(
+      '[DELETE /api/cards/[cardId]] Error awaiting route parameters:',
+      err,
+    );
+    return NextResponse.json(
+      { error: 'Failed to resolve route parameters' },
+      { status: 500 },
+    );
+  }
+
+  console.log(
+    `[DELETE /api/cards/[cardId]] Received cardId (from resolvedParams): ${resolvedParams?.cardId}`,
+  );
+
+  const paramsValidation = RouteContextSchema.safeParse({
+    params: resolvedParams,
+  });
   if (!paramsValidation.success) {
-    return NextResponse.json({ errors: paramsValidation.error.format() }, { status: 400 });
+    console.error(
+      '[DELETE /api/cards/[cardId]] Route parameter validation failed:',
+      paramsValidation.error.format(),
+    );
+    return NextResponse.json(
+      {
+        error: 'Invalid card ID format in URL',
+        details: paramsValidation.error.format(),
+      },
+      { status: 400 },
+    );
   }
   const { cardId } = paramsValidation.data.params;
+  console.log(`[DELETE /api/cards/[cardId]] Validated cardId: ${cardId}`);
 
-  // Check authentication
   const userId = await getCurrentUserId();
   if (!userId) {
+    console.error(
+      '[DELETE /api/cards/[cardId]] Unauthorized: No userId found from session.',
+    );
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  console.log(`[DELETE /api/cards/[cardId]] Authenticated userId: ${userId}`);
 
   try {
-    // Verify ownership first
+    console.time(
+      '[DELETE /api/cards/[cardId]] Prisma findUnique (ownership check)',
+    );
     const existingCard = await prisma.knowledgeCard.findUnique({
-        where: { id: cardId, userId: userId },
-        select: { id: true }
+      where: { id: cardId, userId: userId },
+      select: { id: true },
     });
+    console.timeEnd(
+      '[DELETE /api/cards/[cardId]] Prisma findUnique (ownership check)',
+    );
 
     if (!existingCard) {
-        return NextResponse.json({ error: 'Card not found or not owned by user' }, { status: 404 });
+      console.warn(
+        `[DELETE /api/cards/[cardId]] Card not found or user does not own it. cardId: ${cardId}, userId: ${userId}`,
+      );
+      return NextResponse.json(
+        { error: 'Card not found or not owned by user' },
+        { status: 404 },
+      );
     }
+    console.log(
+      `[DELETE /api/cards/[cardId]] Ownership verified for cardId: ${cardId}`,
+    );
 
-    // Proceed with deletion
+    console.time('[DELETE /api/cards/[cardId]] Prisma delete');
     await prisma.knowledgeCard.delete({
       where: { id: cardId },
     });
+    console.timeEnd('[DELETE /api/cards/[cardId]] Prisma delete');
+    console.log(
+      `[DELETE /api/cards/[cardId]] Card deleted successfully: ${cardId}`,
+    );
 
-    // Return success response
-    return NextResponse.json({ message: 'Card deleted successfully' }, { status: 200 });
-
+    return NextResponse.json(
+      { message: 'Card deleted successfully' },
+      { status: 200 },
+    );
   } catch (err) {
-    console.error('Delete Card [id] Error:', err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    console.error(
+      `[DELETE /api/cards/[cardId]] Error during deletion process for cardId: ${cardId}:`,
+      err,
+    );
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 },
+    );
   }
-} 
+}

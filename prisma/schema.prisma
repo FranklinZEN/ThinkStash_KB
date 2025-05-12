@@ -11,6 +11,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // log      = ["query", "info", "warn", "error"]
 }
 
 // --- NextAuth.js Models ---
@@ -77,6 +78,7 @@ model Folder {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   cards     KnowledgeCard[]
+  order     Int?     // New field for custom ordering
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -106,6 +108,9 @@ model KnowledgeCard {
   @@index([userId])
   @@index([folderId])
   @@index([userId, isStarred])
+  @@index([userId, updatedAt])
+  @@index([userId, id])
+  @@index([userId, isStarred, updatedAt])
 }
 
 model Tag {

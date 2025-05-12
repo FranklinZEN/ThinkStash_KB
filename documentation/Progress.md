@@ -17,6 +17,10 @@
 - [ ] KC-TEST-FE-1: Setup Frontend Unit Testing Framework *(Setup complete, but test execution fails with module resolution error - needs revisit)*
 - [x] KC-TEST-BE-1: Setup Backend Unit/Integration Testing Framework
 
+**Overall Phase A (Local MVP Enhancement) Summary:**
+- [x] **KC-OPTIMIZE-S1 - Pre-Stage 2 Code & Performance Optimization:** Completed profiling and optimization efforts across backend, database, and frontend for the local MVP.
+- [x] **KC-UXUI-ENHANCE-S1-LOCAL - Comprehensive UI/UX Design & Local Enhancement:** Completed comprehensive Figma designs and aligned existing Stage 1 components with these designs, including Chakra UI custom theme updates.
+
 ## Feature Development (Epics 3, 4, 4.5)
 
 This summarizes the major feature work completed after initial setup.
@@ -65,3 +69,26 @@ This summarizes the major feature work completed after initial setup.
 - [ ] Edge case testing (duplicate names, deep nesting, errors, touch devices).
 - [ ] Accessibility review.
 - [ ] Add confirmation dialog for moving cards (currently deferred). 
+
+**Tagging & Keyword Management (Manual Hashtag System):**
+- [x] Manual keyword/hashtag input implemented for "Create New Card" page.
+- [x] Manual keyword/hashtag editing (add, remove, view) implemented for "Edit Card" page.
+- [x] Keywords automatically prefixed with '#' to function as hashtags.
+- [x] UI styling for keyword input field, labels, and displayed tags (Open Sans font, specified sizes, colors, 3D-like effect).
+- [x] "Key Words" section consistently positioned between "Title" and "Content" on create/edit forms.
+- [x] Backend API support for creating, updating, and retrieving tags/keywords with cards.
+- [x] Tags/keywords are displayed in the read-only view of a card.
+- [x] Ensured keywords/tags are correctly saved and displayed post-creation/update.
+- [x] Corrected logic for `canSave` button state to accurately reflect keyword changes on edit page.
+
+**Form Navigation & UX Enhancements:**
+- [x] "Cancel" button added to "Create New Card" form (navigates to homepage).
+- [x] "Cancel" button added to "Edit Card" form (reverts local changes, exits edit mode).
+
+**Build & Type System Fixes (Related & General):**
+- [x] Resolved `VStack not defined` error in card detail page.
+- [x] Resolved `dynamic not defined` error in card detail page.
+- [x] Corrected `Tag` and `KnowledgeCard` type definitions to align frontend with API (object tags vs. string arrays).
+- [x] Resolved `PartialBlock not defined` error in new card page.
+- [x] Addressed various linter warnings for unused variables.
+- [x] Fixed React child errors from rendering tag objects instead of `tag.name`. 

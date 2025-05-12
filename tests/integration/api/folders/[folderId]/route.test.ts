@@ -1,7 +1,7 @@
 import { PUT, DELETE } from '@/app/api/folders/[folderId]/route'; // Import handlers
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 import { getCurrentUserId } from '@/lib/sessionUtils';
-import { NextResponse } from 'next/server';
+import { _NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 
 // Mock dependencies

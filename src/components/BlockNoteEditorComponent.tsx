@@ -4,22 +4,27 @@ import React, { useEffect } from 'react';
 import { Box, Flex, Spinner, Text } from '@chakra-ui/react';
 
 // Import hook from react, but View component and styles from mantine
-import { useCreateBlockNote } from "@blocknote/react";
-import { BlockNoteView } from "@blocknote/mantine"; // Import from mantine
-import { BlockNoteEditor } from "@blocknote/core";
-import "@blocknote/mantine/style.css"; // Import mantine styles
+import { useCreateBlockNote } from '@blocknote/react';
+import { BlockNoteView } from '@blocknote/mantine'; // Import from mantine
+import { BlockNoteEditor, PartialBlock } from '@blocknote/core';
+import '@blocknote/mantine/style.css'; // Import mantine styles
 
 interface BlockNoteEditorComponentProps {
   onEditorChange: (editor: BlockNoteEditor | null) => void;
+  onContentUpdate?: (blocks: PartialBlock[]) => void;
   editable?: boolean;
 }
 
-export default function BlockNoteEditorComponent({ onEditorChange, editable = false }: BlockNoteEditorComponentProps) {
+export default function BlockNoteEditorComponent({
+  onEditorChange,
+  onContentUpdate,
+  editable = false,
+}: BlockNoteEditorComponentProps) {
   // Remove toast and UI component state
   // const toast = useToast();
   // const [BlockNoteUIComponent, setBlockNoteUIComponent] = useState<React.ComponentType<any> | null>(null);
 
-  // Initialize editor instance using useCreateBlockNote
+  // Initialize editor instance using useCreateBlockNote - remove deprecated option
   const editor = useCreateBlockNote();
 
   // Effect to pass the editor instance up when it's ready
@@ -40,7 +45,16 @@ export default function BlockNoteEditorComponent({ onEditorChange, editable = fa
     <Box borderWidth="1px" borderRadius="md" p={0} minH="300px">
       {editor ? (
         // Render BlockNoteView from @blocknote/mantine, pass editable prop
-        <BlockNoteView editor={editor} theme="light" editable={editable} />
+        <BlockNoteView
+          editor={editor}
+          theme="light"
+          editable={editable}
+          onChange={() => {
+            if (onContentUpdate && editor) {
+              onContentUpdate(editor.topLevelBlocks);
+            }
+          }}
+        />
       ) : (
         <Flex justify="center" align="center" height="100%" minH="200px">
           <Spinner />
@@ -49,4 +63,4 @@ export default function BlockNoteEditorComponent({ onEditorChange, editable = fa
       )}
     </Box>
   );
-} 
+}

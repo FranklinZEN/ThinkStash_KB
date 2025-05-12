@@ -1,61 +1,74 @@
-import { PartialBlock } from '@blocknote/core';
+import type { Block, InlineContent } from '@/types/blocknote';
 
-// Updated Block interface to reflect actual content structure
-interface TextContent {
-  type: 'text';
-  text: string;
-  styles: Record<string, any>;
-}
-
-interface Block {
-  id: string;
-  type: string;
-  props: Record<string, any>;
-  // Content is an array, potentially containing TextContent or other inline types
-  content: (TextContent | Record<string, any>)[];
-  children: Block[];
-}
-
-export function extractSnippetFromContent(content: Block[] | null | any): string {
-  // Added 'any' to handle potential initial type mismatch before casting
-  if (!content || !Array.isArray(content)) return '';
+export function extractSnippetFromContent(document: Block[] | null): string {
+  if (!document || !Array.isArray(document)) return '';
 
   try {
-    const textBlocks = (content as Block[]) // Cast to our updated Block type
-      .slice(0, 5) // Maybe take a few more blocks for a better snippet
-      .map(block => {
-        // Check if it's a paragraph and has content array
-        if (block.type === 'paragraph' && Array.isArray(block.content) && block.content.length > 0) {
-          // Extract text from the content array within the block
-          return block.content
-            .map(inlineContent => {
-              // Check if it's a text node and has text
-              if (inlineContent.type === 'text' && typeof inlineContent.text === 'string') {
-                return inlineContent.text;
-              }
-              return ''; // Return empty string for non-text nodes or unexpected formats
-            })
-            .join(''); // Join text within the same paragraph block without spaces
+    const textSnippets: string[] = [];
+    let currentLength = 0;
+    const MAX_LENGTH = 150;
+
+    function processInlineContent(inlineContent: InlineContent): string {
+      if (inlineContent.type === 'text') {
+        return inlineContent.text;
+      }
+      if (
+        inlineContent.type === 'link' &&
+        Array.isArray(inlineContent.content)
+      ) {
+        return inlineContent.content.map(processInlineContent).join('');
+      }
+      return '';
+    }
+
+    for (const block of document) {
+      if (currentLength >= MAX_LENGTH) break;
+
+      let blockText = '';
+      // Check if block.content is an array of InlineContent
+      if (Array.isArray(block.content)) {
+        blockText = block.content.map(processInlineContent).join('');
+      }
+      // Potentially handle TableContent if snippets from tables are desired
+      // else if (block.content?.type === 'tableContent') { ... }
+
+      if (blockText) {
+        if (textSnippets.length > 0) {
+          textSnippets.push(' '); // Add space between block texts
+          currentLength += 1;
         }
-        // Handle other block types that might contain text if necessary
-        // else if (block.type === 'heading' && ...) { ... }
-        return ''; // Return empty string for non-paragraph blocks or empty paragraphs
-      })
-      .filter(text => text.length > 0); // Filter out empty strings resulting from non-text blocks
+        const remainingLength = MAX_LENGTH - currentLength;
+        if (blockText.length > remainingLength) {
+          textSnippets.push(blockText.substring(0, remainingLength));
+          currentLength += remainingLength;
+        } else {
+          textSnippets.push(blockText);
+          currentLength += blockText.length;
+        }
+      }
+      if (currentLength >= MAX_LENGTH) break;
+    }
 
-    // Join the text from different blocks with spaces
-    const snippet = textBlocks.join(' ');
+    let snippet = textSnippets.join('');
 
-    // Truncate if too long
-    const MAX_LENGTH = 150; // Adjusted max length slightly
     if (snippet.length > MAX_LENGTH) {
-      return snippet.substring(0, MAX_LENGTH).trim() + '...';
+      snippet = snippet.substring(0, MAX_LENGTH);
+    }
+
+    if (
+      snippet.length === MAX_LENGTH &&
+      document.length > 0 &&
+      document[0].content &&
+      (document[0].content as InlineContent[]).length > 0
+    ) {
+      // Only add ellipsis if we actually truncated something meaningful
+      snippet += '...';
     }
 
     return snippet.trim();
   } catch (error) {
-    console.error("Error extracting snippet from content:", error);
-    console.error("Problematic content:", content);
+    console.error('Error extracting snippet from content:', error);
+    // console.error("Problematic content:", document); // Be cautious with logging full content
     return ''; // Return empty string on error
   }
-} 
+}

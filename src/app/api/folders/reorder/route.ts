@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 
 export async function POST(request: Request) {
   try {
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     console.error('Error reordering folders:', error);
     return NextResponse.json(
       { error: 'Failed to reorder folders' },
-      { status: 500 }
+      { status: 500 },
     );
   }
-} 
+}

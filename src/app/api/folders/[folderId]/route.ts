@@ -1,16 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import { prisma } from '@/lib/prisma'; // Adjust path as necessary
+import prisma from '@/lib/prisma'; // Adjust path as necessary
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { getCurrentUserId } from '@/lib/sessionUtils';
-
-interface RouteParams {
-  params: {
-    folderId: string;
-  };
-}
 
 // Schema for validating the request body
 const UpdateFolderSchema = z.object({
@@ -28,18 +22,32 @@ async function verifyFolderOwnership(userId: string, folderId: string) {
     where: { id: folderId },
   });
   if (!folder) {
-    return { error: NextResponse.json({ message: 'Folder not found' }, { status: 404 }), folder: null };
+    return {
+      error: NextResponse.json(
+        { message: 'Folder not found' },
+        { status: 404 },
+      ),
+      folder: null,
+    };
   }
   if (folder.userId !== userId) {
-    return { error: NextResponse.json({ message: 'Forbidden' }, { status: 403 }), folder: null };
+    return {
+      error: NextResponse.json({ message: 'Forbidden' }, { status: 403 }),
+      folder: null,
+    };
   }
   return { error: null, folder: folder };
 }
 
 // --- PATCH Handler (Update/Rename Specific Folder) ---
-export async function PATCH(req: NextRequest, { params }: RouteParams) {
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ folderId: string }> },
+) {
   const session = await getServerSession(authOptions);
-  const { folderId } = params;
+
+  const routeParams = await context.params; // Await context.params
+  const folderId = routeParams.folderId; // Get folderId from resolved params
 
   if (!session || !session.user?.id) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
@@ -49,7 +57,10 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 
   try {
     // Verify ownership first
-    const { error: ownershipError } = await verifyFolderOwnership(userId, folderId);
+    const { error: ownershipError } = await verifyFolderOwnership(
+      userId,
+      folderId,
+    );
     if (ownershipError) return ownershipError;
 
     const body = await req.json();
@@ -57,7 +68,12 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 
     // Validate new name
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
-      return NextResponse.json({ message: 'New folder name is required and must be a non-empty string' }, { status: 400 });
+      return NextResponse.json(
+        {
+          message: 'New folder name is required and must be a non-empty string',
+        },
+        { status: 400 },
+      );
     }
     const trimmedName = name.trim();
 
@@ -71,7 +87,10 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     });
 
     if (existingFolder) {
-      return NextResponse.json({ message: `Another folder named "${trimmedName}" already exists` }, { status: 409 });
+      return NextResponse.json(
+        { message: `Another folder named "${trimmedName}" already exists` },
+        { status: 409 },
+      );
     }
 
     // Update the folder name
@@ -81,28 +100,42 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     });
 
     return NextResponse.json(updatedFolder, { status: 200 });
-
   } catch (err) {
     console.error('Update Folder [id] Error:', err);
-    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { message: 'Internal Server Error' },
+      { status: 500 },
+    );
   }
 }
 
 // --- DELETE Handler (Delete Specific Folder - updated with content handling) ---
-export async function DELETE(request: Request, { params }: { params: { folderId: string } }) {
-  // Await params as recommended by Next.js error message
-  // It seems params can sometimes be promise-like in certain conditions
-  const resolvedParams = await params; 
-  console.log("[DELETE /api/folders/[folderId]] Resolved params:", resolvedParams);
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ folderId: string }> },
+) {
+  const resolvedParams = await context.params;
+  console.log(
+    '[DELETE /api/folders/[folderId]] Resolved params:',
+    resolvedParams,
+  );
 
   // Validate route parameters using resolvedParams
   const paramsValidation = RouteParamsSchema.safeParse(resolvedParams);
   if (!paramsValidation.success) {
-    console.error("[DELETE /api/folders/[folderId]] Zod validation failed:", paramsValidation.error.format());
-    return NextResponse.json({ errors: paramsValidation.error.format() }, { status: 400 });
+    console.error(
+      '[DELETE /api/folders/[folderId]] Zod validation failed:',
+      paramsValidation.error.format(),
+    );
+    return NextResponse.json(
+      { errors: paramsValidation.error.format() },
+      { status: 400 },
+    );
   }
   const { folderId } = paramsValidation.data;
-  console.log(`[DELETE /api/folders/[folderId]] Validated folderId: ${folderId}`);
+  console.log(
+    `[DELETE /api/folders/[folderId]] Validated folderId: ${folderId}`,
+  );
 
   // Check authentication
   const userId = await getCurrentUserId();
@@ -117,12 +150,15 @@ export async function DELETE(request: Request, { params }: { params: { folderId:
         id: folderId,
         userId: userId, // Ensure user owns the folder
       },
-      select: { parentId: true } // Need parentId for promoting children
+      select: { parentId: true }, // Need parentId for promoting children
     });
 
     // Handle folder not found or not owned
     if (!folderToDelete) {
-      return NextResponse.json({ error: 'Folder not found or not owned by user' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Folder not found or not owned by user' },
+        { status: 404 },
+      );
     }
 
     // Perform updates and delete within a transaction
@@ -146,21 +182,33 @@ export async function DELETE(request: Request, { params }: { params: { folderId:
     });
 
     // Return success response
-    return NextResponse.json({ message: 'Folder deleted successfully' }, { status: 200 });
-
+    return NextResponse.json(
+      { message: 'Folder deleted successfully' },
+      { status: 200 },
+    );
   } catch (error) {
     // Log unexpected errors
     console.error('Failed to delete folder:', error);
     // Consider more specific error handling if needed
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 },
+    );
   }
 }
 
-export async function PUT(request: Request, { params }: { params: { folderId: string } }) {
+export async function PUT(
+  request: Request,
+  context: { params: Promise<{ folderId: string }> },
+) {
+  const routeParams = await context.params; // Await context.params
   // Validate route parameters
-  const paramsValidation = RouteParamsSchema.safeParse(params);
+  const paramsValidation = RouteParamsSchema.safeParse(routeParams); // Use awaited params
   if (!paramsValidation.success) {
-    return NextResponse.json({ errors: paramsValidation.error.format() }, { status: 400 });
+    return NextResponse.json(
+      { errors: paramsValidation.error.format() },
+      { status: 400 },
+    );
   }
   const { folderId } = paramsValidation.data;
 
@@ -176,11 +224,17 @@ export async function PUT(request: Request, { params }: { params: { folderId: st
     const body = await request.json();
     const validation = UpdateFolderSchema.safeParse(body);
     if (!validation.success) {
-      return NextResponse.json({ errors: validation.error.format() }, { status: 400 });
+      return NextResponse.json(
+        { errors: validation.error.format() },
+        { status: 400 },
+      );
     }
     validatedData = validation.data;
-  } catch (error) {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  } catch /* _error */ {
+    return NextResponse.json(
+      { error: 'Invalid request body' },
+      { status: 400 },
+    );
   }
 
   try {
@@ -191,7 +245,10 @@ export async function PUT(request: Request, { params }: { params: { folderId: st
     });
 
     if (!existingFolder) {
-      return NextResponse.json({ error: 'Folder not found or not owned by user' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Folder not found or not owned by user' },
+        { status: 404 },
+      );
     }
 
     // Attempt to update the folder
@@ -206,20 +263,22 @@ export async function PUT(request: Request, { params }: { params: { folderId: st
     });
 
     return NextResponse.json(updatedFolder);
-
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       // Handle unique constraint violation (duplicate name at the same level)
       if (error.code === 'P2002') {
         return NextResponse.json(
           { error: 'A folder with this name already exists at this level.' },
-          { status: 409 } // 409 Conflict
+          { status: 409 }, // 409 Conflict
         );
       }
     }
 
     // Log unexpected errors
     console.error('Failed to update folder:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 },
+    );
   }
-} 
+}
