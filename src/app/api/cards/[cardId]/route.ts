@@ -35,11 +35,12 @@ const UpdateCardSchema = z
       .cuid({ message: 'Invalid folder ID format' })
       .optional()
       .nullable(), // Allow setting to null
+    tags: z.array(z.string().trim()).optional(), // Added tags to schema, expect array of strings
   })
   .partial()
   .refine((data) => Object.keys(data).length > 0, {
     message:
-      'At least one field (title, content, folderId) must be provided for update',
+      'At least one field (title, content, folderId, tags) must be provided for update',
   });
 
 // --- GET Handler (Get Specific Card) ---
@@ -229,6 +230,21 @@ export async function PUT(
           connect: { id: validatedData.folderId },
         };
       }
+    }
+
+    // Handle tags update
+    if (validatedData.tags !== undefined) {
+      // If tags array is provided (even if empty)
+      const uniqueTrimmedTags = validatedData.tags
+        .map((tag) => tag.trim())
+        .filter((tag) => tag.length > 0);
+      updateData.tags = {
+        set: [], // Disconnect all existing tags first
+        connectOrCreate: uniqueTrimmedTags.map((tagName: string) => ({
+          where: { name: tagName },
+          create: { name: tagName },
+        })),
+      };
     }
 
     const updatedCard = await prisma.knowledgeCard.update({

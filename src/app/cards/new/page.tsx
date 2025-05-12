@@ -16,9 +16,13 @@ import {
   Flex,
   Text,
   Container,
+  HStack,
+  Tag,
+  TagLabel,
+  TagCloseButton,
 } from '@chakra-ui/react';
 import dynamic from 'next/dynamic'; // Import dynamic
-import { BlockNoteEditor } from '@blocknote/core'; // Keep type import
+import { BlockNoteEditor, type PartialBlock } from '@blocknote/core'; // Keep type import, Added PartialBlock
 
 // Dynamically import the editor component with SSR disabled
 const BlockNoteEditorComponent = dynamic(
@@ -45,17 +49,50 @@ export default function NewCardPage() {
   const toast = useToast();
 
   const [title, setTitle] = useState('');
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [currentKeyword, setCurrentKeyword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   // State to hold the editor instance received from the child component
   const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
+  // Define state for the editor content
+  const [editorContent, setEditorContent] = useState<
+    PartialBlock[] | undefined
+  >(undefined);
 
   // Callback to receive the editor instance from the child
-  const handleEditorChange = useCallback(
+  const handleEditorInstanceReady = useCallback(
     (editorInstance: BlockNoteEditor | null) => {
       setEditor(editorInstance);
     },
     [],
   );
+
+  // New callback to receive content updates from the editor component
+  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
+    setEditorContent(blocks);
+  }, []);
+
+  const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCurrentKeyword(e.target.value);
+  };
+
+  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && currentKeyword.trim() !== '') {
+      e.preventDefault();
+      // Add '#' prefix if not already present, and ensure uniqueness
+      const newKeyword = currentKeyword.trim().startsWith('#')
+        ? currentKeyword.trim()
+        : `#${currentKeyword.trim()}`;
+      if (!keywords.includes(newKeyword)) {
+        setKeywords([...keywords, newKeyword]);
+      }
+      setCurrentKeyword(''); // Clear input
+    }
+  };
+
+  const removeKeyword = (keywordToRemove: string) => {
+    setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -68,26 +105,36 @@ export default function NewCardPage() {
       });
       return;
     }
-    if (!title.trim()) {
-      toast({ title: 'Title is required', status: 'warning', duration: 3000 });
+    if (!title.trim() || !editorContent) {
+      toast({
+        title: 'Title and content are required',
+        status: 'warning',
+        duration: 3000,
+      });
       return;
     }
 
     setIsSubmitting(true);
 
     // Get content from the editor instance we have in state
-    const content = editor.document;
+    // const content = editor.document; // Removed unused variable
 
     try {
+      console.log('Creating card with keywords:', keywords);
       const response = await fetch('/api/cards', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ title: title.trim(), content: content }),
+        body: JSON.stringify({
+          title: title.trim(),
+          content: editorContent,
+          tags: keywords,
+        }),
       });
 
       const newCard = await response.json();
+      console.log('API response for new card:', newCard); // Log API response
 
       if (response.ok) {
         toast({
@@ -139,40 +186,110 @@ export default function NewCardPage() {
   }
 
   return (
-    <Container maxW="container.lg" py={8}>
-      <Heading as="h1" size="xl" mb={6}>
+    <Container maxW="container.lg" py={8} fontFamily="'Open Sans', sans-serif">
+      <Heading
+        as="h1"
+        size="xl"
+        mb={6}
+        fontFamily="'Open Sans', sans-serif"
+        fontSize="36px"
+      >
         Create New Knowledge Card
       </Heading>
       <Box as="form" onSubmit={handleSubmit}>
         <VStack spacing={6} align="stretch">
           <FormControl isRequired>
-            <FormLabel>Title</FormLabel>
+            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+              Title
+            </FormLabel>
             <Input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Enter card title"
               isDisabled={isSubmitting}
+              fontFamily="'Open Sans', sans-serif"
+              fontSize="16px"
             />
           </FormControl>
 
+          {/* Key Words Section - Moved here */}
+          <FormControl>
+            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+              Key Words{' '}
+              <Text as="span" fontSize="16px" color="gray.500">
+                (Optional)
+              </Text>
+            </FormLabel>
+            <Input
+              type="text"
+              value={currentKeyword}
+              onChange={handleKeywordChange}
+              onKeyDown={handleKeywordKeyDown}
+              placeholder="Type a keyword and press Enter"
+              isDisabled={isSubmitting}
+              fontFamily="'Open Sans', sans-serif"
+              fontSize="16px"
+              color="#A1824A"
+              _placeholder={{ color: '#A1824A' }}
+            />
+            <HStack spacing={2} mt={3} flexWrap="wrap">
+              {keywords.map((keyword) => (
+                <Tag
+                  size="lg"
+                  key={keyword}
+                  borderRadius="md"
+                  variant="solid"
+                  colorScheme="blue"
+                  boxShadow="md"
+                  sx={{
+                    boxShadow:
+                      '2px 2px 5px rgba(0,0,0,0.2), inset 1px 1px 2px rgba(255,255,255,0.3)',
+                    border: '1px solid rgba(0,0,0,0.1)',
+                  }}
+                >
+                  <TagLabel>{keyword}</TagLabel>
+                  <TagCloseButton onClick={() => removeKeyword(keyword)} />
+                </Tag>
+              ))}
+            </HStack>
+          </FormControl>
+
           <FormControl isRequired>
-            <FormLabel>Content</FormLabel>
+            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+              Content
+            </FormLabel>
             {/* Render the dynamically imported component and set it to editable */}
             <BlockNoteEditorComponent
-              onEditorChange={handleEditorChange}
+              onEditorChange={handleEditorInstanceReady}
+              onContentUpdate={handleEditorContentUpdate}
               editable={true}
             />
           </FormControl>
 
-          <Button
-            type="submit"
-            colorScheme="green"
-            isLoading={isSubmitting}
-            alignSelf="flex-start"
-          >
-            Create Card
-          </Button>
+          {/* Buttons */}
+          <Flex justify="flex-start" gap={3} mt={4}>
+            {' '}
+            {/* Use Flex for horizontal alignment and gap */}
+            <Button
+              colorScheme="green"
+              type="submit"
+              isLoading={isSubmitting}
+              fontFamily="'Open Sans', sans-serif"
+              fontSize="16px"
+            >
+              Create Card
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => router.push('/')}
+              isDisabled={isSubmitting}
+              fontFamily="'Open Sans', sans-serif"
+              fontSize="16px"
+            >
+              Cancel
+            </Button>
+          </Flex>
         </VStack>
       </Box>
     </Container>

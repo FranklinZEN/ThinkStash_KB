@@ -4,6 +4,7 @@ import React from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useParams } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import {
   Box,
   Button,
@@ -23,21 +24,51 @@ import {
   AlertDialogOverlay,
   useDisclosure,
   IconButton,
+  FormControl,
+  FormLabel,
+  HStack,
+  Tag,
+  TagLabel,
+  TagCloseButton,
+  VStack,
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
 
 // Import BlockNote components - STATICALLY
-import { useBlockNote } from '@blocknote/react';
-import { BlockNoteView } from '@blocknote/mantine';
+// import { useBlockNote } from '@blocknote/react'; // REMOVE this direct import
+// import { BlockNoteView } from '@blocknote/mantine'; // REMOVE this, will be used by BlockNoteEditorComponent
 import { BlockNoteEditor, type PartialBlock } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
+
+// Dynamically import the editor component with SSR disabled (similar to NewCardPage)
+const BlockNoteEditorComponent = dynamic(
+  () => import('@/components/BlockNoteEditorComponent'),
+  {
+    ssr: false,
+    loading: () => (
+      <Flex justify="center" align="center" minH="300px">
+        <Spinner />
+        <Text ml={3}>Loading Editor...</Text>
+      </Flex>
+    ),
+  },
+);
+
+// Define type for individual Tag
+interface Tag {
+  id: string;
+  name: string;
+  // createdAt?: string; // Optional, if needed later
+  // updatedAt?: string; // Optional, if needed later
+}
 
 // Define type for Knowledge Card data
 interface KnowledgeCard {
   id: string;
   title: string;
   content: BlockNoteDocument | string | null; // Updated type for BlockNote JSON structure
+  tags: Tag[]; // Corrected: expects an array of Tag objects
   userId: string;
   folderId: string | null;
   createdAt: string;
@@ -47,6 +78,7 @@ interface KnowledgeCard {
 interface CardUpdatePayload {
   title?: string;
   content?: BlockNoteDocument | string | null;
+  tags?: string[]; // This should be string[] as expected by the API endpoint body
 }
 
 export default function CardDetailPage() {
@@ -64,22 +96,35 @@ export default function CardDetailPage() {
 
   const [card, setCard] = useState<KnowledgeCard | null>(null);
   const [title, setTitle] = useState('');
+  const [keywords, setKeywords] = useState<string[]>([]); // State for keywords
+  const [currentKeyword, setCurrentKeyword] = useState(''); // State for current keyword input
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
+  const [editorContent, setEditorContent] = useState<
+    PartialBlock[] | undefined
+  >(undefined); // For content tracking
 
-  // --- BlockNote Editor Setup --- Call hook unconditionally
-  const editor: BlockNoteEditor | null = useBlockNote({
-    // Set editable based on isEditing state - Passed to View instead
-    // editable: isEditing,
-    // Define the initial content (will be loaded from fetched data)
-    initialContent: undefined, // Start empty, load later
-    // onEditorContentChange: (editor) => {
-    //   // Optional: Could implement auto-save or track changes here
-    // }
-  });
+  // Callback to receive the editor instance from the BlockNoteEditorComponent
+  const handleEditorInstanceReady = useCallback(
+    (editorInstance: BlockNoteEditor | null) => {
+      setEditor(editorInstance);
+      // When editor is ready, if we have fetched card data, try to load its content
+      // This might be redundant if fetchCard already handles it due to editor dependency
+      if (editorInstance && card && card.content) {
+        // Initial content loading logic is primarily within fetchCard, triggered by editor changing
+      }
+    },
+    [card],
+  ); // Add card to dependencies to re-run if card data changes before editor is ready
+
+  // Callback to receive content updates from the editor component
+  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
+    setEditorContent(blocks);
+  }, []);
 
   // --- Data Fetching ---
   const fetchCard = useCallback(async () => {
@@ -105,6 +150,7 @@ export default function CardDetailPage() {
       const data: KnowledgeCard = await response.json();
       setCard(data);
       setTitle(data.title);
+      setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []); // Extract tag names for keywords state
 
       // Load content into editor once fetched and editor is ready
       if (editor && data.content) {
@@ -182,6 +228,28 @@ export default function CardDetailPage() {
     // fetchCard is stable due to useCallback, so only run when these change.
   }, [status, cardId, router, fetchCard]);
 
+  // Keyword/Tag handling functions (copied from NewCardPage and adapted)
+  const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCurrentKeyword(e.target.value);
+  };
+
+  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && currentKeyword.trim() !== '') {
+      e.preventDefault();
+      const newKeyword = currentKeyword.trim().startsWith('#')
+        ? currentKeyword.trim()
+        : `#${currentKeyword.trim()}`;
+      if (!keywords.includes(newKeyword)) {
+        setKeywords([...keywords, newKeyword]);
+      }
+      setCurrentKeyword('');
+    }
+  };
+
+  const removeKeyword = (keywordToRemove: string) => {
+    setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
+  };
+
   // --- Save Changes ---
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
@@ -222,7 +290,12 @@ export default function CardDetailPage() {
       JSON.stringify(currentContent) !==
       JSON.stringify(originalContentForComparison || []);
 
-    if (!hasTitleChanged && !hasContentChanged) {
+    // Check if keywords have changed
+    const originalTags = card.tags || [];
+    const hasKeywordsChanged =
+      JSON.stringify(keywords.sort()) !== JSON.stringify(originalTags.sort());
+
+    if (!hasTitleChanged && !hasContentChanged && !hasKeywordsChanged) {
       toast({ title: 'No changes detected.', status: 'info', duration: 3000 });
       setIsEditing(false); // Exit edit mode if no changes
       return;
@@ -238,11 +311,16 @@ export default function CardDetailPage() {
 
     const updatePayload: CardUpdatePayload = {};
     if (hasTitleChanged) updatePayload.title = title.trim();
-    if (hasContentChanged)
-      updatePayload.content = currentContent as BlockNoteDocument;
+    // Use editorContent for consistency if available, otherwise editor.document
+    const contentToSave = editorContent || (editor ? editor.document : null);
+    if (hasContentChanged && contentToSave)
+      updatePayload.content = contentToSave as BlockNoteDocument;
+    if (hasKeywordsChanged) updatePayload.tags = keywords; // Correct: send the array of keyword strings
 
     setIsSaving(true);
     setError(null);
+
+    console.log('Updating card with payload:', updatePayload); // Log payload being sent
 
     try {
       // Use PUT to replace the entire card data (or PATCH if API supports partial)
@@ -254,10 +332,14 @@ export default function CardDetailPage() {
       });
 
       const updatedCard = await response.json();
+      console.log('API response for updated card:', updatedCard); // Log API response
 
       if (response.ok) {
         setCard(updatedCard as KnowledgeCard);
         setTitle(updatedCard.title);
+        setKeywords(
+          updatedCard.tags ? updatedCard.tags.map((tag) => tag.name) : [],
+        ); // Extract tag names
         setIsEditing(false);
         toast({
           title: 'Card updated successfully',
@@ -321,9 +403,10 @@ export default function CardDetailPage() {
   if (status === 'loading' || (isLoading && !error && !card)) {
     // Show loading if auth loading OR data loading (and no error/card yet)
     return (
-      <Flex justify="center" align="center" height="80vh">
+      <Container centerContent py={10} fontFamily="'Open Sans', sans-serif">
         <Spinner size="xl" />
-      </Flex>
+        <Text mt={4}>Loading card details...</Text>
+      </Container>
     );
   }
 
@@ -388,22 +471,26 @@ export default function CardDetailPage() {
       JSON.stringify(originalContentForComparisonCanSave || [])
     : false;
   const titleChanged = title.trim() !== (card.title || '');
-  const canSave = isEditing && (titleChanged || contentChanged);
+  // Ensure keywords comparison for canSave is robust
+  const originalTagsForCanSave = card.tags || [];
+  const keywordsChangedForCanSave =
+    JSON.stringify(keywords.sort()) !==
+    JSON.stringify(originalTagsForCanSave.sort());
+  const canSave =
+    isEditing && (titleChanged || contentChanged || keywordsChangedForCanSave);
 
   return (
-    <Container maxW="container.lg" py={8}>
-      <Flex mb={6} alignItems="center">
-        <Input
-          variant="flushed" // Use a less prominent input for title
-          size="lg"
-          fontSize="2xl"
-          fontWeight="bold"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          isDisabled={!isEditing || isSaving || isDeleting} // Disable if not editing
-          placeholder="Card Title"
-          mr={4}
-        />
+    <Container maxW="container.lg" py={8} fontFamily="'Open Sans', sans-serif">
+      <Flex mb={6} align="center">
+        <Heading
+          as="h1"
+          size="xl"
+          flexGrow={1}
+          fontFamily="'Open Sans', sans-serif"
+          fontSize="36px"
+        >
+          {isEditing ? 'Edit Knowledge Card' : card?.title || 'Card Details'}
+        </Heading>
         <Spacer />
         {isEditing ? (
           <>
@@ -421,8 +508,10 @@ export default function CardDetailPage() {
               onClick={() => {
                 setIsEditing(false);
                 setTitle(card.title); // Revert title on cancel
+                setKeywords(card.tags ? card.tags.map((tag) => tag.name) : []); // Revert keywords to original card tag names
                 // Revert editor content might require re-fetching or complex state management
                 // For now, just exit edit mode. User can save or refresh to discard.
+                // Consider calling fetchCard() here too if a full reset is desired on this cancel action.
               }}
               isDisabled={isSaving || isDeleting}
             >
@@ -449,17 +538,167 @@ export default function CardDetailPage() {
         />
       </Flex>
 
-      <Box borderWidth="1px" borderRadius="md" p={1} minH="500px">
-        {/* Pass editable prop based on isEditing state */}
-        {editor ? (
-          <BlockNoteView editor={editor} editable={isEditing} theme="light" />
-        ) : (
-          <Flex justify="center" align="center" height="200px">
-            <Spinner size="md" />
-            <Text ml={3}>Loading Editor...</Text>
-          </Flex>
-        )}
-      </Box>
+      {isEditing ? (
+        <Box
+          as="form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSaveChanges();
+          }}
+        >
+          <VStack spacing={6} align="stretch">
+            <FormControl isRequired>
+              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+                Title
+              </FormLabel>
+              <Input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Enter card title"
+                isDisabled={isSaving}
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="16px"
+              />
+            </FormControl>
+
+            {/* Key Words Section - Moved here and adapted */}
+            <FormControl>
+              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+                Key Words{' '}
+                <Text as="span" fontSize="16px" color="gray.500">
+                  (Optional)
+                </Text>
+              </FormLabel>
+              <Input
+                type="text"
+                value={currentKeyword}
+                onChange={handleKeywordChange}
+                onKeyDown={handleKeywordKeyDown}
+                placeholder="Type a keyword and press Enter"
+                isDisabled={!isEditing || isSaving} // Ensure it's disabled when not editing or when saving
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="16px"
+                color="#A1824A"
+                _placeholder={{ color: '#A1824A' }}
+              />
+              <HStack spacing={2} mt={3} flexWrap="wrap">
+                {keywords.map((keyword) => (
+                  <Tag
+                    size="lg"
+                    key={keyword}
+                    borderRadius="md"
+                    variant="solid"
+                    colorScheme="blue"
+                    boxShadow="md"
+                    sx={{
+                      boxShadow:
+                        '2px 2px 5px rgba(0,0,0,0.2), inset 1px 1px 2px rgba(255,255,255,0.3)',
+                      border: '1px solid rgba(0,0,0,0.1)',
+                    }}
+                  >
+                    <TagLabel>{keyword}</TagLabel>
+                    <TagCloseButton
+                      onClick={() => removeKeyword(keyword)}
+                      isDisabled={!isEditing || isSaving}
+                    />
+                  </Tag>
+                ))}
+              </HStack>
+            </FormControl>
+
+            <FormControl isRequired>
+              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
+                Content
+              </FormLabel>
+              <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
+                <BlockNoteEditorComponent
+                  onEditorChange={handleEditorInstanceReady}
+                  onContentUpdate={handleEditorContentUpdate}
+                  editable={isEditing}
+                />
+              </Box>
+            </FormControl>
+
+            <Flex justify="flex-start" gap={3} mt={4}>
+              <Button
+                colorScheme="green"
+                type="submit"
+                isLoading={isSaving}
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="16px"
+              >
+                Save Changes
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsEditing(false);
+                  if (card) {
+                    setTitle(card.title);
+                    setKeywords(
+                      card.tags ? card.tags.map((tag) => tag.name) : [],
+                    );
+                    // Content reset is implicitly handled by BlockNoteEditorComponent
+                    // when isEditing becomes false and it re-renders with card.content,
+                    // or by fetchCard() if the user used the header cancel that triggers a re-fetch.
+                  }
+                }}
+                isDisabled={isSaving}
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="16px"
+              >
+                Cancel
+              </Button>
+            </Flex>
+          </VStack>
+        </Box>
+      ) : (
+        <Box>
+          {/* Display Title - Already part of the Heading element above for non-editing mode */}
+          {/* Display Tags/Keywords - If not editing, show them as static tags */}
+          {card && card.tags && card.tags.length > 0 && (
+            <Box my={4}>
+              <Heading
+                as="h3"
+                size="md"
+                mb={2}
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="20px"
+              >
+                Key Words
+              </Heading>
+              <HStack spacing={2} flexWrap="wrap">
+                {card.tags.map((tag) => (
+                  <Tag
+                    size="lg"
+                    key={tag.id}
+                    borderRadius="md"
+                    variant="solid"
+                    colorScheme="teal"
+                  >
+                    <TagLabel>{tag.name}</TagLabel>
+                  </Tag>
+                ))}
+              </HStack>
+            </Box>
+          )}
+
+          <Box
+            borderWidth="1px"
+            borderRadius="md"
+            p={1}
+            minH="500px"
+            mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
+          >
+            <BlockNoteEditorComponent
+              onEditorChange={handleEditorInstanceReady} // Editor instance still needed for initial load
+              onContentUpdate={handleEditorContentUpdate} // Keep content in sync if needed
+              editable={isEditing} // This will be false here
+            />
+          </Box>
+        </Box>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog

@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
   try {
     const userId = session.user.id;
     const body = await req.json();
-    const { title, content, folderId } = body;
+    const { title, content, folderId, tags } = body;
 
     // --- Input Validation ---
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -151,6 +151,23 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+    // Validate tags if provided (must be an array of strings)
+    if (tags !== undefined && !Array.isArray(tags)) {
+      return NextResponse.json(
+        { message: 'Tags must be an array of strings' },
+        { status: 400 },
+      );
+    }
+    if (
+      tags &&
+      Array.isArray(tags) &&
+      !tags.every((tag) => typeof tag === 'string')
+    ) {
+      return NextResponse.json(
+        { message: 'All tags in the array must be strings' },
+        { status: 400 },
+      );
+    }
     // --- End Validation ---
 
     // Prepare data for Prisma create
@@ -161,6 +178,17 @@ export async function POST(req: NextRequest) {
         // Connect to the existing user via the relation field
         connect: { id: userId },
       },
+      // Add tags if provided
+      ...(tags &&
+        Array.isArray(tags) &&
+        tags.length > 0 && {
+          tags: {
+            connectOrCreate: tags.map((tagName: string) => ({
+              where: { name: tagName.trim() },
+              create: { name: tagName.trim() },
+            })),
+          },
+        }),
     };
 
     // Add folderId only if it's provided and valid
@@ -181,6 +209,11 @@ export async function POST(req: NextRequest) {
     // Create the Knowledge Card
     const newCard = await prisma.knowledgeCard.create({
       data: data,
+      include: {
+        // Explicitly include tags and folder in the response
+        tags: true,
+        folder: true,
+      },
     });
 
     return NextResponse.json(newCard, { status: 201 });
