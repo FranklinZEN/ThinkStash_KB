@@ -6,17 +6,17 @@ steps:
   - -c # Run commands in a shell
   - |
     # Source nvm from common locations
-    if [ -s "$HOME/.nvm/nvm.sh" ]; then
-      . "$HOME/.nvm/nvm.sh"
+    if [ -s "$$HOME/.nvm/nvm.sh" ]; then  # Changed to $$HOME
+      . "$$HOME/.nvm/nvm.sh"            # Changed to $$HOME
     elif [ -s "/opt/nvm/nvm.sh" ]; then
       . "/opt/nvm/nvm.sh"
-    elif [ -s "/usr/local/share/nvm/nvm.sh" ]; then # Another common path
+    elif [ -s "/usr/local/share/nvm/nvm.sh" ]; then
       . "/usr/local/share/nvm/nvm.sh"
     else
       echo "nvm.sh not found in expected locations. Trying to install nvm..."
       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-      export NVM_DIR="$HOME/.nvm"
-      [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # Sourcing after install
+      export NVM_DIR="$$HOME/.nvm"        # Changed to $$HOME
+      [ -s "$$NVM_DIR/nvm.sh" ] && \. "$$NVM_DIR/nvm.sh" # $NVM_DIR is fine here as it's set within the script
     fi
 
     nvm install 20
