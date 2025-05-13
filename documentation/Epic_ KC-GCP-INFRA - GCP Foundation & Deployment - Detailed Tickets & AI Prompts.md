@@ -471,15 +471,16 @@ Human/PM Action Items:
 * Ensure repository is connected to the chosen CI/CD tool.
 
 Description (Functional): Configure a CI/CD pipeline to automate the build, testing (unit/integration), and deployment of the Next.js backend application (which has undergone Phase A enhancements) to the chosen GCP compute service (e.g., Cloud Run).  
+Status Update (YYYY-MM-DD): The Google Cloud Build trigger associated with `ThinkStash_KB_Fresh_Filter/cloudbuild.yaml` is successfully firing on code pushes. The current `cloudbuild.yaml` correctly sets up Node.js (via nvm) and installs npm dependencies. This achieves the initial part of triggering the pipeline.
 Acceptance Criteria (Functional):
 
-* A CI/CD pipeline is triggered on code pushes/merges to specified branches.  
-* The pipeline builds the Next.js application Docker image.  
-* Automated tests (unit, integration \- as per NFR-MAINT-3 from nfrs\_v1\_1) are executed within the pipeline.  
-* On successful tests, the Docker image is tagged and pushed to Google Artifact Registry.  
-* The new image is deployed to the target GCP compute service (e.g., new revision on Cloud Run) using a safe deployment strategy (e.g., rolling update, canary if configured).  
-* Database migrations (prisma migrate deploy) are applied as a step in the deployment process before the new application version serves traffic.  
-* Pipeline provides clear success/failure notifications.  
+* A CI/CD pipeline is triggered on code pushes/merges to specified branches. (*Partially DONE: Basic trigger and Node.js/npm install build confirmed working.*)
+* The pipeline builds the Next.js application Docker image.
+* Automated tests (unit, integration \- as per NFR-MAINT-3 from nfrs\_v1\_1) are executed within the pipeline.
+* On successful tests, the Docker image is tagged and pushed to Google Artifact Registry.
+* The new image is deployed to the target GCP compute service (e.g., new revision on Cloud Run) using a safe deployment strategy (e.g., rolling update, canary if configured).
+* Database migrations (prisma migrate deploy) are applied as a step in the deployment process before the new application version serves traffic.
+* Pipeline provides clear success/failure notifications.
   Technical Approach / Implementation Notes (for AI Vibe Coder):  
 * **Prompt for AI Coder (Example for Google Cloud Build):** "Your task is to create a cloudbuild.yaml file for the Next.js backend application to deploy to Google Cloud Run.  
   1. **Define cloudbuild.yaml:**  

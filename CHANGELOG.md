@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial `README.md` with prerequisites and getting started instructions.
 - Backend testing framework setup (Jest, `ts-jest`, separate config).
 
+## [Unreleased]
+### Added
+- Successfully configured Google Cloud Build trigger for the Next.js backend (linked to `ThinkStash_KB_Fresh_Filter/cloudbuild.yaml`). The build now correctly sets up Node.js (using nvm) and installs npm dependencies, and uses `CLOUD_LOGGING_ONLY`.
+
 [0.2.1]: https://github.com/FranklinZEN/ThinkStash_KB/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/FranklinZEN/ThinkStash_KB/releases/tag/v0.2.0 
 

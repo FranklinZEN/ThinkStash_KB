@@ -98,12 +98,12 @@ resource "google_project_iam_member" "crewai_sa_secret_accessor" {
 # Example: Allow CI/CD to act as (impersonate) other service accounts if needed for deployment
 resource "google_project_iam_member" "cicd_sa_service_account_user" {
   project = var.gcp_project_id
-  role    = "roles/iam.serviceAccountUser" # Allows impersonation
+  role    = "roles/iam.serviceAccountUser"
   member  = "serviceAccount:${google_service_account.cicd_sa.email}"
 }
 
 # Example: Allow CI/CD to manage Cloud Run services
-resource "google_project_iam_member" "cicd_sa_run_admin" {
+resource "google_project_iam_member" "cicd_sa_cloud_run_admin" {
   project = var.gcp_project_id
   role    = "roles/run.admin"
   member  = "serviceAccount:${google_service_account.cicd_sa.email}"
@@ -113,6 +113,12 @@ resource "google_project_iam_member" "cicd_sa_run_admin" {
 resource "google_project_iam_member" "cicd_sa_artifact_registry_writer" {
   project = var.gcp_project_id
   role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${google_service_account.cicd_sa.email}"
+}
+
+resource "google_project_iam_member" "cicd_sa_storage_admin" {
+  project = var.gcp_project_id
+  role    = "roles/storage.admin"
   member  = "serviceAccount:${google_service_account.cicd_sa.email}"
 }
 
