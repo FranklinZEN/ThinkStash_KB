@@ -1,36 +1,48 @@
 steps:
 # Install dependencies
-- name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
-  args: ['npm', 'install'] # Explicitly call npm
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # Use gcloud image
+  entrypoint: /bin/bash
+  args:
+  - -c # Run commands in a shell
+  - |
+    source /usr/local/nvm/nvm.sh
+    nvm install 20
+    nvm use 20
+    npm install
   id: 'Install Dependencies'
 
-# ... (lint and test steps are commented out) ...
-
-# Build Prisma Client (Uncomment and adjust if you use Prisma)
-# - name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
-#   args: ['npm', 'run', 'prisma:generate'] # Explicitly call npm
-#   id: 'Generate Prisma Client'
-
-
-  
 # Run linters (example - ensure 'lint' script exists in package.json)
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['run', 'lint']
-  id: 'Lint'
+# - name: 'gcr.io/cloud-builders/npm' # Or adapt to use gcloud/nvm like above
+#   args: ['run', 'lint']
+#   id: 'Lint'
 
 # Run tests (example - ensure 'test' script exists in package.json)
-#- name: 'gcr.io/cloud-builders/npm'
-#  args: ['run', 'test']
-#  id: 'Test'
+# - name: 'gcr.io/cloud-builders/npm' # Or adapt to use gcloud/nvm like above
+#   args: ['run', 'test']
+#   id: 'Test'
 
 # Build Prisma Client (Uncomment and adjust if you use Prisma)
-# - name: 'gcr.io/cloud-builders/npm'
-#   args: ['run', 'prisma:generate'] # Assuming 'prisma:generate': 'prisma generate' in package.json
+# - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # Use gcloud image
+#   entrypoint: /bin/bash
+#   args:
+#   - -c
+#   - |
+#     source /usr/local/nvm/nvm.sh
+#     nvm install 20
+#     nvm use 20
+#     npm run prisma:generate
 #   id: 'Generate Prisma Client'
 
 # Build Next.js app
-- name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
-  args: ['npm', 'run', 'build'] # Explicitly call npm
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # Use gcloud image
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - |
+    source /usr/local/nvm/nvm.sh
+    nvm install 20
+    nvm use 20
+    npm run build
   id: 'Build Next.js App'
   
 # Build Docker image
