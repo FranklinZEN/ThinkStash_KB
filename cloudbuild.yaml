@@ -1,9 +1,18 @@
 steps:
 # Install dependencies
-- name: 'gcr.io/cloud-builders/npm:20'
-  args: ['install']
+- name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
+  args: ['npm', 'install'] # Explicitly call npm
   id: 'Install Dependencies'
 
+# ... (lint and test steps are commented out) ...
+
+# Build Prisma Client (Uncomment and adjust if you use Prisma)
+# - name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
+#   args: ['npm', 'run', 'prisma:generate'] # Explicitly call npm
+#   id: 'Generate Prisma Client'
+
+
+  
 # Run linters (example - ensure 'lint' script exists in package.json)
 - name: 'gcr.io/cloud-builders/npm'
   args: ['run', 'lint']
@@ -20,10 +29,10 @@ steps:
 #   id: 'Generate Prisma Client'
 
 # Build Next.js app
-- name: 'gcr.io/cloud-builders/npm:20'
-  args: ['run', 'build']
+- name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
+  args: ['npm', 'run', 'build'] # Explicitly call npm
   id: 'Build Next.js App'
-
+  
 # Build Docker image
 - name: 'gcr.io/cloud-builders/docker'
   args: [
