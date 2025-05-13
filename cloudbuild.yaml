@@ -1,11 +1,24 @@
 steps:
 # Install dependencies
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # Use gcloud image
-  entrypoint: /bin/bash
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: bash # Changed to just 'bash'
   args:
   - -c # Run commands in a shell
   - |
-    source /usr/local/nvm/nvm.sh
+    # Source nvm from common locations
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+      . "$HOME/.nvm/nvm.sh"
+    elif [ -s "/opt/nvm/nvm.sh" ]; then
+      . "/opt/nvm/nvm.sh"
+    elif [ -s "/usr/local/share/nvm/nvm.sh" ]; then # Another common path
+      . "/usr/local/share/nvm/nvm.sh"
+    else
+      echo "nvm.sh not found in expected locations. Trying to install nvm..."
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # Sourcing after install
+    fi
+
     nvm install 20
     nvm use 20
     npm install
@@ -34,12 +47,25 @@ steps:
 #   id: 'Generate Prisma Client'
 
 # Build Next.js app
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # Use gcloud image
-  entrypoint: /bin/bash
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: bash # Changed to just 'bash'
   args:
   - -c
   - |
-    source /usr/local/nvm/nvm.sh
+    # Source nvm (same logic as above)
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+      . "$HOME/.nvm/nvm.sh"
+    elif [ -s "/opt/nvm/nvm.sh" ]; then
+      . "/opt/nvm/nvm.sh"
+    elif [ -s "/usr/local/share/nvm/nvm.sh" ]; then
+      . "/usr/local/share/nvm/nvm.sh"
+    else
+      echo "nvm.sh not found in expected locations. Trying to install nvm..."
+      curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    fi
+
     nvm install 20
     nvm use 20
     npm run build
