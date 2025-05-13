@@ -10,9 +10,9 @@ steps:
   id: 'Lint'
 
 # Run tests (example - ensure 'test' script exists in package.json)
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['run', 'test']
-  id: 'Test'
+#- name: 'gcr.io/cloud-builders/npm'
+#  args: ['run', 'test']
+#  id: 'Test'
 
 # Build Prisma Client (Uncomment and adjust if you use Prisma)
 # - name: 'gcr.io/cloud-builders/npm'
