@@ -1,6 +1,6 @@
 steps:
 # Install dependencies
-- name: 'gcr.io/cloud-builders/npm'
+- name: 'gcr.io/cloud-builders/npm:20'
   args: ['install']
   id: 'Install Dependencies'
 
@@ -20,7 +20,7 @@ steps:
 #   id: 'Generate Prisma Client'
 
 # Build Next.js app
-- name: 'gcr.io/cloud-builders/npm'
+- name: 'gcr.io/cloud-builders/npm:20'
   args: ['run', 'build']
   id: 'Build Next.js App'
 
