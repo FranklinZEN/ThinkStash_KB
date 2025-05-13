@@ -107,4 +107,7 @@ logs
 
 # Optional: Cypress artifacts
 /cypress/videos/
-/cypress/screenshots/ 
+/cypress/screenshots/
+
+# Terraform
+terraform/terraform.tfvars 
