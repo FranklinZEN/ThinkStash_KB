@@ -110,4 +110,39 @@ logs
 /cypress/screenshots/
 
 # Terraform
-terraform/terraform.tfvars 
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+# terraform.tfvars # Uncomment if you want to ignore tfvars (recommended if it contains secrets)
+crash.log
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / OS specific
+.vscode/
+.idea/
+*.DS_Store
+.env
+.env*.local
+
+# Terraform tfvars files
+terraform/terraform.tfvars
+*.tfvars # Also ignore any other .tfvars files by pattern 
