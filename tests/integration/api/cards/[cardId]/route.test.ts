@@ -1,22 +1,14 @@
-import { PUT, _DELETE, _GET } from '@/app/api/cards/[cardId]/route'; // Import handlers
-import prisma from '@/lib/prisma';
+import { PUT } from '@/app/api/cards/[cardId]/route'; // Corrected import names
 import { getCurrentUserId } from '@/lib/sessionUtils';
-import { _NextResponse } from 'next/server';
-import { _Prisma } from '@prisma/client';
+import { NextRequest } from 'next/server'; // Corrected import name, added NextRequest
+// PrismaClient and jest-mock-extended types are not needed here if mock is global
+// import { PrismaClient } from '@prisma/client'; 
+// import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
 
-// Mock dependencies
-jest.mock('@/lib/prisma', () => ({
-  prisma: {
-    knowledgeCard: { // Changed from 'card' to match schema?
-      findUnique: jest.fn(),
-      update: jest.fn(),
-      delete: jest.fn(),
-    },
-    folder: { // Need to mock folder for ownership check
-        findUnique: jest.fn(),
-    }
-  },
-}));
+// --- In-File Prisma Mock REMOVED --- 
+// All backend tests will now use the global mock from jest.setup.backend.mjs
+
+import prisma from '@/lib/prisma'; // This will now use the global mock setup
 
 jest.mock('@/lib/sessionUtils', () => ({
   getCurrentUserId: jest.fn(),
@@ -24,13 +16,20 @@ jest.mock('@/lib/sessionUtils', () => ({
 
 describe('API /api/cards/[cardId]', () => {
   const mockUserId = 'user-card-dynamic-123';
-  const mockCardId = 'card-cuid-456';
-  const mockFolderId = 'folder-cuid-789';
-  const otherUserFolderId = 'folder-cuid-other';
+  const mockCardId = 'cmao1cicq0001u5js1dklafr0';
+  const mockFolderId = 'cmao1cph90004u5jsmlpf0lku';
+  const otherUserFolderId = 'cmao3szy30001u5v84edvgpgj';
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId); // Assume logged in
+    // jest.clearAllMocks(); // This is typically done by mockReset or in global setup
+    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
+    
+    // Re-apply $transaction mock if needed on the global prisma instance (if it gets cleared)
+    // This might be managed by the global setup, or might need to be ensured here if tests specifically affect it.
+    // For now, assume global setup handles the prisma instance and its $transaction mock reset and re-application.
+
+    (getCurrentUserId as jest.Mock).mockReset();
+    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
   });
 
   // --- GET Tests ---
@@ -49,11 +48,11 @@ describe('API /api/cards/[cardId]', () => {
 
     it('should return 404 if card not found or not owned', async () => {
       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(null);
-      const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+      const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { // Use NextRequest
         method: 'PUT',
         body: JSON.stringify(validUpdatePayload)
       });
-      const response = await PUT(request, { params: { cardId: mockCardId } });
+      const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) }); // Wrap params
       expect(response.status).toBe(404);
       expect(prisma.knowledgeCard.findUnique).toHaveBeenCalledWith({
          where: { id: mockCardId, userId: mockUserId },
@@ -66,11 +65,11 @@ describe('API /api/cards/[cardId]', () => {
         (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
         (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null); // Target folder not found
 
-        const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+        const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { // Use NextRequest
             method: 'PUT',
             body: JSON.stringify({ folderId: mockFolderId })
         });
-        const response = await PUT(request, { params: { cardId: mockCardId } });
+        const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) }); // Wrap params
         expect(response.status).toBe(400);
         const body = await response.json();
         expect(body.error).toContain('Target folder not found');
@@ -86,11 +85,11 @@ describe('API /api/cards/[cardId]', () => {
        // Simulate folder findUnique returning null because userId doesn't match
        (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null); 
 
-       const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+       const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { // Use NextRequest
            method: 'PUT',
            body: JSON.stringify({ folderId: otherUserFolderId })
        });
-       const response = await PUT(request, { params: { cardId: mockCardId } });
+       const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) }); // Wrap params
        expect(response.status).toBe(400);
        const body = await response.json();
        expect(body.error).toContain('Target folder not found or not owned');
@@ -106,11 +105,11 @@ describe('API /api/cards/[cardId]', () => {
       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
       (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCard);
 
-      const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+      const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { // Use NextRequest
         method: 'PUT',
         body: JSON.stringify(validUpdatePayload)
       });
-      const response = await PUT(request, { params: { cardId: mockCardId } });
+      const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) }); // Wrap params
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.title).toBe(validUpdatePayload.title);
@@ -123,44 +122,48 @@ describe('API /api/cards/[cardId]', () => {
     it('should move card to a valid folder successfully', async () => {
       const mockExistingCard = { id: mockCardId, userId: mockUserId };
       const mockTargetFolder = { id: mockFolderId, userId: mockUserId };
-      const mockUpdatedCard = { ...mockExistingCard, folderId: mockFolderId };
+      const mockUpdatedCardResult = { ...mockExistingCard, folderId: mockFolderId, folder: mockTargetFolder, tags: [] };
+      
       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockTargetFolder); // Target folder exists and is owned
-      (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCard);
+      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockTargetFolder); 
+      (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCardResult);
 
-      const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+      const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, {
         method: 'PUT',
         body: JSON.stringify(validMovePayload)
       });
-      const response = await PUT(request, { params: { cardId: mockCardId } });
+      const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) });
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.folderId).toBe(mockFolderId);
-      expect(prisma.knowledgeCard.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(prisma.knowledgeCard.update).toHaveBeenCalledWith({
         where: { id: mockCardId },
-        data: { folderId: mockFolderId },
-      }));
+        data: { folder: { connect: { id: mockFolderId } } }, // Corrected data structure
+        include: { tags: true, folder: true }, // Added include to match route
+      });
     });
 
      it('should move card to root (remove folder) successfully', async () => {
-       const mockExistingCard = { id: mockCardId, userId: mockUserId, folderId: mockFolderId }; // Start in a folder
-       const mockUpdatedCard = { ...mockExistingCard, folderId: null };
-       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
-       (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCard);
+       const mockExistingCard = { id: mockCardId, userId: mockUserId, folderId: mockFolderId }; 
+       const mockUpdatedCardResult = { ...mockExistingCard, folderId: null, folder: null, tags: [] };
 
-       const request = new Request(`http://localhost/api/cards/${mockCardId}`, {
+       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
+       (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCardResult);
+
+       const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, {
          method: 'PUT',
          body: JSON.stringify(validRemoveFolderPayload)
        });
-       const response = await PUT(request, { params: { cardId: mockCardId } });
+       const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) });
        expect(response.status).toBe(200);
        const body = await response.json();
        expect(body.folderId).toBeNull();
-       expect(prisma.knowledgeCard.update).toHaveBeenCalledWith(expect.objectContaining({
+       expect(prisma.knowledgeCard.update).toHaveBeenCalledWith({
          where: { id: mockCardId },
-         data: { folderId: null },
-       }));
-       expect(prisma.folder.findUnique).not.toHaveBeenCalled(); // No folder check needed for null
+         data: { folder: { disconnect: true } }, // Corrected data structure
+         include: { tags: true, folder: true }, // Added include to match route
+       });
+       expect(prisma.folder.findUnique).not.toHaveBeenCalled(); 
      });
 
     // ... Add tests for other update scenarios (content, combined fields) ...
