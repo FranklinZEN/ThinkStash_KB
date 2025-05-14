@@ -1,4 +1,5 @@
-// jest.setup.backend.js (ESM version - Plain JavaScript)
+// jest.setup.backend.mjs (ESM version - Plain JavaScript)
+import { jest, beforeEach } from '@jest/globals';
 import { mockDeep, mockReset } from 'jest-mock-extended';
 
 const prismaMock = mockDeep();
