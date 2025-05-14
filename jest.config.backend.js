@@ -1,5 +1,5 @@
-module.exports = {
-  preset: 'ts-jest', // Use ts-jest preset
+export default {
+  // preset: 'ts-jest', // We'll define the transform directly to set useESM
   testEnvironment: 'node', // Specify Node.js environment
   // Automatically clear mock calls and instances between every test
   clearMocks: true,
@@ -13,17 +13,11 @@ module.exports = {
   },
 
   // A list of paths to modules that run some code to configure or set up the testing framework before each test
-  // setupFilesAfterEnv: [],
-
-  // A list of paths to directories that Jest should use to search for files in
-  // roots: [
-  //   "<rootDir>/src"
-  // ],
+  setupFilesAfterEnv: ['./jest.setup.backend.js'],
 
   // The glob patterns Jest uses to detect test files (ignore frontend tests)
   testMatch: [
-    "<rootDir>/src/**/*.test.ts",
-    "!**/*.test.tsx" // Exclude files ending in .test.tsx
+    "<rootDir>/tests/integration/api/**/*.test.ts",
   ],
 
   // An array of regexp pattern strings that are matched against all test paths, matched tests are skipped
@@ -36,4 +30,14 @@ module.exports = {
     "/node_modules/",
     "\\.pnp\\.[^/]+$"
   ],
+
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        useESM: true,
+        // tsconfig: 'tsconfig.json', // or specific tsconfig if needed, often ts-jest finds it
+      },
+    ],
+  },
 }; 
