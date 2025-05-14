@@ -1,19 +1,19 @@
 steps:
 # Step 1: Install Dependencies
-- name: 'gcr.io/cloud-builders/npm' # Using the dedicated npm builder
+- name: 'node:20-slim' # Using official Node.js 20 slim image
   entrypoint: 'npm'
   args: ['install']
   id: 'Install Dependencies'
 
 # Step 2: Lint
-- name: 'gcr.io/cloud-builders/npm' # Uses the same environment
+- name: 'node:20-slim' # Using official Node.js 20 slim image
   entrypoint: 'npm'
   args: ['run', 'lint']
   id: 'Lint'
   waitFor: ['Install Dependencies'] # Optional but good practice
 
 # Step 3: Test
-- name: 'gcr.io/cloud-builders/npm'
+- name: 'node:20-slim' # Using official Node.js 20 slim image
   entrypoint: 'npm'
   args: ['run', 'test']
   id: 'Test'
