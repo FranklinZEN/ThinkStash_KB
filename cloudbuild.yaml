@@ -26,5 +26,12 @@ steps:
   id: 'Build Prisma Client'
   waitFor: ['Test'] # Run after Test
 
+# Step 5: Build Next.js app
+- name: 'node:20-slim'
+  entrypoint: 'npm'
+  args: ['run', 'build']
+  id: 'Build Next.js app'
+  waitFor: ['Build Prisma Client']
+
 options:
   logging: CLOUD_LOGGING_ONLY
