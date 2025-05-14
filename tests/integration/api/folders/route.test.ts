@@ -130,7 +130,7 @@ describe('API /api/folders', () => {
       const response = await POST(request);
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.errors?.name).toBeDefined(); // Check Zod error structure
+      expect(body.details?.name).toBeDefined(); // Check Zod error structure in 'details'
     });
 
     it('should return 400 if parentId is provided but invalid format', async () => {
@@ -142,7 +142,7 @@ describe('API /api/folders', () => {
       const response = await POST(request);
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.errors?.parentId).toBeDefined();
+      expect(body.details?.parentId).toBeDefined(); // Check Zod error structure in 'details'
     });
 
     it('should return 400 if parent folder is not found or not owned by user', async () => {
