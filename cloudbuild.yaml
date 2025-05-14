@@ -1,6 +1,6 @@
 steps:
 # Step 1: Install Dependencies
-- name: 'gcr.io/cloud-builders/node:20' # Or your preferred Node.js version
+- name: 'gcr.io/cloud-builders/npm' # Using the dedicated npm builder
   entrypoint: 'npm'
   args: ['install']
   id: 'Install Dependencies'
