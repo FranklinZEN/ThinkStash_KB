@@ -10,31 +10,31 @@ availableSecrets:
 
 steps:
 # Step 1: Install Dependencies
-- name: 'node:20-slim' # Using official Node.js 20 slim image
+- name: 'node:20-slim'
   entrypoint: 'npm'
   args: ['install']
   id: 'Install Dependencies'
 
 # Step 2: Lint
-- name: 'node:20-slim' # Using official Node.js 20 slim image
+- name: 'node:20-slim'
   entrypoint: 'npm'
   args: ['run', 'lint']
   id: 'Lint'
-  waitFor: ['Install Dependencies'] # Optional but good practice
+  waitFor: ['Install Dependencies']
 
 # Step 3: Test
-- name: 'node:20-slim' # Using official Node.js 20 slim image
+- name: 'node:20-slim'
   entrypoint: 'npm'
   args: ['run', 'test']
   id: 'Test'
-  waitFor: ['Lint'] # Run after Linting
+  waitFor: ['Lint']
 
 # Step 4: Build Prisma Client
-- name: 'node:20-slim' # Using official Node.js 20 slim image
+- name: 'node:20-slim'
   entrypoint: 'npm'
-  args: ['run', 'prisma:generate'] # Assumes 'prisma:generate': 'prisma generate' in package.json
+  args: ['run', 'prisma:generate']
   id: 'Build Prisma Client'
-  waitFor: ['Test'] # Run after Test
+  waitFor: ['Test']
 
 # Step 5: Build Next.js app
 - name: 'node:20-slim'
@@ -61,17 +61,15 @@ steps:
   waitFor: ['Build Docker image']
 
 # Step 8: Apply Database Migrations
-# Corrected structure for secrets
 - name: 'gcr.io/google-appengine/exec-wrapper'
   env:
-    - 'DB_HOST=localhost' # The proxy listens on localhost
-    - 'DB_PORT=5432'      # Default proxy port for PostgreSQL
+    - 'DB_HOST=localhost'
+    - 'DB_PORT=5432'
   args: [
     '-i',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
     '-s',
     '${_DB_INSTANCE_CONNECTION_NAME}',
-    # Construct DATABASE_URL using the secrets made available as env vars by the top-level availableSecrets
     '-e', 'DATABASE_URL=postgresql://$(SECRET_DB_USER):$(SECRET_DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(SECRET_DB_NAME)?schema=public',
     '--',
     'npx', 'prisma', 'migrate', 'deploy'
@@ -91,7 +89,6 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    # Add other flags as needed: --vpc-connector, --env-vars-file, etc.
   ]
   id: 'Deploy to Cloud Run'
   waitFor: ['Apply Database Migrations']
