@@ -7,6 +7,7 @@
     "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
+    "test": "jest && jest --config jest.config.backend.js",
     "test:fe": "npx jest --watch",
     "test:be": "npx jest --config jest.config.backend.js --watch",
     "prepare": "husky"
