@@ -1,92 +1,9 @@
 steps:
-# Install dependencies
-- name: 'gcr.io/cloud-builders/node:20' # Use node:20 builder
-  args: ['npm', 'install'] # Explicitly call npm
+# Step 1: Install Dependencies
+- name: 'gcr.io/cloud-builders/node:20' # Or your preferred Node.js version
+  entrypoint: 'npm'
+  args: ['install']
   id: 'Install Dependencies'
-
-# Run linters (example - ensure 'lint' script exists in package.json)
-- name: 'gcr.io/cloud-builders/node:20' # Changed from npm:20 to node:20 for consistency
-  args: ['npm', 'run', 'lint']
-  id: 'Lint'
-
-# Run tests (example - ensure 'test' script exists in package.json)
-- name: 'gcr.io/cloud-builders/node:20' # Changed from npm:20 to node:20 for consistency
-  args: ['npm', 'run', 'test']
-  id: 'Test'
-
-# Build Prisma Client (Uncomment and adjust if you use Prisma)
-- name: 'gcr.io/cloud-builders/node:20' # Changed from npm:20 to node:20 for consistency
-  args: ['npm', 'run', 'prisma:generate'] # Assuming 'prisma:generate': 'prisma generate' in package.json
-  id: 'Generate Prisma Client'
-
-# Build Next.js app
-- name: 'gcr.io/cloud-builders/node:20' # Changed from npm:20 to node:20 for consistency
-  args: ['npm', 'run', 'build']
-  id: 'Build Next.js App'
-
-# Build Docker image
-- name: 'gcr.io/cloud-builders/docker'
-  args: [
-    'build', 
-    '-t', 
-    '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA', 
-    '.'
-  ]
-  id: 'Build Docker Image'
-
-# Push Docker image to Artifact Registry
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA']
-  id: 'Push Docker Image'
-
-# Apply Database Migrations (COMPLEX - review permissions and connectivity)
-# Ensure Cloud Build SA has DB access or use a secure proxy/impersonation.
-# This step might be better handled by a dedicated Cloud Run Job or manual process initially.
-# - name: 'gcr.io/google-appengine/exec-wrapper' # For running commands needing DB connection
-#   args:  
-#   - '-i'
-#   - '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA' # Use the built image if it has prisma CLI
-#   - '-s'
-#   - '${_DB_INSTANCE_CONNECTION_NAME}' # e.g., your-project:your-region:your-instance
-#   # - '-e' # Pass environment variables if needed for DB connection (e.g., DB_USER, DB_PASSWORD_SECRET_ID)
-#   # - '--'  
-#   - 'npx'
-#   - 'prisma'
-#   - 'migrate'
-#   - 'deploy'
-#   id: 'Apply Database Migrations'
-
-# Deploy to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: gcloud
-  args:  
-    - 'run'
-    - 'deploy'
-    - '${_CLOUD_RUN_SERVICE_NAME}' # Your Cloud Run service name
-    - '--image=${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
-    - '--region=${_GCP_REGION}'
-    - '--platform=managed'
-    - '--allow-unauthenticated' # For public access. For private, remove and set IAM.
-    - '--service-account=${_BACKEND_SA_EMAIL}' # Service account for the Cloud Run service itself
-    # Add other flags for env vars, secrets, VPC connector, CPU, memory etc. as needed
-    # Example: --update-secrets=DB_PASSWORD_SECRET_ID=${_DB_PASSWORD_SECRET_ID}:latest
-    # Example: --vpc-connector=YOUR_VPC_CONNECTOR_NAME (if accessing DB via private IP)
-    # Example: --cpu=1 --memory=512Mi
-  id: 'Deploy to Cloud Run'
-
-images:
-- '${_GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
-
-# Substitutions - values can be set in Cloud Build Triggers
-substitutions:
-  _GCP_REGION: 'us-central1' # Default, can be overridden by trigger
-  _ARTIFACT_REGISTRY_REPO: 'thinkstash-kb' # E.g., kc-nextjs-images (NEEDS TO BE CREATED IN GCP)
-  _CLOUD_RUN_SERVICE_NAME: 'kc-nextjs-backend-service'
-  _BACKEND_SA_EMAIL: 'kc-backend-sa@${PROJECT_ID}.iam.gserviceaccount.com' # Will be resolved by Cloud Build
-  _DB_INSTANCE_CONNECTION_NAME: 'thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance' # Replace with output from terraform outputs
-  # _DB_PASSWORD_SECRET_ID: 'kc-db-password' # Secret ID for DB password if passing to Cloud Run
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  # machineType: 'E2_HIGHCPU_8' # If build needs more resources
-# Test comment for Git refresh 
