@@ -1,7 +1,8 @@
 import { GET, POST } from '@/app/api/folders/route'; // Import the handler
 import { getCurrentUserId } from '@/lib/sessionUtils'; // Import session util to mock
+import { Prisma } from '@prisma/client'; // Import Prisma namespace
 // PrismaClient and jest-mock-extended types are not needed here if mock is global
-// import { Prisma, PrismaClient } from '@prisma/client';
+// import { PrismaClient } from '@prisma/client';
 // import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
 
 // --- In-File Prisma Mock REMOVED --- 

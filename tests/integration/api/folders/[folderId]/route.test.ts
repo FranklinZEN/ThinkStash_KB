@@ -1,8 +1,9 @@
 import { PUT, DELETE } from '@/app/api/folders/[folderId]/route'; // Import handlers
 import { getCurrentUserId } from '@/lib/sessionUtils';
 import { NextRequest } from 'next/server'; // Import NextRequest
+import { Prisma } from '@prisma/client'; // Import Prisma namespace
 // PrismaClient and jest-mock-extended types are not needed here if mock is global
-// import { Prisma, PrismaClient } from '@prisma/client';
+// import { PrismaClient } from '@prisma/client';
 // import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended'; 
 
 // --- In-File Prisma Mock REMOVED --- 
