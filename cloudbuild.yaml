@@ -19,5 +19,12 @@ steps:
   id: 'Test'
   waitFor: ['Lint'] # Run after Linting
 
+# Step 4: Build Prisma Client
+- name: 'node:20-slim' # Using official Node.js 20 slim image
+  entrypoint: 'npm'
+  args: ['run', 'prisma:generate'] # Assumes 'prisma:generate': 'prisma generate' in package.json
+  id: 'Build Prisma Client'
+  waitFor: ['Test'] # Run after Test
+
 options:
   logging: CLOUD_LOGGING_ONLY
