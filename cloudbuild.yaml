@@ -33,5 +33,16 @@ steps:
   id: 'Build Next.js app'
   waitFor: ['Build Prisma Client']
 
+# Step 6: Build Docker image
+- name: 'gcr.io/cloud-builders/docker'
+  args: [
+    'build',
+    '-t',
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+    '.'
+  ]
+  id: 'Build Docker image'
+  waitFor: ['Build Next.js app']
+
 options:
   logging: CLOUD_LOGGING_ONLY
