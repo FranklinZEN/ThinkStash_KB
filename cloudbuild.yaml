@@ -50,5 +50,35 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
+# Step 8: Apply Database Migrations
+- name: 'gcr.io/google-appengine/exec-wrapper'
+  args: [
+    '-i',
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+    '-s',
+    '${_DB_INSTANCE_CONNECTION_NAME}',
+    '--',
+    'npx', 'prisma', 'migrate', 'deploy'
+  ]
+  id: 'Apply Database Migrations'
+  waitFor: ['Push Docker image']
+
+# Step 9: Deploy to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args: [
+    'run',
+    'deploy',
+    '${_CLOUD_RUN_SERVICE_NAME}',
+    '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+    '--region=${_GCP_REGION}',
+    '--platform=managed',
+    '--allow-unauthenticated',
+    '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    # Add other flags as needed: --vpc-connector, --env-vars-file, etc.
+  ]
+  id: 'Deploy to Cloud Run'
+  waitFor: ['Apply Database Migrations']
+
 options:
   logging: CLOUD_LOGGING_ONLY
