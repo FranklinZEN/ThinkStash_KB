@@ -93,4 +93,5 @@ steps:
   waitFor: ['Apply Database Migrations']
 
 options:
-  logging: CLOUD_LOGGING_ONLY 
+  logging: CLOUD_LOGGING_ONLY
+# Forced update comment - attempt 2 
