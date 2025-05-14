@@ -7,9 +7,9 @@
     "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "cross-env ESLINT_USE_FLAT_CONFIG=true eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
-    "test": "jest && jest --config jest.config.backend.js",
+    "test": "jest && cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.backend.js",
     "test:fe": "npx jest --watch",
-    "test:be": "npx jest --config jest.config.backend.js --watch",
+    "test:be": "cross-env NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.backend.js --watch",
     "prepare": "husky"
   },
   "dependencies": {
