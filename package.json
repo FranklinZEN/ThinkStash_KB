@@ -10,6 +10,7 @@
     "test": "jest && cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.backend.js",
     "test:fe": "npx jest --watch",
     "test:be": "cross-env NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.backend.js --watch",
+    "prisma:generate": "prisma generate",
     "prepare": "husky"
   },
   "dependencies": {
