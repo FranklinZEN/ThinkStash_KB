@@ -12,5 +12,12 @@ steps:
   id: 'Lint'
   waitFor: ['Install Dependencies'] # Optional but good practice
 
+# Step 3: Test
+- name: 'gcr.io/cloud-builders/npm'
+  entrypoint: 'npm'
+  args: ['run', 'test']
+  id: 'Test'
+  waitFor: ['Lint'] # Run after Linting
+
 options:
   logging: CLOUD_LOGGING_ONLY
