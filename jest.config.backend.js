@@ -1,4 +1,4 @@
-export default {
+const backendJestConfig = {
   // preset: 'ts-jest', // We'll define the transform directly to set useESM
   testEnvironment: 'node', // Specify Node.js environment
   // Automatically clear mock calls and instances between every test
@@ -40,4 +40,6 @@ export default {
       },
     ],
   },
-}; 
+};
+
+export default backendJestConfig; 
