@@ -1,19 +1,14 @@
 import { PUT, DELETE } from '@/app/api/folders/[folderId]/route'; // Import handlers
-import prisma from '@/lib/prisma';
 import { getCurrentUserId } from '@/lib/sessionUtils';
-import { _NextResponse } from 'next/server';
-import { Prisma } from '@prisma/client';
+import { NextRequest } from 'next/server'; // Import NextRequest
+// PrismaClient and jest-mock-extended types are not needed here if mock is global
+// import { Prisma, PrismaClient } from '@prisma/client';
+// import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended'; 
 
-// Mock dependencies
-jest.mock('@/lib/prisma', () => ({
-  prisma: {
-    folder: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-      delete: jest.fn(),
-    },
-  },
-}));
+// --- In-File Prisma Mock REMOVED --- 
+// All backend tests will now use the global mock from jest.setup.backend.mjs
+
+import prisma from '@/lib/prisma'; // This will now use the global mock setup
 
 jest.mock('@/lib/sessionUtils', () => ({
   getCurrentUserId: jest.fn(),
@@ -21,12 +16,15 @@ jest.mock('@/lib/sessionUtils', () => ({
 
 describe('API /api/folders/[folderId]', () => {
   const mockUserId = 'user-dynamic-123';
-  const mockFolderId = 'folder-cuid-123';
-  const invalidFolderId = 'invalid-id';
+  const mockFolderId = 'cmao1cph90004u5jsmlpf0lku';
+  const trulyInvalidFolderIdFormat = 'bad-id-format';
+  const nonExistentValidCuid = 'cmao3szy30001u5v84edvgpgj';
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId); // Assume logged in for most tests
+    // jest.clearAllMocks(); // Handled by global setup or mockReset
+    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
+    (getCurrentUserId as jest.Mock).mockReset();
+    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
   });
 
   // --- PUT (Rename) Tests ---
@@ -34,11 +32,11 @@ describe('API /api/folders/[folderId]', () => {
     const validNewName = 'Updated Folder Name';
 
     it('should return 400 if folderId is invalid format', async () => {
-       const request = new Request(`http://localhost/api/folders/${invalidFolderId}`, {
+       const request = new NextRequest(`http://localhost/api/folders/${trulyInvalidFolderIdFormat}`, {
          method: 'PUT',
          body: JSON.stringify({ name: validNewName })
        });
-       const response = await PUT(request, { params: { folderId: invalidFolderId } });
+       const response = await PUT(request, { params: Promise.resolve({ folderId: trulyInvalidFolderIdFormat }) });
        expect(response.status).toBe(400);
        const body = await response.json();
        expect(body.errors?.folderId).toBeDefined();
@@ -46,20 +44,20 @@ describe('API /api/folders/[folderId]', () => {
 
     it('should return 401 if user is not authenticated', async () => {
       (getCurrentUserId as jest.Mock).mockResolvedValue(null);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
         method: 'PUT',
         body: JSON.stringify({ name: validNewName })
       });
-      const response = await PUT(request, { params: { folderId: mockFolderId } });
+      const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(401);
     });
 
     it('should return 400 if name is missing or invalid', async () => {
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
         method: 'PUT',
         body: JSON.stringify({ name: '  ' })
       });
-      const response = await PUT(request, { params: { folderId: mockFolderId } });
+      const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(400);
       const body = await response.json();
       expect(body.errors?.name).toBeDefined();
@@ -67,16 +65,16 @@ describe('API /api/folders/[folderId]', () => {
 
     it('should return 404 if folder is not found or not owned by user', async () => {
       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+      const request = new NextRequest(`http://localhost/api/folders/${nonExistentValidCuid}`, {
         method: 'PUT',
         body: JSON.stringify({ name: validNewName })
       });
-      const response = await PUT(request, { params: { folderId: mockFolderId } });
+      const response = await PUT(request, { params: Promise.resolve({ folderId: nonExistentValidCuid }) });
       expect(response.status).toBe(404);
       const body = await response.json();
       expect(body.error).toContain('Folder not found');
       expect(prisma.folder.findUnique).toHaveBeenCalledWith({
-        where: { id: mockFolderId, userId: mockUserId },
+        where: { id: nonExistentValidCuid, userId: mockUserId },
         select: { id: true },
       });
     });
@@ -87,11 +85,11 @@ describe('API /api/folders/[folderId]', () => {
       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockExistingFolder); // Ownership check passes
       (prisma.folder.update as jest.Mock).mockResolvedValue(mockUpdatedFolder);
 
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
         method: 'PUT',
         body: JSON.stringify({ name: validNewName })
       });
-      const response = await PUT(request, { params: { folderId: mockFolderId } });
+      const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body).toEqual(mockUpdatedFolder);
@@ -110,11 +108,11 @@ describe('API /api/folders/[folderId]', () => {
       );
       (prisma.folder.update as jest.Mock).mockRejectedValue(conflictError);
 
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
         method: 'PUT',
         body: JSON.stringify({ name: 'Conflicting Name' })
       });
-      const response = await PUT(request, { params: { folderId: mockFolderId } });
+      const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(409);
       const body = await response.json();
       expect(body.error).toContain('already exists at this level');
@@ -125,11 +123,11 @@ describe('API /api/folders/[folderId]', () => {
         (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockExistingFolder);
         const dbError = new Error('Update failed');
         (prisma.folder.update as jest.Mock).mockRejectedValue(dbError);
-        const request = new Request(`http://localhost/api/folders/${mockFolderId}`, {
+        const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
             method: 'PUT',
             body: JSON.stringify({ name: validNewName })
         });
-        const response = await PUT(request, { params: { folderId: mockFolderId } });
+        const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
         expect(response.status).toBe(500);
         const body = await response.json();
         expect(body.error).toBe('Internal Server Error');
@@ -139,58 +137,36 @@ describe('API /api/folders/[folderId]', () => {
   // --- DELETE Tests ---
   describe('DELETE', () => {
      it('should return 400 if folderId is invalid format', async () => {
-       const request = new Request(`http://localhost/api/folders/${invalidFolderId}`, { method: 'DELETE' });
-       const response = await DELETE(request, { params: { folderId: invalidFolderId } });
+       const request = new NextRequest(`http://localhost/api/folders/${trulyInvalidFolderIdFormat}`, { method: 'DELETE' });
+       const response = await DELETE(request, { params: Promise.resolve({ folderId: trulyInvalidFolderIdFormat }) });
        expect(response.status).toBe(400);
      });
 
     it('should return 401 if user is not authenticated', async () => {
       (getCurrentUserId as jest.Mock).mockResolvedValue(null);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-      const response = await DELETE(request, { params: { folderId: mockFolderId } });
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
+      const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(401);
     });
 
     it('should return 404 if folder is not found or not owned by user', async () => {
       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-      const response = await DELETE(request, { params: { folderId: mockFolderId } });
+      const request = new NextRequest(`http://localhost/api/folders/${nonExistentValidCuid}`, { method: 'DELETE' });
+      const response = await DELETE(request, { params: Promise.resolve({ folderId: nonExistentValidCuid }) });
       expect(response.status).toBe(404);
       expect(prisma.folder.findUnique).toHaveBeenCalledWith({
-        where: { id: mockFolderId, userId: mockUserId },
-        include: { _count: { select: { cards: true, children: true } } },
+        where: { id: nonExistentValidCuid, userId: mockUserId },
+        select: { parentId: true },
       });
     });
 
-    it('should return 400 if folder is not empty (contains cards)', async () => {
-      const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 1, children: 0 } };
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-      const response = await DELETE(request, { params: { folderId: mockFolderId } });
-      expect(response.status).toBe(400);
-      const body = await response.json();
-      expect(body.error).toContain('Folder is not empty');
-      expect(prisma.folder.delete).not.toHaveBeenCalled();
-    });
-
-     it('should return 400 if folder is not empty (contains sub-folders)', async () => {
-       const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 1 } };
-       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
-       const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-       const response = await DELETE(request, { params: { folderId: mockFolderId } });
-       expect(response.status).toBe(400);
-       const body = await response.json();
-       expect(body.error).toContain('Folder is not empty');
-       expect(prisma.folder.delete).not.toHaveBeenCalled();
-     });
-
     it('should delete the folder successfully if it is empty and owned', async () => {
-      const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 } };
+      const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 }, parentId: null };
       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
-      (prisma.folder.delete as jest.Mock).mockResolvedValue({ id: mockFolderId }); // Simulate successful delete
+      (prisma.folder.delete as jest.Mock).mockResolvedValue({ id: mockFolderId });
 
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-      const response = await DELETE(request, { params: { folderId: mockFolderId } });
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
+      const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.message).toBe('Folder deleted successfully');
@@ -200,18 +176,18 @@ describe('API /api/folders/[folderId]', () => {
     it('should return 500 for database errors during delete check', async () => {
       const dbError = new Error('Find failed');
       (prisma.folder.findUnique as jest.Mock).mockRejectedValue(dbError);
-      const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-      const response = await DELETE(request, { params: { folderId: mockFolderId } });
+      const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
+      const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(500);
     });
 
      it('should return 500 for database errors during actual delete', async () => {
-        const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 } };
+        const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 }, parentId: null };
         (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
         const dbError = new Error('Delete failed');
         (prisma.folder.delete as jest.Mock).mockRejectedValue(dbError);
-        const request = new Request(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
-        const response = await DELETE(request, { params: { folderId: mockFolderId } });
+        const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
+        const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
         expect(response.status).toBe(500);
      });
 

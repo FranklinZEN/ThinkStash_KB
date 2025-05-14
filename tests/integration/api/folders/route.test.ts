@@ -1,21 +1,13 @@
-import { GET } from '@/app/api/folders/route'; // Import the handler
-import prisma from '@/lib/prisma'; // Import prisma to mock
+import { GET, POST } from '@/app/api/folders/route'; // Import the handler
 import { getCurrentUserId } from '@/lib/sessionUtils'; // Import session util to mock
-import { _NextResponse } from 'next/server';
-import { _NextRequest } from 'next/server';
-import { POST } from '@/app/api/folders/route'; // Import POST handler
-import { Prisma } from '@prisma/client'; // Import Prisma for error codes
+// PrismaClient and jest-mock-extended types are not needed here if mock is global
+// import { Prisma, PrismaClient } from '@prisma/client';
+// import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
 
-// Mock dependencies
-jest.mock('@/lib/prisma', () => ({
-  prisma: {
-    folder: {
-      findMany: jest.fn(),
-      findUnique: jest.fn(), // Mock for parent check
-      create: jest.fn(),     // Mock for create
-    },
-  },
-}));
+// --- In-File Prisma Mock REMOVED --- 
+// All backend tests will now use the global mock from jest.setup.backend.mjs
+
+import prisma from '@/lib/prisma'; // This will now use the global mock setup
 
 jest.mock('@/lib/sessionUtils', () => ({
   getCurrentUserId: jest.fn(),
@@ -26,8 +18,9 @@ jest.mock('@/lib/sessionUtils', () => ({
 
 describe('GET /api/folders', () => {
   beforeEach(() => {
-    // Reset mocks before each test
-    jest.clearAllMocks();
+    // jest.clearAllMocks(); // Handled by global setup or mockReset
+    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
+    (getCurrentUserId as jest.Mock).mockReset(); 
   });
 
   it('should return 401 if user is not authenticated', async () => {
@@ -46,7 +39,8 @@ describe('GET /api/folders', () => {
     (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
     (prisma.folder.findMany as jest.Mock).mockResolvedValue([]);
 
-    const response = await GET(new Request('http://localhost/api/folders'));
+    const request = new Request('http://localhost/api/folders') // Note: Test uses new Request, route expects Request
+    const response = await GET(request);
 
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -58,6 +52,11 @@ describe('GET /api/folders', () => {
         name: true,
         parentId: true,
         updatedAt: true,
+        _count: { // Ensure this matches the route handler's select
+          select: {
+            cards: true,
+          },
+        },
       },
       orderBy: {
         name: 'asc',
@@ -101,7 +100,9 @@ describe('GET /api/folders', () => {
 
 describe('API /api/folders', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    // jest.clearAllMocks(); // Handled by global setup or mockReset
+    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
+    (getCurrentUserId as jest.Mock).mockReset();
   });
 
   // --- POST Tests ---
@@ -144,9 +145,9 @@ describe('API /api/folders', () => {
     });
 
     it('should return 400 if parent folder is not found or not owned by user', async () => {
-      const parentId = 'non-existent-parent-id';
+      const parentId = 'cmao3szy30001u5v84edvgpgj';
       (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null); // Simulate parent not found
+      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null);
 
       const request = new Request('http://localhost/api/folders', {
         method: 'POST',
@@ -182,13 +183,13 @@ describe('API /api/folders', () => {
     });
 
     it('should create a subfolder successfully', async () => {
-      const parentId = 'parent-folder-id';
+      const parentId = 'cmao1cph90004u5jsmlpf0lku';
       const folderName = 'My Subfolder';
       const mockParentFolder = { id: parentId, userId: mockUserId };
-      const mockCreatedFolder = { id: 'new-subfolder-id', name: folderName, parentId: parentId, userId: mockUserId };
+      const mockCreatedFolder = { id: 'clxpsu3na000008k1g2h3i4j5', name: folderName, parentId: parentId, userId: mockUserId };
 
       (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockParentFolder); // Parent check passes
+      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockParentFolder);
       (prisma.folder.create as jest.Mock).mockResolvedValue(mockCreatedFolder);
 
       const request = new Request('http://localhost/api/folders', {
