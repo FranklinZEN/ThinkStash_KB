@@ -5,5 +5,12 @@ steps:
   args: ['install']
   id: 'Install Dependencies'
 
+# Step 2: Lint
+- name: 'gcr.io/cloud-builders/npm' # Uses the same environment
+  entrypoint: 'npm'
+  args: ['run', 'lint']
+  id: 'Lint'
+  waitFor: ['Install Dependencies'] # Optional but good practice
+
 options:
   logging: CLOUD_LOGGING_ONLY
