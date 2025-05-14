@@ -64,12 +64,12 @@ steps:
   env:
     - 'DB_HOST=localhost'
     - 'DB_PORT=5432'
+    - 'DATABASE_URL=postgresql://$(SECRET_DB_USER):$(SECRET_DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(SECRET_DB_NAME)?schema=public'
   args: [
     '-i',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
     '-s',
     '${_DB_INSTANCE_CONNECTION_NAME}',
-    '-e', 'DATABASE_URL=postgresql://$(SECRET_DB_USER):$(SECRET_DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(SECRET_DB_NAME)?schema=public',
     '--',
     'npx', 'prisma', 'migrate', 'deploy'
   ]
