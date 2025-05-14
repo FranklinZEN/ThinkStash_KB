@@ -61,6 +61,7 @@ steps:
   waitFor: ['Build Docker image']
 
 # Step 8: Apply Database Migrations
+# Corrected structure for secrets
 - name: 'gcr.io/google-appengine/exec-wrapper'
   env:
     - 'DB_HOST=localhost' # The proxy listens on localhost
