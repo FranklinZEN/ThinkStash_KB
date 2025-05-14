@@ -8,7 +8,7 @@ import { getCurrentUserId } from '@/lib/sessionUtils';
 
 // Schema for validating the request body
 const UpdateFolderSchema = z.object({
-  name: z.string().min(1, { message: 'Folder name cannot be empty' }).trim(),
+  name: z.string().trim().min(1, { message: 'Folder name cannot be empty' }),
 });
 
 // Schema for validating route parameters
@@ -225,7 +225,10 @@ export async function PUT(
     const validation = UpdateFolderSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json(
-        { errors: validation.error.format() },
+        {
+          error: 'Validation failed',
+          details: validation.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }

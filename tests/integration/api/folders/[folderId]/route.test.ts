@@ -54,6 +54,10 @@ describe('API /api/folders/[folderId]', () => {
     });
 
     it('should return 400 if name is missing or invalid', async () => {
+      // Ensure the folder is found for this test, so name validation is hit
+      const mockExistingFolder = { id: mockFolderId, userId: mockUserId };
+      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockExistingFolder);
+
       const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, {
         method: 'PUT',
         body: JSON.stringify({ name: '  ' })
@@ -61,7 +65,7 @@ describe('API /api/folders/[folderId]', () => {
       const response = await PUT(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(400);
       const body = await response.json();
-      expect(body.errors?.name).toBeDefined();
+      expect(body.details?.name).toBeDefined(); // Updated to check body.details
     });
 
     it('should return 404 if folder is not found or not owned by user', async () => {
