@@ -1,3 +1,4 @@
+#This is a forced update comment
 availableSecrets:
   secretManager:
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
