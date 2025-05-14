@@ -38,7 +38,7 @@ steps:
   args: [
     'build',
     '-t',
-    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+    'us-central1-docker.pkg.dev/thinkstash-knowledge-base/thinkstash-kb/kc-nextjs-backend:$COMMIT_SHA', # TEMPORARILY HARDCODED
     '.'
   ]
   id: 'Build Docker image'
