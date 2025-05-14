@@ -6,7 +6,7 @@ import { Prisma } from '@prisma/client';
 
 // Schema for validating the request body
 const CreateFolderSchema = z.object({
-  name: z.string().min(1, { message: 'Folder name cannot be empty' }).trim(),
+  name: z.string().trim().min(1, { message: 'Folder name cannot be empty' }),
   parentId: z
     .string()
     .cuid({ message: 'Invalid parent folder ID' })
@@ -73,8 +73,12 @@ export async function POST(request: Request) {
     const validation = CreateFolderSchema.safeParse(body);
 
     if (!validation.success) {
+      // console.error("Zod validation failed:", validation.error.flatten()); // For more detailed server log
       return NextResponse.json(
-        { errors: validation.error.format() },
+        {
+          error: 'Validation failed',
+          details: validation.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
