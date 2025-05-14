@@ -13,7 +13,7 @@ const backendJestConfig = {
   },
 
   // A list of paths to modules that run some code to configure or set up the testing framework before each test
-  setupFilesAfterEnv: ['./jest.setup.backend.js'],
+  setupFilesAfterEnv: ['./jest.setup.backend.mjs'],
 
   // The glob patterns Jest uses to detect test files (ignore frontend tests)
   testMatch: [
