@@ -209,3 +209,4 @@ Desktop.ini
 # *.pdf # If PDFs are large assets not meant for versioning
 # *.mp4
 # *.mov 
+node_modules
