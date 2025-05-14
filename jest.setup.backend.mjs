@@ -4,10 +4,14 @@ import { mockDeep, mockReset } from 'jest-mock-extended';
 
 const prismaMockInstance = mockDeep();
 
-// Mock the $transaction method on the initial instance
+// Initial mock of $transaction - might be overwritten by beforeEach, but good to have a base
 prismaMockInstance.$transaction.mockImplementation(async (callback) => {
   return await callback(prismaMockInstance);
 });
+
+// Initial setup of model properties. These will be replaced in beforeEach.
+prismaMockInstance.folder = mockDeep();
+prismaMockInstance.knowledgeCard = mockDeep();
 
 jest.mock('@/lib/prisma', () => ({
   __esModule: true, // Important for ESM mocks
@@ -18,9 +22,16 @@ jest.mock('@/lib/prisma', () => ({
 }));
 
 beforeEach(() => {
-  mockReset(prismaMockInstance); // Reset the entire deep mock
+  mockReset(prismaMockInstance); // Reset the entire deep mock instance first.
 
-  // Re-apply $transaction mock as mockReset might clear it (or if it was on prototype)
+  // Explicitly re-assign model properties to be new deep mocks after reset.
+  prismaMockInstance.folder = mockDeep();
+  prismaMockInstance.knowledgeCard = mockDeep();
+  // Add other models as needed, e.g.:
+  // prismaMockInstance.user = mockDeep();
+  // prismaMockInstance.tag = mockDeep();
+
+  // Re-apply $transaction mock as it would have been cleared by mockReset on parent
   prismaMockInstance.$transaction.mockImplementation(async (callback) => {
     return await callback(prismaMockInstance);
   });
