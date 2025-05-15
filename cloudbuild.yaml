@@ -68,14 +68,13 @@ steps:
     - 'DB_USER'
     - 'DB_PASSWORD'
     - 'DB_NAME'
+  env: # Environment variables for the exec-wrapper step itself
+    - 'CLOUD_SQL_PROXY_VERBOSE=true'
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
     - '-s'
     - '${_DB_INSTANCE_CONNECTION_NAME}'
-    # Add verbose logging for the Cloud SQL Proxy
-    - '-c' 
-    - '-verbose=true'  # Argument for the Cloud SQL Proxy
     # Explicitly pass these env vars from exec-wrapper's env to the command's env
     - '-e' 
     - 'DB_USER'
