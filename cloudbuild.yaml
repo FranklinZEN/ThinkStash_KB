@@ -44,7 +44,7 @@ steps:
   waitFor: ['Build Prisma Client']
 
 # Step 6: Build Docker image
-- name: 'gcr.io/cloud-builders/docker:20.10.17'
+- name: 'gcr.io/cloud-builders/docker'
   args: [
     'build',
     '-t',
@@ -55,7 +55,7 @@ steps:
   waitFor: ['Build Next.js app']
 
 # Step 7: Push Docker image to Artifact Registry
-- name: 'gcr.io/cloud-builders/docker:20.10.17'
+- name: 'gcr.io/cloud-builders/docker'
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA']
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
