@@ -64,20 +64,25 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations'
   waitFor: ['Push Docker image']
-  secretEnv:
+  secretEnv: # These secrets will be available as environment variables in the shell
     - 'DB_USER_FROM_SECRET'
     - 'DB_PASSWORD_FROM_SECRET'
     - 'DB_NAME_FROM_SECRET'
-  env:
-    - 'DATABASE_URL=postgresql://$(DB_USER_FROM_SECRET):$(DB_PASSWORD_FROM_SECRET)@localhost:5432/$(DB_NAME_FROM_SECRET)?schema=public'
   args: [
-    '-i', 
+    '-i', # The Docker image containing your application and Prisma CLI
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
-    '-s', 
+    '-s', # The Cloud SQL instance connection name
     '${_DB_INSTANCE_CONNECTION_NAME}',
-    '-e', 'DATABASE_URL',
-    '--', 
-    'sh', '-c', 'sleep 10 && npx prisma migrate deploy'
+    # We are no longer passing '-e', 'DATABASE_URL' from exec-wrapper's own environment.
+    # Instead, we define and export it directly in the shell command below.
+    '--', # Separator indicating the start of the command to run
+    'sh', '-c', # Run the following string as a shell command
+    # Construct the DATABASE_URL using the secrets, then run migrations:
+    'export DATABASE_URL="postgresql://${DB_USER_FROM_SECRET}:${DB_PASSWORD_FROM_SECRET}@localhost:5432/${DB_NAME_FROM_SECRET}?schema=public"; \
+     echo "Attempting to connect with DATABASE_URL (sensitive parts redacted for general log): postgresql://USER:PASSWORD@localhost:5432/DB_NAME?schema=public"; \
+     echo "Actual DB Name from secret for verification: ${DB_NAME_FROM_SECRET}"; \
+     sleep 15 && \
+     npx prisma migrate deploy'
   ]
 
 # Step 9: Deploy to Cloud Run
