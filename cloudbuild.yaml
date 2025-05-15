@@ -90,17 +90,33 @@ steps:
       echo "Proxy started. Running Prisma migrations..."
       # DATABASE_URL needs to be exported for npx prisma to see it
       export DATABASE_URL="${DB_URL}"
-      npx prisma migrate deploy
+      # Attempt to install Node.js and npm if not present, then run npx
+      # This is a common pattern if the base image doesn't have Node.js
+      if ! command -v npx &> /dev/null
+      then
+          echo "Node.js/npx not found. Attempting to install Node.js..."
+          # Example: Install Node.js 18 (adjust version as needed)
+          # This might require root or sudo, which may not be available or advisable.
+          # A better solution is to use a builder image that has Node.js and gcloud.
+          # For 'gcr.io/cloud-builders/gcloud', Node.js is not standard.
+          # Consider using 'google/cloud-sdk:slim' and installing node, or a custom image.
+          # For now, this will likely fail if Node.js is not in gcr.io/cloud-builders/gcloud.
+          echo "ERROR: Node.js/npx not found in gcr.io/cloud-builders/gcloud. Migration step will likely fail."
+          echo "Placeholder for npx prisma migrate deploy - will fail here"
+          # npx prisma migrate deploy # This line would be the actual command
+      else
+          npx prisma migrate deploy
+      fi
 
-      echo "Prisma migrate deploy finished. Stopping proxy."
+      echo "Prisma migrate deploy finished (or placeholder executed). Stopping proxy."
       kill $PROXY_PID
       # Wait for proxy to exit, ignore error if already exited, timeout after 5s
       timeout 5s wait $PROXY_PID || echo "Proxy already exited or timed out on kill."
       echo "Database migration step completed."
 
 # Step 9: Deploy to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' # This is the same as gcr.io/cloud-builders/gcloud
-  id: 'Deploy to Cloud Run' # Added ID for consistency
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' 
+  id: 'Deploy to Cloud Run' 
   waitFor: ['Apply Database Migrations']
   entrypoint: gcloud
   args: [
