@@ -70,7 +70,6 @@ steps:
     - '-c'
     - |-
         echo "--- DIAGNOSTIC STEP: Checking Environment Variables ---"
-        # Escaped $ with $$ so Cloud Build passes ${VAR} to the shell for environment variable expansion
         echo "Value of DB_USER: [$${DB_USER}]"
         echo "Value of DB_PASSWORD: [$${DB_PASSWORD}]"
         echo "Value of DB_NAME: [$${DB_NAME}]"
