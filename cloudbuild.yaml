@@ -1,14 +1,12 @@
 # Top-level availableSecrets defines how secrets map to ENV VARS for steps.
-# These ENV VARS (DB_USER, DB_PASSWORD) will be available to all steps.
 availableSecrets:
   secretManager:
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
       env: 'DB_USER' # This ENV VAR will hold the user secret
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
       env: 'DB_PASSWORD' # This ENV VAR will hold the password secret
-    # If you were using kc-db-name dynamically, you would add:
-    # - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
-    #   env: 'DB_NAME'
+    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
+      env: 'DB_NAME' # This ENV VAR will hold the database name secret (value: thinkstash)
 
 steps:
 # Step 1: Install Dependencies
@@ -62,16 +60,14 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
-# Step 8: Apply Database Migrations (More Debugging)
+# Step 8: Apply Database Migrations (Using Dynamic DB Name)
 - name: 'gcr.io/google-appengine/exec-wrapper'
-  id: 'Apply Database Migrations - More Debugging'
+  id: 'Apply Database Migrations - Dynamic DB Name' # Updated ID for clarity
   waitFor: ['Push Docker image']
-  # This secretEnv tells exec-wrapper to make these specific environment variables
-  # (which are populated by the top-level availableSecrets) available inside the container it runs.
   secretEnv:
     - 'DB_USER'
     - 'DB_PASSWORD'
-    # If you were using kc-db-name dynamically, you would add 'DB_NAME' here too.
+    - 'DB_NAME' # Include DB_NAME here
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
@@ -83,14 +79,12 @@ steps:
     - |-
         echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
         echo "DEBUG: Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
-        # These echos will now use the environment variable names (DB_USER, DB_PASSWORD)
-        # that are populated by availableSecrets and passed through by exec-wrapper's secretEnv.
         echo "DEBUG: Value of DB_USER from env before export: [$${DB_USER}]"
         echo "DEBUG: Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
+        echo "DEBUG: Value of DB_NAME from env before export: [$${DB_NAME}]" # Added debug for DB_NAME
 
-        # Using hardcoded 'thinkstash' for the database name as per current testing phase.
-        # If you use DB_NAME dynamically later (from secretEnv), change /thinkstash to /$${DB_NAME}
-        export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/thinkstash"
+        # Using dynamic DB_NAME from secret
+        export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"
         export DEBUG="prisma*"
 
         echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
@@ -101,7 +95,7 @@ steps:
         node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
         node -e "console.log('DB_USER_AS_SEEN_BY_NODE: ' + process.env.DB_USER);"
         node -e "console.log('DB_PASSWORD_AS_SEEN_BY_NODE: ' + process.env.DB_PASSWORD);"
-
+        node -e "console.log('DB_NAME_AS_SEEN_BY_NODE: ' + process.env.DB_NAME);" # Added debug for DB_NAME
 
         echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
         /bin/sleep 10
@@ -109,21 +103,22 @@ steps:
         echo "DEBUG: Running npx prisma migrate deploy..."
         npx prisma migrate deploy
 
-# Step 9: Deploy to Cloud Run (REMOVED)
-# - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-#   id: 'Deploy to Cloud Run'
-#   waitFor: ['Apply Database Migrations - More Debugging']
-#   entrypoint: gcloud
-#   args: [
-#     'run',
-#     'deploy',
-#     '${_CLOUD_RUN_SERVICE_NAME}',
-#     '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
-#     '--region=${_GCP_REGION}',
-#     '--platform=managed',
-#     '--allow-unauthenticated',
-#     '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-#   ]
+# Step 9: Deploy to Cloud Run (Re-included)
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Deploy to Cloud Run'
+  # Ensure waitFor points to the correct ID of the migrations step
+  waitFor: ['Apply Database Migrations - Dynamic DB Name']
+  entrypoint: gcloud
+  args: [
+    'run',
+    'deploy',
+    '${_CLOUD_RUN_SERVICE_NAME}',
+    '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+    '--region=${_GCP_REGION}',
+    '--platform=managed',
+    '--allow-unauthenticated',
+    '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+  ]
 
 # Ensure this options block is at the root level and uses standard spaces for indentation.
 options:
