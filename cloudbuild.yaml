@@ -73,7 +73,7 @@ steps:
     '${_DB_INSTANCE_CONNECTION_NAME}',
     '--',
     'sh', '-c',
-    'export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"; npx prisma migrate deploy'
+    'export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"; /bin/sleep 15; npx prisma migrate deploy'
   ]
 
 # Step 9: Deploy to Cloud Run
