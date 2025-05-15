@@ -1,13 +1,5 @@
-# Top-level availableSecrets defines how secrets map to ENV VARS for steps
-availableSecrets:
-  secretManager:
-    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
-      env: 'kc-db-user'
-    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
-      env: 'kc-db-password'
-    # If you re-introduce kc-db-name, uncomment its definition here and in Step 8's script
-    # - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
-    #   env: 'kc-db-name'
+# Top-level availableSecrets block has been removed.
+# Secrets are now defined directly in the step that needs them (Step 8).
 
 steps:
 # Step 1: Install Dependencies
@@ -65,35 +57,32 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
-  # NOTE: There is NO secretEnv block directly under this step.
-  # Environment variables kc-db-user and kc-db-password are populated by the top-level availableSecrets
-  # and passed into the exec-wrapper container using the -e flags in the args section below.
+  # Secrets are now defined directly for exec-wrapper, mapping environment variables
+  # inside the container to their Secret Manager paths.
+  secretEnv:
+    - 'DB_USER=projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest'
+    - 'DB_PASSWORD=projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest'
+    # If you were using kc-db-name dynamically, you would add:
+    # - 'DB_NAME=projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest'
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
     - '-s'
     - '${_DB_INSTANCE_CONNECTION_NAME}'
-    # Pass environment variables (populated by availableSecrets) into the exec-wrapper container
-    - '-e' # Flag to indicate passing an environment variable
-    - 'kc-db-user' # Name of the environment variable to pass from the build step's env
-    - '-e' # Flag to indicate passing an environment variable
-    - 'kc-db-password' # Name of the environment variable to pass from the build step's env
-    # If you were using kc-db-name dynamically, you would also add:
-    # - '-e'
-    # - 'kc-db-name'
     - '--'
     - 'sh'
     - '-c'
     - |-
         echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
         echo "DEBUG: Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
-        # These echos should now reflect the actual secret values if availableSecrets and -e flags work
-        echo "DEBUG: Value of kc-db-user from env before export: [$${kc-db-user}]"
-        echo "DEBUG: Value of kc-db-password from env before export: [$${kc-db-password}]"
+        # These echos will now use the new environment variable names (DB_USER, DB_PASSWORD)
+        # that are directly populated by exec-wrapper's secretEnv.
+        echo "DEBUG: Value of DB_USER from env before export: [$${DB_USER}]"
+        echo "DEBUG: Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
 
         # Using hardcoded 'thinkstash' for the database name as per current testing phase.
-        # If you use kc-db-name dynamically later, change /thinkstash to /$${kc-db-name}
-        export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"
+        # If you use DB_NAME dynamically later (from secretEnv), change /thinkstash to /$${DB_NAME}
+        export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/thinkstash"
         export DEBUG="prisma*"
 
         echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
@@ -102,6 +91,9 @@ steps:
         echo "DEBUG: Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
         node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE: ' + process.env.DATABASE_URL);"
         node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
+        node -e "console.log('DB_USER_AS_SEEN_BY_NODE: ' + process.env.DB_USER);"
+        node -e "console.log('DB_PASSWORD_AS_SEEN_BY_NODE: ' + process.env.DB_PASSWORD);"
+
 
         echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
         /bin/sleep 10
@@ -128,4 +120,3 @@ steps:
 # Ensure this options block is at the root level and uses standard spaces for indentation.
 options:
   logging: CLOUD_LOGGING_ONLY
-  
