@@ -65,7 +65,7 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
-  # The secretEnv block has been removed from this step.
+  # NOTE: There is NO secretEnv block directly under this step.
   # Environment variables kc-db-user and kc-db-password are populated by the top-level availableSecrets
   # and passed into the exec-wrapper container using the -e flags in the args section below.
   args:
