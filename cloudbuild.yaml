@@ -108,3 +108,24 @@ steps:
 
         echo "DEBUG: Running npx prisma migrate deploy..."
         npx prisma migrate deploy
+
+# Step 9: Deploy to Cloud Run (REMOVED)
+# - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+#   id: 'Deploy to Cloud Run'
+#   waitFor: ['Apply Database Migrations - More Debugging']
+#   entrypoint: gcloud
+#   args: [
+#     'run',
+#     'deploy',
+#     '${_CLOUD_RUN_SERVICE_NAME}',
+#     '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
+#     '--region=${_GCP_REGION}',
+#     '--platform=managed',
+#     '--allow-unauthenticated',
+#     '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+#   ]
+
+# Ensure this options block is at the root level and uses standard spaces for indentation.
+options:
+  logging: CLOUD_LOGGING_ONLY
+  
