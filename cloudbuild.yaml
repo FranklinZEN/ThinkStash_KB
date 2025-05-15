@@ -70,9 +70,9 @@ steps:
     - '-c'
     - |-
         echo "--- DIAGNOSTIC STEP: Checking Environment Variables ---"
-        echo "Value of DB_USER: [$${DB_USER}]"
-        echo "Value of DB_PASSWORD: [$${DB_PASSWORD}]"
-        echo "Value of DB_NAME: [$${DB_NAME}]"
+        echo "Value of DB_USER: [$${DB_USER}]" # This would be empty as DB_USER is not in secretEnv for THIS step
+        echo "Value of DB_PASSWORD: [$${DB_PASSWORD}]" # Ditto
+        echo "Value of DB_NAME: [$${DB_NAME}]" # Ditto
         echo "--- END DIAGNOSTIC STEP ---"
   # The DB_USER, DB_PASSWORD, DB_NAME env vars should be available here
   # if the top-level availableSecrets is working correctly.
@@ -80,7 +80,7 @@ steps:
 # Step 8: Apply Database Migrations (Using Dynamic DB Name)
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - Dynamic DB Name'
-  waitFor: ['Diagnose Secrets Availability'] # Wait for the diagnostic step
+  waitFor: ['Push Docker image'] # Changed from Diagnose Secrets Availability
   secretEnv:
     - 'DB_USER'
     - 'DB_PASSWORD'
@@ -93,31 +93,8 @@ steps:
     - '--'
     - 'sh'
     - '-c'
-    - |-
-        echo "DEBUG (Step 8): Cloud Build Step Started. Setting environment variables..."
-        echo "DEBUG (Step 8): Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
-        echo "DEBUG (Step 8): Value of DB_USER from env before export: [$${DB_USER}]"
-        echo "DEBUG (Step 8): Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
-        echo "DEBUG (Step 8): Value of DB_NAME from env before export: [$${DB_NAME}]"
-
-        export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"
-        export DEBUG="prisma*"
-
-        echo "DEBUG (Step 8): DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
-        /bin/sleep 5
-
-        echo "DEBUG (Step 8): Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
-        node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE (Step 8): ' + process.env.DATABASE_URL);"
-        node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE (Step 8): ' + process.env.DEBUG);"
-        node -e "console.log('DB_USER_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_USER);"
-        node -e "console.log('DB_PASSWORD_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_PASSWORD);"
-        node -e "console.log('DB_NAME_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_NAME);"
-
-        echo "DEBUG (Step 8): Node.js print attempt finished. Waiting another 10 seconds..."
-        /bin/sleep 10
-
-        echo "DEBUG (Step 8): Running npx prisma migrate deploy..."
-        npx prisma migrate deploy
+    # Single line command string. Dump all env vars first.
+    - 'echo "--- ALL ENV VARS IN SHELL (Step 8) ---"; env; echo "--- END ALL ENV VARS ---"; export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"; echo "DATABASE_URL set to: [$${DATABASE_URL}]"; /bin/sleep 15; npx prisma migrate deploy'
 
 # Step 9: Deploy to Cloud Run (Re-included)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
