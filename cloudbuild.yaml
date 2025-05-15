@@ -74,9 +74,9 @@ steps:
     - |
       set -e # Exit on error
       echo "Starting database migration step..."
-      # Construct DATABASE_URL using actual shell environment variables
-      DB_URL="postgresql://$DB_USER_FROM_SECRET:$DB_PASSWORD_FROM_SECRET@localhost:5432/$DB_NAME_FROM_SECRET?schema=public"
-      echo "Constructed DATABASE_URL (password redacted): postgresql://$DB_USER_FROM_SECRET:********@localhost:5432/$DB_NAME_FROM_SECRET?schema=public"
+      # Construct DATABASE_URL using robust shell environment variable syntax
+      DB_URL="postgresql://${DB_USER_FROM_SECRET}:${DB_PASSWORD_FROM_SECRET}@localhost:5432/${DB_NAME_FROM_SECRET}?schema=public"
+      echo "Constructed DATABASE_URL (password redacted): postgresql://${DB_USER_FROM_SECRET}:********@localhost:5432/${DB_NAME_FROM_SECRET}?schema=public"
 
       echo "Starting Cloud SQL Proxy in background..."
       # cloud_sql_proxy is available in gcr.io/cloud-builders/gcloud
@@ -90,11 +90,8 @@ steps:
       echo "Proxy started. Running Prisma migrations..."
       # DATABASE_URL needs to be exported for npx prisma to see it
       export DATABASE_URL="${DB_URL}"
-      # Attempt to install Node.js and npm if not present, then run npx
-      # This is a common pattern if the base image doesn't have Node.js
       if ! command -v npx &> /dev/null
       then
-          echo "Node.js/npx not found. Attempting to install Node.js..."
           echo "ERROR: Node.js/npx not found in gcr.io/cloud-builders/gcloud. Migration step will likely fail."
           echo "Placeholder for npx prisma migrate deploy - will fail here"
       else
