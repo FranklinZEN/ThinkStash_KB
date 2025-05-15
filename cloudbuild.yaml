@@ -74,9 +74,9 @@ steps:
     - |
       set -e # Exit on error
       echo "Starting database migration step..."
-      # Construct DATABASE_URL using environment variables populated by availableSecrets + secretEnv
-      DB_URL="postgresql://${DB_USER_FROM_SECRET}:${DB_PASSWORD_FROM_SECRET}@localhost:5432/${DB_NAME_FROM_SECRET}?schema=public"
-      echo "Constructed DATABASE_URL (password redacted): postgresql://${DB_USER_FROM_SECRET}:********@localhost:5432/${DB_NAME_FROM_SECRET}?schema=public"
+      # Construct DATABASE_URL using actual shell environment variables
+      DB_URL="postgresql://$DB_USER_FROM_SECRET:$DB_PASSWORD_FROM_SECRET@localhost:5432/$DB_NAME_FROM_SECRET?schema=public"
+      echo "Constructed DATABASE_URL (password redacted): postgresql://$DB_USER_FROM_SECRET:********@localhost:5432/$DB_NAME_FROM_SECRET?schema=public"
 
       echo "Starting Cloud SQL Proxy in background..."
       # cloud_sql_proxy is available in gcr.io/cloud-builders/gcloud
@@ -95,15 +95,8 @@ steps:
       if ! command -v npx &> /dev/null
       then
           echo "Node.js/npx not found. Attempting to install Node.js..."
-          # Example: Install Node.js 18 (adjust version as needed)
-          # This might require root or sudo, which may not be available or advisable.
-          # A better solution is to use a builder image that has Node.js and gcloud.
-          # For 'gcr.io/cloud-builders/gcloud', Node.js is not standard.
-          # Consider using 'google/cloud-sdk:slim' and installing node, or a custom image.
-          # For now, this will likely fail if Node.js is not in gcr.io/cloud-builders/gcloud.
           echo "ERROR: Node.js/npx not found in gcr.io/cloud-builders/gcloud. Migration step will likely fail."
           echo "Placeholder for npx prisma migrate deploy - will fail here"
-          # npx prisma migrate deploy # This line would be the actual command
       else
           npx prisma migrate deploy
       fi
