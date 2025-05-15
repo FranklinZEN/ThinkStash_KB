@@ -61,7 +61,7 @@ steps:
   waitFor: ['Build Docker image']
 
 # Step 8: Download Proxy, Start Proxy, Run Migrations, Kill Proxy
-- name: '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA' # Your app image
+- name: 'node:20'
   id: 'Run Migrations with Proxy'
   waitFor: ['Push Docker image'] # Depends on Step 7
   secretEnv:
@@ -76,12 +76,9 @@ steps:
 
       echo "Step 8: Preparing for database migration..."
 
-      # Install netcat if not present (Alpine Linux)
-      if ! nc -h > /dev/null 2>&1; then
-        echo "netcat (nc) not found, attempting to install netcat-openbsd..."
-        apk update && apk add --no-cache netcat-openbsd
-      fi
-      
+      echo "Installing psql and netcat (if needed, for Debian)..."
+      apt-get update && apt-get install -y postgresql-client netcat-traditional
+            
       # Define Cloud SQL Proxy version and download URL
       PROXY_VERSION="v2.10.0" # Specify a recent, stable version
       PROXY_ARCH="linux.amd64" # Assuming amd64 architecture
@@ -93,8 +90,6 @@ steps:
       chmod +x "$${PROXY_PATH}"
 
       echo "Starting Cloud SQL Proxy in background for instance: ${_DB_INSTANCE_CONNECTION_NAME}..."
-      # Note: _DB_INSTANCE_CONNECTION_NAME is a Cloud Build substitution, so it's used directly.
-      # The secrets DB_USER, DB_PASSWORD, DB_NAME are env vars, hence $${VAR} for shell expansion.
       "$${PROXY_PATH}" \
         "${_DB_INSTANCE_CONNECTION_NAME}" \
         --address=0.0.0.0 --port=5432 --structured-logs &
@@ -106,6 +101,11 @@ steps:
 
       echo "Attempting to check connectivity to localhost:5432 with nc..."
       nc -v -w 10 localhost 5432 < /dev/null && echo "nc: Connection to localhost:5432 succeeded." || (echo "nc: Connection to localhost:5432 FAILED. Exiting." && exit 1)
+
+      echo "Attempting to connect with psql..."
+      export PGPASSWORD="$${DB_PASSWORD}" # Set password for psql
+      psql -h localhost -p 5432 -U "$${DB_USER}" -d "$${DB_NAME}" -c "\dt" && echo "psql connection and command succeeded." || (echo "psql connection FAILED. Continuing to Prisma attempt..." && true) # Don't exit if psql fails, just note it
+      unset PGPASSWORD
 
       echo "Setting DATABASE_URL and running Prisma migrations..."
       export DEBUG="prisma*,engine"
