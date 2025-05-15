@@ -5,8 +5,7 @@ availableSecrets:
       env: 'kc-db-user'
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
       env: 'kc-db-password'
-    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
-      env: 'kc-db-name'
+    # Temporarily removed kc-db-name for testing
 
 steps:
 # Step 1: Install Dependencies
