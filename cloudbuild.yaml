@@ -65,9 +65,9 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
-  # We removed secretEnv here.
-  # The environment variables kc-db-user and kc-db-password (populated by top-level availableSecrets)
-  # will be passed into the container using the -e flags below.
+  # The secretEnv block has been removed from this step.
+  # Environment variables kc-db-user and kc-db-password are populated by the top-level availableSecrets
+  # and passed into the exec-wrapper container using the -e flags in the args section below.
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
