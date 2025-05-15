@@ -64,31 +64,45 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations'
   waitFor: ['Push Docker image']
-  secretEnv: # These make DB_USER, DB_PASSWORD, DB_NAME available to exec-wrapper itself
+  secretEnv:
     - 'DB_USER'
     - 'DB_PASSWORD'
     - 'DB_NAME'
-  env: # Environment variables for the exec-wrapper step itself
-    - 'CLOUD_SQL_PROXY_VERBOSE=true'
+  env:
+    - 'CLOUD_SQL_PROXY_VERBOSE=true' # Keep trying for verbose logs
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
     - '-s'
     - '${_DB_INSTANCE_CONNECTION_NAME}'
-    # Explicitly pass these env vars from exec-wrapper's env to the command's env
     - '-e' 
     - 'DB_USER'
     - '-e'
     - 'DB_PASSWORD'
     - '-e'
     - 'DB_NAME'
-    # The command to run
     - '--'
     - 'sh'
     - '-c'
-    # Construct DATABASE_URL using the env vars passed by exec-wrapper.
-    # $${VAR} is correct here for Cloud Build to pass ${VAR} to the shell.
-    - 'export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"; echo "DATABASE_URL set to: [$${DATABASE_URL}]"; /bin/sleep 15; npx prisma migrate deploy'
+    - |
+        echo "DATABASE_URL will be: postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"
+        echo "Sleeping for 15 seconds to allow proxy to initialize..."
+        /bin/sleep 15
+
+        echo "Attempting to check connectivity to localhost:5432 with nc..."
+        # nc -zv localhost 5432  # -z for zero-I/O, -v for verbose. Exit 0 if port is open.
+        # Alpine's nc (from BusyBox) might not support -z without -w or have different syntax.
+        # A simpler check: try to connect and immediately close.
+        # (echo "" > /dev/tcp/localhost/5432) && echo "nc: Connection to localhost:5432 succeeded." || echo "nc: Connection to localhost:5432 FAILED."
+        # The /dev/tcp test is a bash-ism, sh (dash) in node:slim might not have it.
+
+        # Fallback nc command (adjust timeout with -w if needed, e.g. -w 3 for 3 seconds)
+        echo "Trying nc localhost 5432..."
+        nc -v -w 5 localhost 5432 < /dev/null && echo "nc check via netcat passed" || echo "nc check via netcat FAILED or timed out"
+        
+        echo "Proceeding with Prisma migration..."
+        export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"
+        npx prisma migrate deploy
 
 # Step 9: Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
