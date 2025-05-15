@@ -59,21 +59,40 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
-# Step 8: Apply Database Migrations (TESTING WITH HARDCODED DB NAME)
+# Step 8: Apply Database Migrations (More Debugging)
 - name: 'gcr.io/google-appengine/exec-wrapper'
-  id: 'Apply Database Migrations - Test Hardcoded DB Name'
+  id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
   secretEnv:
-    - 'kc-db-user'
-    - 'kc-db-password'
+    - 'kc-db-user'       # This secret's value should be 'postgres'
+    - 'kc-db-password'   # This secret's value MUST be the NEW password that worked with 'gcloud sql connect'
   args: [
     '-i',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
     '-s',
-    '${_DB_INSTANCE_CONNECTION_NAME}',
+    '${_DB_INSTANCE_CONNECTION_NAME}', # Confirmed this is correctly set in your trigger
     '--',
     'sh', '-c',
-    'export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"; /bin/sleep 15; npx prisma migrate deploy'
+    # Using a YAML literal block scalar (the |-) for the multi-line shell command.
+    # Ensure indentation of the lines below is correct when you copy-paste.
+    |-
+      echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
+      export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"
+      export DEBUG="prisma*" # Attempt to enable Prisma's debug logging
+
+      echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
+      /bin/sleep 5
+
+      echo "DEBUG: Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
+      # This uses Node.js (which npx relies on) to print the environment variables
+      node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE: ' + process.env.DATABASE_URL);"
+      node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
+
+      echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
+      /bin/sleep 10
+
+      echo "DEBUG: Running npx prisma migrate deploy..."
+      npx prisma migrate deploy
   ]
 
 # Step 9: Deploy to Cloud Run
