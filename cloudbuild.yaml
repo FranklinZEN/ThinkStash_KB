@@ -60,32 +60,27 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
-# Step 8: Apply Database Migrations (using exec-wrapper)
+# Step 8: Apply Database Migrations (TESTING WITH HARDCODED DB NAME)
 - name: 'gcr.io/google-appengine/exec-wrapper'
-  id: 'Apply Database Migrations'
+  id: 'Apply Database Migrations - Test Hardcoded DB Name'
   waitFor: ['Push Docker image']
-  secretEnv: # These secrets will be available as environment variables in the shell
-    # These names MUST EXACTLY MATCH your secret names in Google Cloud Secret Manager
+  secretEnv:
     - 'kc-db-user'
     - 'kc-db-password'
-    - 'kc-db-name'
   args: [
-    '-i', # The Docker image containing your application and Prisma CLI
+    '-i',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
-    '-s', # The Cloud SQL instance connection name
-    '${_DB_INSTANCE_CONNECTION_NAME}', # This is a Cloud Build substitution, ensure it's correctly defined elsewhere
-    '--', # Separator indicating the start of the command to run
-    'sh', '-c', # Run the following string as a shell command
-    # Construct the DATABASE_URL using the correct environment variable names.
-    # These environment variable names will match the names listed in 'secretEnv'.
-    # The '$$' prefix is crucial for Cloud Build to pass the literal '${...}' to the shell.
-    'export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/$${kc-db-name}?schema=public"; npx prisma migrate deploy'
+    '-s',
+    '${_DB_INSTANCE_CONNECTION_NAME}',
+    '--',
+    'sh', '-c',
+    'export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash?schema=public"; npx prisma migrate deploy'
   ]
 
 # Step 9: Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' 
   id: 'Deploy to Cloud Run' 
-  waitFor: ['Apply Database Migrations']
+  waitFor: ['Apply Database Migrations - Test Hardcoded DB Name']
   entrypoint: gcloud
   args: [
     'run',
