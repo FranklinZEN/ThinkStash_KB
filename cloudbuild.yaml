@@ -94,4 +94,3 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-# Final attempt with manually verified clean YAML 2024-05-15
