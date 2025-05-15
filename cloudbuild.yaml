@@ -5,7 +5,7 @@ availableSecrets:
       env: 'kc-db-user'
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
       env: 'kc-db-password'
-    # If you re-introduce kc-db-name, uncomment its definition here and in Step 8's secretEnv
+    # If you re-introduce kc-db-name, uncomment its definition here and in Step 8's script
     # - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
     #   env: 'kc-db-name'
 
@@ -65,23 +65,34 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
-  secretEnv:
-    - 'kc-db-user'
-    - 'kc-db-password'
+  # We removed secretEnv here.
+  # The environment variables kc-db-user and kc-db-password (populated by top-level availableSecrets)
+  # will be passed into the container using the -e flags below.
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
     - '-s'
     - '${_DB_INSTANCE_CONNECTION_NAME}'
+    # Pass environment variables (populated by availableSecrets) into the exec-wrapper container
+    - '-e' # Flag to indicate passing an environment variable
+    - 'kc-db-user' # Name of the environment variable to pass from the build step's env
+    - '-e' # Flag to indicate passing an environment variable
+    - 'kc-db-password' # Name of the environment variable to pass from the build step's env
+    # If you were using kc-db-name dynamically, you would also add:
+    # - '-e'
+    # - 'kc-db-name'
     - '--'
     - 'sh'
     - '-c'
     - |-
         echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
         echo "DEBUG: Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
+        # These echos should now reflect the actual secret values if availableSecrets and -e flags work
         echo "DEBUG: Value of kc-db-user from env before export: [$${kc-db-user}]"
         echo "DEBUG: Value of kc-db-password from env before export: [$${kc-db-password}]"
 
+        # Using hardcoded 'thinkstash' for the database name as per current testing phase.
+        # If you use kc-db-name dynamically later, change /thinkstash to /$${kc-db-name}
         export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"
         export DEBUG="prisma*"
 
