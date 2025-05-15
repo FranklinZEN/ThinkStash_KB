@@ -75,7 +75,7 @@ steps:
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
     '-s', 
     '${_DB_INSTANCE_CONNECTION_NAME}',
-    '-e', 'DATABASE_URL=$(DATABASE_URL)',
+    '-e', 'DATABASE_URL',
     '--', 
     'npx', 'prisma', 'migrate', 'deploy'
   ]
