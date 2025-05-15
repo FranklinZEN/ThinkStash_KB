@@ -94,18 +94,4 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-# Forced update comment - attempt 3 
-
-- name: 'gcr.io/cloud-builders/gcloud' # This image has bash/sh
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    echo "Attempting to access TEST_SECRET_USER..."
-    if [ -z "$(TEST_SECRET_USER)" ]; then
-      echo "ERROR: TEST_SECRET_USER is empty or not set!"
-      exit 1
-    else
-      echo "SUCCESS: TEST_SECRET_USER is: [$(TEST_SECRET_USER)]"
-    fi
-    echo "Test of availableSecrets complete." 
+# Final attempt with manually verified clean YAML 2024-05-15
