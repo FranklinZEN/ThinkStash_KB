@@ -2,11 +2,11 @@
 availableSecrets:
   secretManager:
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
-      env: 'DB_USER_FROM_SECRET' # Using distinct names
+      env: 'kc-db-user'
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
-      env: 'DB_PASSWORD_FROM_SECRET'
+      env: 'kc-db-password'
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
-      env: 'DB_NAME_FROM_SECRET'
+      env: 'kc-db-name'
 
 steps:
 # Step 1: Install Dependencies
