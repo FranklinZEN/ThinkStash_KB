@@ -61,7 +61,7 @@ steps:
   waitFor: ['Build Docker image']
 
 # Step 8: Download Proxy, Start Proxy, Run Migrations, Kill Proxy
-- name: 'node:20'
+- name: '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA' # Your app image
   id: 'Run Migrations with Proxy'
   waitFor: ['Push Docker image'] # Depends on Step 7
   secretEnv:
@@ -76,12 +76,14 @@ steps:
 
       echo "Step 8: Preparing for database migration..."
 
-      echo "Installing psql and netcat (if needed, for Debian)..."
-      apt-get update && apt-get install -y postgresql-client netcat-traditional
-            
-      # Define Cloud SQL Proxy version and download URL
-      PROXY_VERSION="v2.10.0" # Specify a recent, stable version
-      PROXY_ARCH="linux.amd64" # Assuming amd64 architecture
+      # Install netcat if not present (Alpine Linux for node:20-slim based images)
+      # if ! nc -h > /dev/null 2>&1; then
+      #   echo "netcat (nc) not found, attempting to install netcat-openbsd..."
+      #   apk update && apk add --no-cache netcat-openbsd
+      # fi
+      
+      PROXY_VERSION="v2.10.0" 
+      PROXY_ARCH="linux.amd64"
       PROXY_DOWNLOAD_URL="https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/$${PROXY_VERSION}/cloud-sql-proxy.$${PROXY_ARCH}"
       PROXY_PATH="/tmp/cloud-sql-proxy"
 
@@ -96,38 +98,28 @@ steps:
       PROXY_PID=$!
       echo "Proxy started in background with PID $${PROXY_PID}."
       
-      echo "Sleeping for 20 seconds to allow proxy to fully initialize..."
-      sleep 20
+      echo "Sleeping 15 seconds for proxy to fully initialize..." # Reduced sleep
+      sleep 15
 
-      echo "Attempting to check connectivity to localhost:5432 with nc..."
-      nc -v -w 10 localhost 5432 < /dev/null && echo "nc: Connection to localhost:5432 succeeded." || (echo "nc: Connection to localhost:5432 FAILED. Exiting." && exit 1)
-
-      echo "Attempting to connect with psql..."
-      export PGPASSWORD="$${DB_PASSWORD}" # Set password for psql
-      psql -h localhost -p 5432 -U "$${DB_USER}" -d "$${DB_NAME}" -c "\dt" && echo "psql connection and command succeeded." || (echo "psql connection FAILED. Continuing to Prisma attempt..." && true) # Don't exit if psql fails, just note it
-      unset PGPASSWORD
+      # echo "Attempting to check connectivity to localhost:5432 with nc..."
+      # nc -v -w 5 localhost 5432 < /dev/null && echo "nc: Connection to localhost:5432 succeeded." || (echo "nc: Connection to localhost:5432 FAILED. Exiting." && exit 1)
 
       echo "Setting DATABASE_URL and running Prisma migrations..."
-      export DEBUG="prisma*,engine"
-      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?sslmode=disable"
+      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?sslmode=disable" # Kept sslmode=disable
       echo "DATABASE_URL set to: [$${DATABASE_URL}]"
       
       npx prisma migrate deploy
       
       echo "Prisma migrations finished."
       echo "Attempting to gracefully kill Cloud SQL Proxy (PID $${PROXY_PID})..."
-      kill $${PROXY_PID}
-      # Wait for a few seconds to allow it to shut down
-      TIMEOUT=10
-      while kill -0 $${PROXY_PID} > /dev/null 2>&1 && [ $${TIMEOUT} -gt 0 ]; do
-        sleep 1
-        TIMEOUT=$((TIMEOUT - 1))
-      done
+      kill $${PROXY_PID} || echo "Proxy (PID $${PROXY_PID}) already exited or failed to kill."
+      # Wait a moment for the process to terminate
+      sleep 2 
       if kill -0 $${PROXY_PID} > /dev/null 2>&1; then
-        echo "Proxy (PID $${PROXY_PID}) did not terminate gracefully after 10s, sending SIGKILL."
-        kill -9 $${PROXY_PID}
+        echo "Proxy (PID $${PROXY_PID}) did not terminate gracefully after kill, sending SIGKILL."
+        kill -9 $${PROXY_PID} || echo "Failed to send SIGKILL or proxy already exited."
       else
-        echo "Proxy (PID $${PROXY_PID}) terminated gracefully."
+        echo "Proxy (PID $${PROXY_PID}) terminated or was already stopped."
       fi
       
       echo "Proxy and migration step complete."
