@@ -1,5 +1,14 @@
-# Top-level availableSecrets block has been removed.
-# Secrets are now defined directly in the step that needs them (Step 8).
+# Top-level availableSecrets defines how secrets map to ENV VARS for steps.
+# These ENV VARS (DB_USER, DB_PASSWORD) will be available to all steps.
+availableSecrets:
+  secretManager:
+    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
+      env: 'DB_USER' # This ENV VAR will hold the user secret
+    - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
+      env: 'DB_PASSWORD' # This ENV VAR will hold the password secret
+    # If you were using kc-db-name dynamically, you would add:
+    # - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
+    #   env: 'DB_NAME'
 
 steps:
 # Step 1: Install Dependencies
@@ -57,13 +66,12 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
-  # Secrets are now defined directly for exec-wrapper, mapping environment variables
-  # inside the container to their Secret Manager paths.
+  # This secretEnv tells exec-wrapper to make these specific environment variables
+  # (which are populated by the top-level availableSecrets) available inside the container it runs.
   secretEnv:
-    - 'DB_USER=projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest'
-    - 'DB_PASSWORD=projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest'
-    # If you were using kc-db-name dynamically, you would add:
-    # - 'DB_NAME=projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest'
+    - 'DB_USER'
+    - 'DB_PASSWORD'
+    # If you were using kc-db-name dynamically, you would add 'DB_NAME' here too.
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
@@ -75,8 +83,8 @@ steps:
     - |-
         echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
         echo "DEBUG: Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
-        # These echos will now use the new environment variable names (DB_USER, DB_PASSWORD)
-        # that are directly populated by exec-wrapper's secretEnv.
+        # These echos will now use the environment variable names (DB_USER, DB_PASSWORD)
+        # that are populated by availableSecrets and passed through by exec-wrapper's secretEnv.
         echo "DEBUG: Value of DB_USER from env before export: [$${DB_USER}]"
         echo "DEBUG: Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
 
