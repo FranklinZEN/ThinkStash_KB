@@ -108,8 +108,8 @@ steps:
       nc -v -w 10 localhost 5432 < /dev/null && echo "nc: Connection to localhost:5432 succeeded." || (echo "nc: Connection to localhost:5432 FAILED. Exiting." && exit 1)
 
       echo "Setting DATABASE_URL and running Prisma migrations..."
-      export DEBUG="prisma*,engine" # Enable more Prisma debug logging
-      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}" # Removed ?schema=public
+      export DEBUG="prisma*,engine"
+      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?sslmode=disable"
       echo "DATABASE_URL set to: [$${DATABASE_URL}]"
       
       npx prisma migrate deploy
