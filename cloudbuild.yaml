@@ -75,13 +75,10 @@ steps:
     '${_DB_INSTANCE_CONNECTION_NAME}',
     '--', # Separator indicating the start of the command to run
     'sh', '-c', # Run the following string as a shell command
-    # Construct the DATABASE_URL using the secrets.
-    # Escape '$' with '$$' for shell environment variables to prevent Cloud Build from treating them as substitutions.
-    'export DATABASE_URL="postgresql://$${DB_USER_FROM_SECRET}:$${DB_PASSWORD_FROM_SECRET}@localhost:5432/$${DB_NAME_FROM_SECRET}?schema=public"; \
-     echo "Attempting to connect with DATABASE_URL (sensitive parts redacted for general log): postgresql://USER:PASSWORD@localhost:5432/DB_NAME?schema=public"; \
-     echo "Actual DB Name from secret for verification: $${DB_NAME_FROM_SECRET}"; \
-     sleep 15 && \
-     npx prisma migrate deploy'
+    # Construct the DATABASE_URL using the secrets, then run migrations.
+    # Removed 'echo' and 'sleep' as they are not found in the minimal image.
+    # 'export' is a shell builtin and should generally be available if 'sh' itself works.
+    'export DATABASE_URL="postgresql://$${DB_USER_FROM_SECRET}:$${DB_PASSWORD_FROM_SECRET}@localhost:5432/$${DB_NAME_FROM_SECRET}?schema=public"; npx prisma migrate deploy'
   ]
 
 # Step 9: Deploy to Cloud Run
