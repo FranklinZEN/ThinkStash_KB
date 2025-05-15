@@ -5,7 +5,9 @@ availableSecrets:
       env: 'kc-db-user'
     - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
       env: 'kc-db-password'
-    # Temporarily removed kc-db-name for testing
+    # If you re-introduce kc-db-name, uncomment its definition here and in Step 8's secretEnv
+    # - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
+    #   env: 'kc-db-name'
 
 steps:
 # Step 1: Install Dependencies
@@ -63,42 +65,47 @@ steps:
 - name: 'gcr.io/google-appengine/exec-wrapper'
   id: 'Apply Database Migrations - More Debugging'
   waitFor: ['Push Docker image']
+  # secretEnv tells exec-wrapper which environment variables (populated by availableSecrets or other means)
+  # to pass into the container it runs.
   secretEnv:
     - 'kc-db-user'       # This secret's value should be 'postgres'
     - 'kc-db-password'   # This secret's value MUST be the NEW password that worked with 'gcloud sql connect'
-  args: [
-    '-i',
-    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA',
-    '-s',
-    '${_DB_INSTANCE_CONNECTION_NAME}', # Confirmed this is correctly set in your trigger
-    '--',
-    'sh', '-c',
-    # Using a YAML literal block scalar (the |-) for the multi-line shell command.
-    # Ensure indentation of the lines below is correct when you copy-paste.
-    |-
-      echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
-      export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"
-      export DEBUG="prisma*" # Attempt to enable Prisma's debug logging
+    # - 'kc-db-name'     # Uncomment if you re-add kc-db-name to availableSecrets and want to use it dynamically
+  args:
+    # Using block style for args list for clarity with multi-line script
+    - '-i'
+    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
+    - '-s'
+    - '${_DB_INSTANCE_CONNECTION_NAME}' # Confirmed this is correctly set in your trigger
+    - '--'
+    - 'sh'
+    - '-c'
+    - |- # Start of the multi-line script (literal block scalar)
+        echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
+        # Using hardcoded 'thinkstash' for the database name as per current testing phase.
+        # If you use kc-db-name dynamically later, change /thinkstash to /$${kc-db-name}
+        export DATABASE_URL="postgresql://$${kc-db-user}:$${kc-db-password}@localhost:5432/thinkstash"
+        export DEBUG="prisma*" # Attempt to enable Prisma's debug logging
 
-      echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
-      /bin/sleep 5
+        echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
+        /bin/sleep 5
 
-      echo "DEBUG: Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
-      # This uses Node.js (which npx relies on) to print the environment variables
-      node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE: ' + process.env.DATABASE_URL);"
-      node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
+        echo "DEBUG: Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
+        # This uses Node.js (which npx relies on) to print the environment variables
+        node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE: ' + process.env.DATABASE_URL);"
+        node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
 
-      echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
-      /bin/sleep 10
+        echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
+        /bin/sleep 10
 
-      echo "DEBUG: Running npx prisma migrate deploy..."
-      npx prisma migrate deploy
-  ]
+        echo "DEBUG: Running npx prisma migrate deploy..."
+        npx prisma migrate deploy
 
 # Step 9: Deploy to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk' 
-  id: 'Deploy to Cloud Run' 
-  waitFor: ['Apply Database Migrations - Test Hardcoded DB Name']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Deploy to Cloud Run'
+  # Corrected waitFor to match the ID of Step 8
+  waitFor: ['Apply Database Migrations - More Debugging']
   entrypoint: gcloud
   args: [
     'run',
