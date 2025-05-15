@@ -60,28 +60,11 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
-# Step 7.5: Diagnose Secrets Availability
-# This step will try to print the environment variables populated by availableSecrets.
-- name: 'ubuntu' # Using a general-purpose image
-  id: 'Diagnose Secrets Availability'
-  waitFor: ['Push Docker image']
-  entrypoint: 'sh'
-  args:
-    - '-c'
-    - |-
-        echo "--- DIAGNOSTIC STEP: Checking Environment Variables ---"
-        echo "Value of DB_USER: [$${DB_USER}]" # This would be empty as DB_USER is not in secretEnv for THIS step
-        echo "Value of DB_PASSWORD: [$${DB_PASSWORD}]" # Ditto
-        echo "Value of DB_NAME: [$${DB_NAME}]" # Ditto
-        echo "--- END DIAGNOSTIC STEP ---"
-  # The DB_USER, DB_PASSWORD, DB_NAME env vars should be available here
-  # if the top-level availableSecrets is working correctly.
-
-# Step 8: Apply Database Migrations (Using Dynamic DB Name)
+# Step 8: Apply Database Migrations
 - name: 'gcr.io/google-appengine/exec-wrapper'
-  id: 'Apply Database Migrations - Dynamic DB Name'
-  waitFor: ['Push Docker image'] # Changed from Diagnose Secrets Availability
-  secretEnv:
+  id: 'Apply Database Migrations'
+  waitFor: ['Push Docker image']
+  secretEnv: # These make DB_USER, DB_PASSWORD, DB_NAME available to exec-wrapper itself
     - 'DB_USER'
     - 'DB_PASSWORD'
     - 'DB_NAME'
@@ -90,16 +73,25 @@ steps:
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
     - '-s'
     - '${_DB_INSTANCE_CONNECTION_NAME}'
+    # Explicitly pass these env vars from exec-wrapper's env to the command's env
+    - '-e' 
+    - 'DB_USER'
+    - '-e'
+    - 'DB_PASSWORD'
+    - '-e'
+    - 'DB_NAME'
+    # The command to run
     - '--'
     - 'sh'
     - '-c'
-    # Single line command string. Dump all env vars first.
-    - 'echo "--- ALL ENV VARS IN SHELL (Step 8) ---"; env; echo "--- END ALL ENV VARS ---"; export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"; echo "DATABASE_URL set to: [$${DATABASE_URL}]"; /bin/sleep 15; npx prisma migrate deploy'
+    # Construct DATABASE_URL using the env vars passed by exec-wrapper.
+    # $${VAR} is correct here for Cloud Build to pass ${VAR} to the shell.
+    - 'export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"; echo "DATABASE_URL set to: [$${DATABASE_URL}]"; /bin/sleep 15; npx prisma migrate deploy'
 
-# Step 9: Deploy to Cloud Run (Re-included)
+# Step 9: Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy to Cloud Run'
-  waitFor: ['Apply Database Migrations - Dynamic DB Name']
+  waitFor: ['Apply Database Migrations']
   entrypoint: gcloud
   args: [
     'run',
@@ -112,7 +104,6 @@ steps:
     '--service-account=${_CLOUD_RUN_SA_EMAIL}'
   ]
 
-# Ensure this options block is at the root level and uses standard spaces for indentation.
 options:
   logging: CLOUD_LOGGING_ONLY
 # rerun to test if this works
