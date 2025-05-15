@@ -60,14 +60,31 @@ steps:
   id: 'Push Docker image'
   waitFor: ['Build Docker image']
 
+# Step 7.5: Diagnose Secrets Availability
+# This step will try to print the environment variables populated by availableSecrets.
+- name: 'ubuntu' # Using a general-purpose image
+  id: 'Diagnose Secrets Availability'
+  waitFor: ['Push Docker image']
+  entrypoint: 'sh'
+  args:
+    - '-c'
+    - |-
+        echo "--- DIAGNOSTIC STEP: Checking Environment Variables ---"
+        echo "Value of DB_USER: [${DB_USER}]"
+        echo "Value of DB_PASSWORD: [${DB_PASSWORD}]"
+        echo "Value of DB_NAME: [${DB_NAME}]"
+        echo "--- END DIAGNOSTIC STEP ---"
+  # The DB_USER, DB_PASSWORD, DB_NAME env vars should be available here
+  # if the top-level availableSecrets is working correctly.
+
 # Step 8: Apply Database Migrations (Using Dynamic DB Name)
 - name: 'gcr.io/google-appengine/exec-wrapper'
-  id: 'Apply Database Migrations - Dynamic DB Name' # Updated ID for clarity
-  waitFor: ['Push Docker image']
+  id: 'Apply Database Migrations - Dynamic DB Name'
+  waitFor: ['Diagnose Secrets Availability'] # Wait for the diagnostic step
   secretEnv:
     - 'DB_USER'
     - 'DB_PASSWORD'
-    - 'DB_NAME' # Include DB_NAME here
+    - 'DB_NAME'
   args:
     - '-i'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/kc-nextjs-backend:$COMMIT_SHA'
@@ -77,36 +94,34 @@ steps:
     - 'sh'
     - '-c'
     - |-
-        echo "DEBUG: Cloud Build Step Started. Setting environment variables..."
-        echo "DEBUG: Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
-        echo "DEBUG: Value of DB_USER from env before export: [$${DB_USER}]"
-        echo "DEBUG: Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
-        echo "DEBUG: Value of DB_NAME from env before export: [$${DB_NAME}]" # Added debug for DB_NAME
+        echo "DEBUG (Step 8): Cloud Build Step Started. Setting environment variables..."
+        echo "DEBUG (Step 8): Value of _PROJECT_ID from substitution: [${_PROJECT_ID}]"
+        echo "DEBUG (Step 8): Value of DB_USER from env before export: [$${DB_USER}]"
+        echo "DEBUG (Step 8): Value of DB_PASSWORD from env before export: [$${DB_PASSWORD}]"
+        echo "DEBUG (Step 8): Value of DB_NAME from env before export: [$${DB_NAME}]"
 
-        # Using dynamic DB_NAME from secret
         export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?schema=public"
         export DEBUG="prisma*"
 
-        echo "DEBUG: DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
+        echo "DEBUG (Step 8): DATABASE_URL and DEBUG potentially set. Waiting 5 seconds for proxy..."
         /bin/sleep 5
 
-        echo "DEBUG: Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
-        node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE: ' + process.env.DATABASE_URL);"
-        node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE: ' + process.env.DEBUG);"
-        node -e "console.log('DB_USER_AS_SEEN_BY_NODE: ' + process.env.DB_USER);"
-        node -e "console.log('DB_PASSWORD_AS_SEEN_BY_NODE: ' + process.env.DB_PASSWORD);"
-        node -e "console.log('DB_NAME_AS_SEEN_BY_NODE: ' + process.env.DB_NAME);" # Added debug for DB_NAME
+        echo "DEBUG (Step 8): Attempting to print DATABASE_URL and DEBUG env var from Node.js..."
+        node -e "console.log('DATABASE_URL_AS_SEEN_BY_NODE (Step 8): ' + process.env.DATABASE_URL);"
+        node -e "console.log('DEBUG_ENV_VAR_AS_SEEN_BY_NODE (Step 8): ' + process.env.DEBUG);"
+        node -e "console.log('DB_USER_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_USER);"
+        node -e "console.log('DB_PASSWORD_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_PASSWORD);"
+        node -e "console.log('DB_NAME_AS_SEEN_BY_NODE (Step 8): ' + process.env.DB_NAME);"
 
-        echo "DEBUG: Node.js print attempt finished. Waiting another 10 seconds..."
+        echo "DEBUG (Step 8): Node.js print attempt finished. Waiting another 10 seconds..."
         /bin/sleep 10
 
-        echo "DEBUG: Running npx prisma migrate deploy..."
+        echo "DEBUG (Step 8): Running npx prisma migrate deploy..."
         npx prisma migrate deploy
 
 # Step 9: Deploy to Cloud Run (Re-included)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy to Cloud Run'
-  # Ensure waitFor points to the correct ID of the migrations step
   waitFor: ['Apply Database Migrations - Dynamic DB Name']
   entrypoint: gcloud
   args: [
