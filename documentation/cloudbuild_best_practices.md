@@ -98,4 +98,37 @@
 *   For each step above, we'll add the configuration to `cloudbuild.yaml`.
 *   After adding a step, you'll commit and push the changes.
 *   We'll observe the Cloud Build trigger to see if the step executes successfully.
-*   If there are issues, we'll troubleshoot them. 
+*   If there are issues, we'll troubleshoot them.
+
+---
+
+### CI/CD Pipeline (`cloudbuild.yaml`) Alignment (As of 2025-05-15)
+
+This section assesses the current `cloudbuild.yaml` against the best practices outlined above.
+
+**Strong Alignments:**
+
+*   **Secrets Management (Best Practice #4):** Successfully implemented using Cloud Build's integration with Secret Manager (`availableSecrets` and `secretEnv`) to handle database credentials. This was a critical part of the setup and debugging process.
+*   **Use Substitutions for Configuration (Best Practice #6):** The pipeline effectively uses Cloud Build substitutions (e.g., `_PROJECT_ID`, `_GCP_REGION`, `_DB_INSTANCE_CONNECTION_NAME`, `COMMIT_SHA`) for environment-specific configurations, making the `cloudbuild.yaml` flexible and reusable.
+*   **Focused Steps & Clear Naming (Best Practices #2, #9):** Each step in the pipeline has a clear purpose and `id` for readability. The database migration step (Step 8), while internally complex due to the Cloud SQL Proxy management, is a single logical unit in the pipeline.
+*   **Robust Error Handling in Script (Best Practice #10):** The primary script in the migration step (Step 8) uses `set -e` to exit immediately on error, improving build failure detection.
+*   **Logging (Best Practice #10):** The pipeline is configured with `options: { logging: CLOUD_LOGGING_ONLY }`.
+*   **Pinned `cloud-sdk` Version (Best Practice #7):** The `gcr.io/google.com/cloudsdktool/cloud-sdk` builder is pinned to the `:slim` tag for stability.
+
+**Minor Deviations / Areas for Future Consideration:**
+
+*   **`gcr.io/cloud-builders/docker` Version (Best Practice #7):**
+    *   Currently uses the implicit `latest` tag. An attempt to pin to a specific version (`20.10.17`) resulted in a "manifest not found" error. Using `latest` for this core builder is generally stable but ideally, a specific, known-available tag would be used if one can be identified reliably.
+    *   **Status:** Acceptable for now to maintain a working pipeline.
+
+*   **Migration Step Environment (Best Practice #1):**
+    *   The migration step (Step 8) uses the application image and installs `wget` (for the Cloud SQL Proxy binary) on the fly. The `nc` installation and check are currently commented out but were used for diagnostics.
+    *   **Status:** This approach is working effectively. A future optimization could be to create a dedicated Docker image for this step with all tools (Node.js, Prisma CLI, Cloud SQL Proxy, `nc`) pre-installed. This would make the step definition cleaner and execution slightly faster, at the cost of maintaining an additional Dockerfile/image.
+
+*   **Specify Machine Type (Best Practice #12):**
+    *   Currently uses the default Cloud Build machine type.
+    *   **Status:** This is fine. If build times become a concern, a more powerful machine type can be specified in the `options:` block.
+
+**Overall Assessment:**
+
+The `cloudbuild.yaml` is in a robust and functional state, successfully implementing a CI/CD pipeline that includes building, testing (implicitly, as lint/test steps are present), database migrations via Cloud SQL Proxy, and deployment to Cloud Run. It aligns well with critical best practices, particularly in secure secret management and configurable deployments. 

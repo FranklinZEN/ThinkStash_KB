@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Basic Tagging: Added schema and backend logic for many-to-many tagging of cards.
 - Core backend/frontend testing setup (Jest).
 - Foundational project setup (Next.js, Prisma, Chakra UI, Docker, Code Quality tools).
+- CI/CD Pipeline (KC-CICD-GCP): Implemented a Google Cloud Build pipeline (`cloudbuild.yaml`) for automated build, test, Docker image creation/push, database migrations (Prisma with Cloud SQL Proxy), and deployment to Cloud Run.
 
 ### Changed
 - N/A

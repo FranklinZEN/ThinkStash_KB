@@ -91,4 +91,13 @@ This summarizes the major feature work completed after initial setup.
 - [x] Corrected `Tag` and `KnowledgeCard` type definitions to align frontend with API (object tags vs. string arrays).
 - [x] Resolved `PartialBlock not defined` error in new card page.
 - [x] Addressed various linter warnings for unused variables.
-- [x] Fixed React child errors from rendering tag objects instead of `tag.name`. 
+- [x] Fixed React child errors from rendering tag objects instead of `tag.name`.
+
+## Epic 5: KC-CICD-GCP - CI/CD Pipeline on Google Cloud
+
+- [x] KC-CICD-1: Define `cloudbuild.yaml` for build, test, Docker image creation, and push to Artifact Registry.
+- [x] KC-CICD-2: Implement database migration step in `cloudbuild.yaml` using Cloud SQL Proxy for PostgreSQL.
+- [x] KC-CICD-3: Implement deployment to Cloud Run step in `cloudbuild.yaml`.
+- [x] KC-CICD-4: Configure Cloud Build trigger for automated builds on push to main branch.
+- [x] KC-CICD-5: Securely manage database credentials using Secret Manager and `availableSecrets`.
+- [x] KC-CICD-6: Iteratively debug and stabilize the entire CI/CD pipeline (Phases 1-Final). 
