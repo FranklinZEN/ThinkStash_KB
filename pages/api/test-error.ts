@@ -2,6 +2,12 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { reportError } from '../../lib/errorReporting';
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Temporary debugging for individual DB env vars
+  console.log("!!!!!!!!!!!!!!!!! API ROUTE CHECK - DB_USER:", process.env.DB_USER);
+  console.log("!!!!!!!!!!!!!!!!! API ROUTE CHECK - DB_PASSWORD:", process.env.DB_PASSWORD ? "Exists (not logging value)" : "MISSING or empty");
+  console.log("!!!!!!!!!!!!!!!!! API ROUTE CHECK - DB_NAME:", process.env.DB_NAME);
+  console.log("!!!!!!!!!!!!!!!!! API ROUTE CHECK - DB_HOST_PATH:", process.env.DB_HOST_PATH);
+
   if (req.query.deliberate_error === 'true') {
     console.error('[TEST-ERROR-ROUTE] Intentionally throwing error now...');
     try {
