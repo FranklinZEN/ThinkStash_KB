@@ -1,4 +1,4 @@
-import { ErrorReporting, ErrorReportingOptions, ServiceContext } from '@google-cloud/error-reporting';
+import { ErrorReporting } from '@google-cloud/error-reporting';
 import { NextApiRequest, NextApiResponse } from 'next'; // Import Next.js types
 
 // Initialize the client.
@@ -7,14 +7,17 @@ import { NextApiRequest, NextApiResponse } from 'next'; // Import Next.js types
 // The service account for your Cloud Run service will be used for authentication.
 let errorsClient: ErrorReporting | { report: (error: Error | string) => void };
 
-const serviceContext: ServiceContext = {
-  service: process.env.K_SERVICE || 'nextjs-backend', // K_SERVICE is automatically set in Cloud Run
-  version: process.env.K_REVISION || 'unknown', // K_REVISION is automatically set in Cloud Run
+// Define the structure for serviceContext with known properties
+const serviceContext: { service: string; version: string } = {
+  service: process.env.K_SERVICE || 'nextjs-backend',
+  version: process.env.K_REVISION || 'unknown',
 };
 
 if (process.env.NODE_ENV === 'production' || process.env.REPORT_ERRORS_DEV === 'true') {
-  const options: ErrorReportingOptions = {
+  // Type of options will be inferred by the ErrorReporting constructor
+  const options = {
     serviceContext,
+    // reportUncaughtExceptions: true, // This is usually true by default
     // reportMode: 'always', // Can be useful during setup/testing even in dev
   };
   errorsClient = new ErrorReporting(options);
@@ -51,17 +54,26 @@ interface ReportContext {
 export function reportError(error: Error | string, context?: ReportContext) {
   if (errorsClient && typeof (errorsClient as ErrorReporting).report === 'function') {
     if (context && context.req) {
-      // Constructing an httpRequest object helps Error Reporting link errors to requests
+      let clientIp: string | undefined;
+      const xForwardedFor = context.req.headers?.[ 'x-forwarded-for'];
+      if (Array.isArray(xForwardedFor)) {
+        clientIp = xForwardedFor[0]; // Take the first IP if it's an array
+      } else if (typeof xForwardedFor === 'string') {
+        clientIp = xForwardedFor;
+      }
+
+      // Fallback to connection.remoteAddress if clientIp is still undefined
+      if (!clientIp) {
+        clientIp = context.req.connection?.remoteAddress;
+      }
+
       const httpRequest: ErrorReportingHttpRequest = {
         method: context.req.method,
         url: context.req.url,
         userAgent: context.req.headers?.[ 'user-agent'],
-        referrer: context.req.headers?.referer,
-        remoteIp: context.req.headers?.[ 'x-forwarded-for'] || context.req.connection?.remoteAddress,
-        // responseStatusCode: context.res?.statusCode // If you have access to response status
+        referrer: context.req.headers?.referer, // referrer header is often a single string
+        remoteIp: clientIp,
       };
-      // The second argument to errorsClient.report can be an Express-like request object.
-      // We are providing our structured httpRequest object.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (errorsClient as ErrorReporting).report(error, httpRequest as any); // Kept as any for now as library expects express.Request or similar
     } else {
