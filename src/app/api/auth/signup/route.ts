@@ -1,56 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-// import prisma from '@/lib/prisma'; // We'll try to import it after logging env vars
+import prisma from '@/lib/prisma'; // Reverted to static import
 import bcrypt from 'bcryptjs';
 
 export async function POST(req: NextRequest) {
-  // Log environment variables at the VERY beginning of the route handler
-  console.log('!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - START !!!!!!!!!!!!!!!!!!');
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - DB_USER:',
-    process.env.DB_USER,
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - DB_PASSWORD:',
-    process.env.DB_PASSWORD ? 'Exists' : 'MISSING or empty',
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - DB_NAME:',
-    process.env.DB_NAME,
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - DB_HOST_PATH:',
-    process.env.DB_HOST_PATH,
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - NEXTAUTH_SECRET:',
-    process.env.NEXTAUTH_SECRET ? 'Exists' : 'MISSING or empty',
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - DATABASE_URL (initial from env):',
-    process.env.DATABASE_URL,
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - NODE_ENV:',
-    process.env.NODE_ENV,
-  );
-  console.log(
-    '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - END OF ENV VAR LOGS !!!!!!!!!!!!!!!!!!',
-  );
+  // Removed extensive environment variable logging block
 
   try {
-    // Now, try to import/use prisma AFTER logging the env vars
-    // This will trigger the code in lib/prisma.ts if it hasn't run already
-    const prisma = (await import('@/lib/prisma')).default;
-    console.log(
-      '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - Prisma imported successfully !!!!!!!!!!!!!!!!!!',
-    );
+    // console.log("!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - Prisma imported successfully !!!!!!!!!!!!!!!!!!"); // Removed
 
     const body = await req.json();
     const { email, password, name } = body;
 
-    console.log('Signup request body:', body);
+    // console.log('Signup request body:', body); // Keep if useful for debugging actual signups
 
     if (!email || !password) {
+      // Kept name as optional based on original logic
       return NextResponse.json(
         { message: 'Email and password are required' },
         { status: 400 },
@@ -60,9 +24,7 @@ export async function POST(req: NextRequest) {
     const existingUser = await prisma.user.findUnique({
       where: { email },
     });
-    console.log(
-      '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - Checked for existing user !!!!!!!!!!!!!!!!!!',
-    );
+    // console.log("!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - Checked for existing user !!!!!!!!!!!!!!!!!!"); // Removed
 
     if (existingUser) {
       return NextResponse.json(
@@ -76,12 +38,10 @@ export async function POST(req: NextRequest) {
       data: {
         email,
         password: hashedPassword,
-        name,
+        name, // Assuming name can be null/optional if not provided in body
       },
     });
-    console.log(
-      '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - New user created !!!!!!!!!!!!!!!!!!',
-    );
+    // console.log("!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - New user created !!!!!!!!!!!!!!!!!!"); // Removed
 
     const userWithoutPassword = {
       id: newUser.id,
@@ -91,18 +51,19 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(userWithoutPassword, { status: 201 });
   } catch (error) {
+    // console.error("!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - CAUGHT ERROR !!!!!!!!!!!!!!!!!!"); // Can be removed
     console.error(
-      '!!!!!!!!!!!!!!!!! APP ROUTE SIGNUP - CAUGHT ERROR !!!!!!!!!!!!!!!!!!',
-    );
-    console.error(
-      'Signup Error:',
+      'Signup Error:', // Keep this essential error log
       error instanceof Error ? error.message : String(error),
-      error, // Log the full error
+      // error // Logging the full error object can be verbose, keep if needed for deep debug
     );
+    // If you have error reporting (like Sentry or Google Cloud Error Reporting client) integrated, report here:
+    // reportErrorToService(error);
+
     return NextResponse.json(
       {
-        message: 'Internal Server Error',
-        error: error instanceof Error ? error.message : String(error),
+        message: 'Internal Server Error', // Generic message to client
+        // error: error instanceof Error ? error.message : String(error), // Avoid sending detailed error to client in prod
       },
       { status: 500 },
     );

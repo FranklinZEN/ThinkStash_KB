@@ -1,17 +1,10 @@
 import { PrismaClient } from '@prisma/client';
 
-// Log environment variables at the beginning of the file
-console.log('!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - START !!!!!!!!!!!!!!!!!!');
-console.log('!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_USER:', process.env.DB_USER);
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_PASSWORD:',
-  process.env.DB_PASSWORD ? 'Exists' : 'MISSING or empty',
-);
-console.log('!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_NAME:', process.env.DB_NAME);
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_HOST_PATH:',
-  process.env.DB_HOST_PATH,
-);
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - START !!!!!!!!!!!!!!!!!!"); // Removed
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_USER:", process.env.DB_USER); // Removed
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_PASSWORD:", process.env.DB_PASSWORD ? "Exists" : "MISSING or empty"); // Removed
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_NAME:", process.env.DB_NAME); // Removed
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - DB_HOST_PATH:", process.env.DB_HOST_PATH); // Removed
 
 let databaseURL;
 if (
@@ -21,58 +14,36 @@ if (
   process.env.DB_HOST_PATH
 ) {
   databaseURL = `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@localhost/${process.env.DB_NAME}?host=${process.env.DB_HOST_PATH}`;
-  console.log(
-    '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Constructed DATABASE_URL:',
-    databaseURL,
-  );
+  // console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Constructed DATABASE_URL:", databaseURL); // Removed
 } else {
+  // Keep this critical error log if components for DATABASE_URL are missing
   console.error(
-    '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Missing one or more DB env vars for DATABASE_URL construction. Check Cloud Run secret config. DB_USER:',
-    process.env.DB_USER,
-    'DB_NAME:',
-    process.env.DB_NAME,
-    'DB_HOST_PATH:',
-    process.env.DB_HOST_PATH,
-    'DB_PASSWORD_EXISTS:',
-    !!process.env.DB_PASSWORD,
+    'CRITICAL: LIB/PRISMA.TS - Missing one or more environment variables for DATABASE_URL construction (DB_USER, DB_PASSWORD, DB_NAME, DB_HOST_PATH). Prisma will likely fail to initialize. Check Cloud Run secret configuration.',
   );
-  databaseURL = 'prisma_url_construction_failed_due_to_missing_parts';
+  databaseURL = 'prisma_url_construction_failed_due_to_missing_parts'; // Prisma will error on this
 }
-// Ensure DATABASE_URL is set for Prisma, as schema.prisma likely uses env("DATABASE_URL")
 process.env.DATABASE_URL = databaseURL;
 
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Final DATABASE_URL for Prisma init:',
-  process.env.DATABASE_URL,
-);
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - NODE_ENV:',
-  process.env.NODE_ENV,
-);
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Initializing Prisma Client NOW...',
-);
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Final DATABASE_URL for Prisma init:", process.env.DATABASE_URL); // Removed
+// console.log("!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - NODE_ENV:", process.env.NODE_ENV); // Removed
+console.log('LIB/PRISMA.TS: Initializing Prisma Client...'); // Simplified log
 
-// Declare a global variable to hold the PrismaClient instance
 declare global {
-  // allow global `var` declarations
-  // eslint-disable-next-line no-var
+  /* eslint-disable no-var */
   var prisma: PrismaClient | undefined;
+  /* eslint-enable no-var */
 }
 
-// Instantiate PrismaClient, reusing the instance in development
 const prisma =
   global.prisma ||
   new PrismaClient({
-    // Log Prisma queries (useful for debugging)
-    log: ['query', 'info', 'warn', 'error'],
+    // log: ['warn', 'error'], // Recommended for production: only log warnings and errors
   });
 
-// In development, assign the instance to the global variable
-if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
+if (process.env.NODE_ENV !== 'production') {
+  global.prisma = prisma;
+}
 
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Prisma Client Initialized (or attempted).',
-);
+console.log('LIB/PRISMA.TS: Prisma Client initialized.'); // Simplified log
 
 export default prisma;
