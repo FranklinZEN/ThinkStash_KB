@@ -137,7 +137,8 @@ steps:
     '--region=${_GCP_REGION}',
     '--platform=managed',
     '--allow-unauthenticated',
-    '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    '--service-account=${_CLOUD_RUN_SA_EMAIL}',
+    '--update-secrets=DB_USER=kc-db-user:latest,DB_PASSWORD=kc-db-password:latest,DB_NAME=kc-db-name:latest,DB_HOST_PATH=kc-db-host-path:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
 
 options:
