@@ -84,17 +84,19 @@ This summarizes the major feature work completed after initial setup.
 **Form Navigation & UX Enhancements:**
 - [x] "Cancel" button added to "Create New Card" form (navigates to homepage).
 - [x] "Cancel" button added to "Edit Card" form (reverts local changes, exits edit mode).
+- [x] Addressed various linter warnings for unused variables.
+- [x] Fixed React child errors from rendering tag objects instead of `tag.name`.
 
 **Build & Type System Fixes (Related & General):**
 - [x] Resolved `VStack not defined` error in card detail page.
 - [x] Resolved `dynamic not defined` error in card detail page.
 - [x] Corrected `Tag` and `KnowledgeCard` type definitions to align frontend with API (object tags vs. string arrays).
 - [x] Resolved `PartialBlock not defined` error in new card page.
-- [x] Addressed various linter warnings for unused variables.
-- [x] Fixed React child errors from rendering tag objects instead of `tag.name`.
 
-## Epic 5: KC-CICD-GCP - CI/CD Pipeline on Google Cloud
+## Infrastructure Milestones
+- [x] **EPIC: KC-GCP-INFRA - GCP Foundation & Deployment:** Successfully provisioned core GCP infrastructure including Terraform setup, Cloud SQL (PostgreSQL with pgvector), Cloud Storage, Memorystore for Redis, IAM roles, Secret Manager, and foundational monitoring.
 
+### Epic 5: KC-CICD-GCP - CI/CD Pipeline on Google Cloud (Part of KC-GCP-INFRA)
 - [x] KC-CICD-1: Define `cloudbuild.yaml` for build, test, Docker image creation, and push to Artifact Registry.
 - [x] KC-CICD-2: Implement database migration step in `cloudbuild.yaml` using Cloud SQL Proxy for PostgreSQL.
 - [x] KC-CICD-3: Implement deployment to Cloud Run step in `cloudbuild.yaml`.

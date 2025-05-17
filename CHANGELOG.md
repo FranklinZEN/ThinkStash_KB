@@ -72,6 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial `README.md` with prerequisites and getting started instructions.
 - Backend testing framework setup (Jest, `ts-jest`, separate config).
 
+## [0.2.2] - 2024-03-21
+
+### Changed
+- Development focus shifted to Epic 0 (Foundational Infrastructure & Core Features)
+- AI feature development (Epics 1-4) temporarily paused
+- Progress tracking system enhanced to better reflect current development status
+- Testing and documentation efforts continue in parallel with Epic 0 development
+
+### Added
+- New comprehensive progress tracking system in `progress.md`
+- Clear status tracking for all Stage 2 epics and tasks
+- Development notes section for current focus and next steps
+- Dependencies and blockers documentation
+
 ## [Unreleased]
 ### Added
 - Successfully configured Google Cloud Build trigger for the Next.js backend (linked to `ThinkStash_KB_Fresh_Filter/cloudbuild.yaml`). The build now correctly sets up Node.js (using nvm) and installs npm dependencies, and uses `CLOUD_LOGGING_ONLY`.

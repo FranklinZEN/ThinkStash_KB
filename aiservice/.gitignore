@@ -1,0 +1,13 @@
+# Python Build artifacts (if any specific to this service)
+dist/
+build/
+*.egg-info/
+
+# Local logs specific to this service (if not covered by root)
+# logs/
+# *.log
+
+# Coverage reports specific to this service (if not covered by root)
+# .coverage
+# coverage.xml
+# htmlcov/ 

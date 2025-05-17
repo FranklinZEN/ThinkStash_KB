@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Foundational GCP Infrastructure: Provisioned and configured core cloud resources including Cloud SQL, Cloud Storage, Memorystore, IAM, and Secret Management using Terraform.
 - User Authentication (Epic KC-AUTH): Implemented user registration, login (email/password via NextAuth CredentialsProvider), session management (JWT), profile view/update APIs and pages.
 - Knowledge Card CRUD (Epic KC-CARD-CREATE): Implemented creation, reading, updating, and deletion of knowledge cards.
 - Rich Text Editing: Integrated BlockNote.js (`@blocknote/react` + `@blocknote/mantine`) for card content, storing content as JSON.

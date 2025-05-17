@@ -1,33 +1,102 @@
-# Project Progress
+# Thinkstash Development Progress
 
-## Epic: KC-GCP-INFRA - GCP Foundation & Deployment
+## Stage 2 Development Status
 
-### KC-GCP-TERRAFORM-1: Setup Terraform for GCP Infrastructure Provisioning
-- Status: Not Started
+### Epic 0: Foundational Infrastructure & Core Features
+Status: In Progress (Priority)
 
-### KC-GCP-DB-1: Provision Google Cloud SQL for PostgreSQL with pgvector
-- Status: Not Started
+#### Tasks:
+1. **TS-GCS-SETUP**: Setup Google Cloud Storage for Media
+   - Status: Not Started
+   - Priority: High
+   - Dependencies: None
+   - Notes: Prerequisite for image handling features
 
-### KC-GCP-STORAGE-1: Provision Google Cloud Storage Buckets
-- Status: Not Started
+2. **TS-REDIS-SETUP**: Setup Managed Redis (Google Cloud Memorystore)
+   - Status: Not Started
+   - Priority: Medium
+   - Dependencies: None
+   - Notes: Required for session management and caching
 
-### KC-GCP-REDIS-1: Provision Google Cloud Memorystore for Redis
-- Status: Not Started
+3. **TS-MEDIA-BLOCK-BE**: Implement Image Block Backend Support
+   - Status: Not Started
+   - Priority: High
+   - Dependencies: TS-GCS-SETUP
+   - Notes: Core functionality for image handling
 
-### KC-GCP-IAM-SECRETS-1: Configure GCP IAM Roles and Google Secret Manager
-- Status: Not Started
+4. **TS-MEDIA-BLOCK-FE**: Implement Image Block in Frontend Editor
+   - Status: Not Started
+   - Priority: High
+   - Dependencies: TS-MEDIA-BLOCK-BE
+   - Notes: User interface for image handling
 
-### KC-GCP-CICD-1: Setup CI/CD Pipeline for GCP Deployment (Next.js Backend - Enhanced App)
-- Status: Partially Completed
-- Details: 
-    - Basic Cloud Build trigger configured for `ThinkStash_KB_Fresh_Filter/cloudbuild.yaml`.
-    - Trigger successfully fires on code pushes.
-    - Current `cloudbuild.yaml` successfully sets up Node.js (via nvm) and installs npm dependencies.
-    - Logging option set to `CLOUD_LOGGING_ONLY`.
-- Next Steps: Expand `cloudbuild.yaml` to include application linting, testing, Docker image creation (requires `Dockerfile`), push to Artifact Registry, and eventual deployment to Cloud Run. Address database migrations.
+### Epic 1: Core AI Feature Backend Implementation (CrewAI)
+Status: Paused
 
-### KC-GCP-CICD-2: Setup CI/CD Pipeline for GCP Deployment (CrewAI Python Services)
-- Status: Not Started
+#### Tasks:
+1. **TS-AI-1**: Setup CrewAI Development Environment
+   - Status: Not Started
+   - Priority: Low (Paused)
+   - Dependencies: Epic 0 completion
+   - Notes: Will resume after Epic 0 completion
 
-### KC-GCP-MONITOR-1: Configure Basic Monitoring and Alerting on GCP
-- Status: Not Started 
+2. **TS-AI-2**: Research & Decision on Initial LLM Provider(s)
+   - Status: Not Started
+   - Priority: Low (Paused)
+   - Dependencies: Epic 0 completion
+   - Notes: Will resume after Epic 0 completion
+
+[Additional AI tasks listed but paused...]
+
+### Epic 2: Frontend Integration for AI Features
+Status: Paused
+
+### Epic 3: Deployment & CI/CD for AI Microservices
+Status: Paused
+
+### Epic 4: Public Accessibility & SSL
+Status: Paused
+
+### Epic 5: Advanced Interaction - RAG Chat & Collaborative Card Creation
+Status: Not Started (Future)
+
+### Epic 6: Comprehensive Testing, Deployment Strategy & Operational Excellence
+Status: In Progress (Partial)
+
+#### Tasks:
+1. **TS-TEST-1**: Review and Document Existing Testing Practices
+   - Status: In Progress
+   - Priority: Medium
+   - Dependencies: None
+   - Notes: Ongoing documentation of current testing state
+
+2. **TS-TEST-2**: Define Comprehensive Testing Strategy & Standards
+   - Status: Not Started
+   - Priority: Medium
+   - Dependencies: TS-TEST-1
+   - Notes: Will be completed alongside Epic 0 development
+
+### Epic 7: Explorative Content Ingestion Methods
+Status: Not Started (Future)
+
+## Development Notes
+
+### Current Focus
+- Priority is on completing Epic 0 tasks to establish foundational infrastructure
+- AI feature development (Epics 1-4) is paused until Epic 0 is complete
+- Testing and documentation (Epic 6) continues in parallel with Epic 0
+
+### Next Steps
+1. Begin TS-GCS-SETUP task
+2. Document current testing practices (TS-TEST-1)
+3. Define testing strategy (TS-TEST-2)
+4. Proceed with remaining Epic 0 tasks in sequence
+
+### Blockers & Dependencies
+- AI feature development blocked by Epic 0 completion
+- Image handling features require GCS setup
+- Frontend image block implementation depends on backend support
+
+## Last Updated
+- Date: 2024-03-21
+- Version: 0.2.1 
