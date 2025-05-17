@@ -79,6 +79,7 @@ Follow these steps to get the development environment running:
 - **Rich Text Editing:** Utilizes the BlockNote editor (`@blocknote/react` + `@blocknote/mantine`) for card content, allowing for various formatting options.
 - **Folder Management:** (Future Feature - Placeholder)
 - **Card Linking / Graph View:** (Future Feature - Uses React Flow)
+- Image Upload
 
 ## Testing
 

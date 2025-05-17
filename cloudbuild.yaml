@@ -105,7 +105,7 @@ steps:
       # nc -v -w 5 localhost 5432 < /dev/null && echo "nc: Connection to localhost:5432 succeeded." || (echo "nc: Connection to localhost:5432 FAILED. Exiting." && exit 1)
 
       echo "Setting DATABASE_URL and running Prisma migrations..."
-      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@localhost:5432/$${DB_NAME}?sslmode=disable" # Kept sslmode=disable
+      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@127.0.0.1:5432/$${DB_NAME}?sslmode=disable" # Kept sslmode=disable
       echo "DATABASE_URL set to: [$${DATABASE_URL}]"
       
       npx prisma migrate deploy

@@ -13,4 +13,5 @@ lxml[html_clean]
 # Add other core libraries as identified, e.g.:
 # readability-lxml
 # sentence-transformers
-# psycopg2-binary (if direct DB access is needed later, though initially we are returning to Next.js backend) 
+# psycopg2-binary (if direct DB access is needed later, though initially we are returning to Next.js backend)
+google-cloud-storage 
