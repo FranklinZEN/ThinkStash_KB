@@ -21,23 +21,11 @@ import {
   TagLabel,
   TagCloseButton,
 } from '@chakra-ui/react';
-import dynamic from 'next/dynamic'; // Import dynamic
-import { BlockNoteEditor, type PartialBlock } from '@blocknote/core'; // Keep type import, Added PartialBlock
-
-// Dynamically import the editor component with SSR disabled
-const BlockNoteEditorComponent = dynamic(
-  () => import('@/components/BlockNoteEditorComponent'),
-  {
-    ssr: false,
-    // Optional: Add a loading component specific to the editor area
-    loading: () => (
-      <Flex justify="center" align="center" minH="300px">
-        <Spinner />
-        <Text ml={3}>Loading Editor Component...</Text>
-      </Flex>
-    ),
-  },
-);
+import { BlockNoteEditor as BlockNoteEditorComponent } from '@/components/editor/BlockNoteEditor';
+import {
+  BlockNoteEditor as BlockNoteEditorType,
+  PartialBlock,
+} from '@blocknote/core';
 
 interface ErrorResponse {
   message?: string;
@@ -53,7 +41,7 @@ export default function NewCardPage() {
   const [currentKeyword, setCurrentKeyword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   // State to hold the editor instance received from the child component
-  const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
+  const [editor, setEditor] = useState<BlockNoteEditorType | null>(null);
   // Define state for the editor content
   const [editorContent, setEditorContent] = useState<
     PartialBlock[] | undefined
@@ -61,16 +49,11 @@ export default function NewCardPage() {
 
   // Callback to receive the editor instance from the child
   const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditor | null) => {
+    (editorInstance: BlockNoteEditorType | null) => {
       setEditor(editorInstance);
     },
     [],
   );
-
-  // New callback to receive content updates from the editor component
-  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
-    setEditorContent(blocks);
-  }, []);
 
   const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setCurrentKeyword(e.target.value);
@@ -259,11 +242,12 @@ export default function NewCardPage() {
             <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
               Content
             </FormLabel>
-            {/* Render the dynamically imported component and set it to editable */}
+            {/* Use the custom BlockNoteEditor with toolbar */}
             <BlockNoteEditorComponent
-              onEditorChange={handleEditorInstanceReady}
-              onContentUpdate={handleEditorContentUpdate}
-              editable={true}
+              initialContent={editorContent}
+              onChange={setEditorContent}
+              onEditorReady={handleEditorInstanceReady}
+              readOnly={false}
             />
           </FormControl>
 

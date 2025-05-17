@@ -7,10 +7,10 @@ Status: In Progress (Priority)
 
 #### Tasks:
 1. **TS-GCS-SETUP**: Setup Google Cloud Storage for Media
-   - Status: Not Started
+   - Status: Completed
    - Priority: High
    - Dependencies: None
-   - Notes: Prerequisite for image handling features
+   - Notes: GCS bucket is operational and service account permissions are configured for backend image uploads.
 
 2. **TS-REDIS-SETUP**: Setup Managed Redis (Google Cloud Memorystore)
    - Status: Not Started
@@ -19,16 +19,22 @@ Status: In Progress (Priority)
    - Notes: Required for session management and caching
 
 3. **TS-MEDIA-BLOCK-BE**: Implement Image Block Backend Support
-   - Status: Not Started
+   - Status: Completed
    - Priority: High
    - Dependencies: TS-GCS-SETUP
-   - Notes: Core functionality for image handling
+   - Notes: Next.js API route `/api/upload/image` is functional, uploading images to GCS.
 
 4. **TS-MEDIA-BLOCK-FE**: Implement Image Block in Frontend Editor
-   - Status: Not Started
+   - Status: Completed
    - Priority: High
    - Dependencies: TS-MEDIA-BLOCK-BE
-   - Notes: User interface for image handling
+   - Notes: BlockNote editor now supports image uploads to GCS via the `/api/upload/image` backend. The default `/image` slash command in BlockNote provides "Upload" and "Embed" options.
+
+5. **TS-SAVE-CARD**: Implement Save Card Functionality (Backend & Frontend)
+   - Status: Not Started
+   - Priority: High
+   - Dependencies: TS-MEDIA-BLOCK-FE (for content generation)
+   - Notes: Involves creating a Next.js API route to save card data (title, keywords, BlockNote JSON content with image GCS URLs) to the database using Prisma, and updating the frontend to use this API.
 
 ### Epic 1: Core AI Feature Backend Implementation (CrewAI)
 Status: Paused
@@ -82,15 +88,16 @@ Status: Not Started (Future)
 ## Development Notes
 
 ### Current Focus
-- Priority is on completing Epic 0 tasks to establish foundational infrastructure
-- AI feature development (Epics 1-4) is paused until Epic 0 is complete
-- Testing and documentation (Epic 6) continues in parallel with Epic 0
+- Priority is on completing Epic 0 tasks to establish foundational infrastructure.
+- Implementing card saving functionality (TS-SAVE-CARD).
+- AI feature development (Epics 1-4) is paused until Epic 0 is complete.
+- Testing and documentation (Epic 6) continues in parallel with Epic 0.
 
 ### Next Steps
-1. Begin TS-GCS-SETUP task
-2. Document current testing practices (TS-TEST-1)
-3. Define testing strategy (TS-TEST-2)
-4. Proceed with remaining Epic 0 tasks in sequence
+1. Begin TS-SAVE-CARD: Implement Save Card Functionality.
+2. Continue documenting current testing practices (TS-TEST-1).
+3. Define testing strategy (TS-TEST-2) alongside Epic 0 development.
+4. Address TS-REDIS-SETUP when session management or caching becomes a priority.
 
 ### Blockers & Dependencies
 - AI feature development blocked by Epic 0 completion
@@ -98,5 +105,5 @@ Status: Not Started (Future)
 - Frontend image block implementation depends on backend support
 
 ## Last Updated
-- Date: 2024-03-21
-- Version: 0.2.1 
+- Date: 2024-03-22
+- Version: 0.2.2 

@@ -107,132 +107,129 @@ export async function GET(req: NextRequest) {
 
 // --- POST Handler (Create Card) ---
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(authOptions); // --- REVERTED: Session check enabled ---
 
   if (!session || !session.user?.id) {
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    // --- REVERTED: Session check enabled ---
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); // --- REVERTED: Session check enabled ---
   }
 
   try {
-    const userId = session.user.id;
     const body = await req.json();
-    const { title, content, folderId, tags } = body;
+    const { title, tags, content, folderId } = body;
 
-    // --- Input Validation ---
+    // Basic validation for title and content
     if (!title || typeof title !== 'string' || title.trim().length === 0) {
       return NextResponse.json(
-        { message: 'Title is required and must be a non-empty string' },
+        { error: 'Title is required and must be a non-empty string.' },
         { status: 400 },
       );
     }
-
-    if (content === undefined || content === null) {
-      // Allow empty objects/arrays, but not missing
+    if (!content) {
+      // Assuming content can be an empty JSON object/array but must be present
       return NextResponse.json(
-        { message: 'Content is required' },
+        { error: 'Content is required.' },
         { status: 400 },
       );
     }
-    // Basic check if content is somewhat object-like (Prisma expects Json type)
-    // More specific validation might be needed depending on expected content structure
     if (typeof content !== 'object') {
+      // Basic check for JSON structure
       return NextResponse.json(
-        { message: 'Content must be a valid JSON object' },
+        { error: 'Content must be a valid JSON object or array.' },
         { status: 400 },
       );
     }
 
+    // Validate tags: must be an array of non-empty strings if provided
+    let validTags: string[] = [];
+    if (tags !== undefined) {
+      if (
+        !Array.isArray(tags) ||
+        !tags.every((tag) => typeof tag === 'string' && tag.trim().length > 0)
+      ) {
+        return NextResponse.json(
+          { error: 'Tags must be an array of non-empty strings.' },
+          { status: 400 },
+        );
+      }
+      validTags = tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0);
+    }
+
+    // Validate folderId if provided
     if (
       folderId !== undefined &&
       (typeof folderId !== 'string' || folderId.trim().length === 0)
     ) {
       return NextResponse.json(
-        { message: 'folderId must be a non-empty string if provided' },
+        { error: 'folderId must be a non-empty string if provided.' },
         { status: 400 },
       );
     }
-    // Validate tags if provided (must be an array of strings)
-    if (tags !== undefined && !Array.isArray(tags)) {
-      return NextResponse.json(
-        { message: 'Tags must be an array of strings' },
-        { status: 400 },
-      );
-    }
-    if (
-      tags &&
-      Array.isArray(tags) &&
-      !tags.every((tag) => typeof tag === 'string')
-    ) {
-      return NextResponse.json(
-        { message: 'All tags in the array must be strings' },
-        { status: 400 },
-      );
-    }
-    // --- End Validation ---
 
-    // Prepare data for Prisma create
-    const data: Prisma.KnowledgeCardCreateInput = {
+    const createData: Prisma.KnowledgeCardCreateInput = {
       title: title.trim(),
-      content: content, // Prisma expects JSON compatible object/value
+      content,
       user: {
-        // Connect to the existing user via the relation field
-        connect: { id: userId },
+        connect: { id: session.user.id }, // --- REVERTED: Use session.user.id ---
       },
-      // Add tags if provided
-      ...(tags &&
-        Array.isArray(tags) &&
-        tags.length > 0 && {
-          tags: {
-            connectOrCreate: tags.map((tagName: string) => ({
-              where: { name: tagName.trim() },
-              create: { name: tagName.trim() },
-            })),
-          },
-        }),
     };
 
-    // Add folderId only if it's provided and valid
+    if (validTags.length > 0) {
+      createData.tags = {
+        connectOrCreate: validTags.map((tagName) => ({
+          where: { name: tagName },
+          create: { name: tagName },
+        })),
+      };
+    }
+
     if (folderId) {
-      // Optional: Check if the folder exists and belongs to the user
       const folder = await prisma.folder.findFirst({
-        where: { id: folderId, userId: userId },
+        where: { id: folderId, userId: session.user.id }, // --- REVERTED: Use session.user.id ---
       });
       if (!folder) {
         return NextResponse.json(
-          { message: 'Folder not found or access denied' },
+          { error: 'Folder not found or access denied.' },
           { status: 404 },
-        );
+        ); // Message updated
       }
-      data.folder = { connect: { id: folderId } }; // New way: connect via relation
+      createData.folder = { connect: { id: folderId } };
     }
 
-    // Create the Knowledge Card
     const newCard = await prisma.knowledgeCard.create({
-      data: data,
+      data: createData,
       include: {
-        // Explicitly include tags and folder in the response
+        // Optionally include relations in the response
         tags: true,
         folder: true,
       },
     });
 
     return NextResponse.json(newCard, { status: 201 });
-  } catch (error: unknown) {
-    console.error('Create Card Error:', error);
-    // Handle potential Prisma errors (e.g., unique constraint violation? unlikely here)
-    // Check if error is a Prisma error with a code property
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2003'
-    ) {
-      // Foreign key constraint failed (e.g., invalid folderId)
+  } catch (error) {
+    console.error('Error creating card:', error);
+    if (error instanceof SyntaxError) {
       return NextResponse.json(
-        { message: 'Invalid folderId provided' },
+        { error: 'Invalid JSON in request body' },
         { status: 400 },
       );
     }
+    // Check if the error is an instance of Prisma's known request error
+    // This is a more robust way to check than error.code directly on an unknown type
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        return NextResponse.json(
+          {
+            error:
+              'A database error occurred (e.g., unique constraint failed).',
+          },
+          { status: 409 },
+        );
+      }
+      // You could add more specific Prisma error codes here if needed
+    }
     return NextResponse.json(
-      { message: 'Internal Server Error' },
+      { error: 'Failed to create card' },
       { status: 500 },
     );
   } finally {

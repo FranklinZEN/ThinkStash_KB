@@ -213,3 +213,9 @@ node_modules/
 
 # Documentation
 documentation/
+
+#gcp credentials
+thinkstash-knowledge-base-94ace76cab03.json
+
+# AIService specific .env
+aiservice/.env

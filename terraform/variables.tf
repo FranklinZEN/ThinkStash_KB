@@ -112,4 +112,10 @@ variable "gemini_api_key" {
   sensitive   = true
   # No default, must be provided if a Gemini API key secret is to be created with a value
 }
+
+variable "app_domain" {
+  description = "The domain name for the application (e.g., app.thinkstash.com)."
+  type        = string
+  default     = "localhost" # Default to localhost for development
+}
 // Add other common variables as needed 

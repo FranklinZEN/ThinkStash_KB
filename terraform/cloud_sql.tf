@@ -53,7 +53,7 @@ resource "google_sql_database_instance" "main_db_instance" {
     ip_configuration {
       ipv4_enabled    = true
       private_network = "projects/${var.gcp_project_id}/global/networks/${var.vpc_network_name}"
-      require_ssl     = true
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
     backup_configuration {
       enabled            = true
