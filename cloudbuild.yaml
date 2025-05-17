@@ -138,7 +138,7 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
-    '--update-secrets=DB_USER=kc-db-user:latest,DB_PASSWORD=kc-db-password:latest,DB_NAME=kc-db-name:latest,DB_HOST_PATH=kc-db-host-path:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
+    '--update-secrets=DB_USER=kc-db-user:latest,DB_PASSWORD=kc-db-password:latest,DB_NAME=kc-db-name:latest,DB_HOST_PATH=kc-db-host-path:latest,NEXTAUTH_SECRET=nextauth-secret:latest,GCS_MEDIA_BUCKET_NAME=kc-gcs-media-bucket-name:latest'
   ]
 
 options:
