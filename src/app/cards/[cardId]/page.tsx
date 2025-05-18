@@ -33,6 +33,7 @@ import {
   VStack,
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
+import type { UploadApiResponse } from '@/app/api/upload/image/route';
 
 // Import BlockNote components - STATICALLY
 // import { useBlockNote } from '@blocknote/react'; // REMOVE this direct import
@@ -41,9 +42,9 @@ import { BlockNoteEditor, type PartialBlock } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
 
-// Dynamically import the editor component with SSR disabled (similar to NewCardPage)
-const BlockNoteEditorComponent = dynamic(
-  () => import('@/components/BlockNoteEditorComponent'),
+// Dynamically import the CORRECT editor component
+const BlockNoteEditor = dynamic(
+  () => import('@/components/editor/BlockNoteEditor'),
   {
     ssr: false,
     loading: () => (
@@ -79,6 +80,7 @@ interface CardUpdatePayload {
   title?: string;
   content?: BlockNoteDocument | string | null;
   tags?: string[]; // This should be string[] as expected by the API endpoint body
+  newImageMetadata?: UploadApiResponse[];
 }
 
 export default function CardDetailPage() {
@@ -96,37 +98,32 @@ export default function CardDetailPage() {
 
   const [card, setCard] = useState<KnowledgeCard | null>(null);
   const [title, setTitle] = useState('');
-  const [keywords, setKeywords] = useState<string[]>([]); // State for keywords
-  const [currentKeyword, setCurrentKeyword] = useState(''); // State for current keyword input
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [currentKeyword, setCurrentKeyword] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
-  const [editorContent, setEditorContent] = useState<
-    PartialBlock[] | undefined
-  >(undefined); // For content tracking
+  const [editorContent, setEditorContent] = useState<PartialBlock[] | undefined>(undefined);
+  
+  // State to hold metadata for images newly uploaded during this edit session
+  const [newlyUploadedImageMetadata, setNewlyUploadedImageMetadata] = useState<UploadApiResponse[]>([]);
 
-  // Callback to receive the editor instance from the BlockNoteEditorComponent
-  const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditor | null) => {
-      setEditor(editorInstance);
-      // When editor is ready, if we have fetched card data, try to load its content
-      // This might be redundant if fetchCard already handles it due to editor dependency
-      if (editorInstance && card && card.content) {
-        // Initial content loading logic is primarily within fetchCard, triggered by editor changing
-      }
-    },
-    [card],
-  ); // Add card to dependencies to re-run if card data changes before editor is ready
+  const handleEditorInstanceReady = useCallback((editorInstance: BlockNoteEditor | null) => {
+    setEditor(editorInstance);
+  }, []);
 
-  // Callback to receive content updates from the editor component
   const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
     setEditorContent(blocks);
   }, []);
 
-  // --- Data Fetching ---
+  // Handler for newly uploaded images during an edit session
+  const handleImageUploadedDuringEdit = useCallback((metadata: UploadApiResponse) => {
+    setNewlyUploadedImageMetadata((prev) => [...prev, metadata]);
+  }, []);
+
   const fetchCard = useCallback(async () => {
     if (!cardId || status !== 'authenticated') return;
     setIsLoading(true);
@@ -150,7 +147,7 @@ export default function CardDetailPage() {
       const data: KnowledgeCard = await response.json();
       setCard(data);
       setTitle(data.title);
-      setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []); // Extract tag names for keywords state
+      setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []);
 
       // Load content into editor once fetched and editor is ready
       if (editor && data.content) {
@@ -195,6 +192,7 @@ export default function CardDetailPage() {
               editor.topLevelBlocks,
               contentToLoad as PartialBlock[],
             );
+            setEditorContent(contentToLoad as PartialBlock[]);
           }
         } catch (err: unknown) {
           console.error('Error loading content into editor:', err);
@@ -254,16 +252,24 @@ export default function CardDetailPage() {
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
 
-    const currentContent = editor.document;
+    const currentDocumentState = editor.document; // Get the latest document state directly from editor
+    
+    const processedCurrentContent = currentDocumentState.map(block => {
+      if (block.type === 'image' && block.props && block.props['data-app-served-url']) {
+        const newProps = { ...block.props };
+        newProps.url = newProps['data-app-served-url'] as string;
+        return { ...block, props: newProps };
+      }
+      return block;
+    });
+
     const originalContent = card.content;
 
-    // Basic check for changes (more robust checks might compare JSON deeply)
     const hasTitleChanged = title.trim() !== card.title;
-    // Normalize original content for comparison
+    
     let originalContentForComparison: BlockNoteDocument | undefined;
     if (originalContent) {
       if (typeof originalContent === 'string') {
-        // Should ideally not happen
         const trimmedContent = originalContent.trim();
         if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
           originalContentForComparison = JSON.parse(trimmedContent);
@@ -272,11 +278,7 @@ export default function CardDetailPage() {
             {
               id: `block-orig-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`,
               type: 'paragraph',
-              props: {
-                textColor: 'default',
-                backgroundColor: 'default',
-                textAlignment: 'left',
-              },
+              props: { textColor: 'default', backgroundColor: 'default', textAlignment: 'left' },
               content: [{ type: 'text', text: originalContent, styles: {} }],
               children: [],
             },
@@ -286,45 +288,36 @@ export default function CardDetailPage() {
         originalContentForComparison = originalContent as BlockNoteDocument;
       }
     }
-    const hasContentChanged =
-      JSON.stringify(currentContent) !==
-      JSON.stringify(originalContentForComparison || []);
+    const hasContentChanged = JSON.stringify(processedCurrentContent) !== JSON.stringify(originalContentForComparison || []);
 
-    // Check if keywords have changed
     const originalTags = card.tags || [];
     const hasKeywordsChanged =
-      JSON.stringify(keywords.sort()) !== JSON.stringify(originalTags.sort());
+      JSON.stringify(keywords.sort()) !== JSON.stringify(originalTags.map(tag => tag.name).sort()); // Compare with tag names
 
     if (!hasTitleChanged && !hasContentChanged && !hasKeywordsChanged) {
       toast({ title: 'No changes detected.', status: 'info', duration: 3000 });
-      setIsEditing(false); // Exit edit mode if no changes
+      setIsEditing(false);
       return;
     }
     if (!title.trim()) {
-      toast({
-        title: 'Title cannot be empty.',
-        status: 'warning',
-        duration: 3000,
-      });
+      toast({ title: 'Title cannot be empty.', status: 'warning', duration: 3000 });
       return;
     }
 
     const updatePayload: CardUpdatePayload = {};
     if (hasTitleChanged) updatePayload.title = title.trim();
-    // Use editorContent for consistency if available, otherwise editor.document
-    const contentToSave = editorContent || (editor ? editor.document : null);
-    if (hasContentChanged && contentToSave)
-      updatePayload.content = contentToSave as BlockNoteDocument;
-    if (hasKeywordsChanged) updatePayload.tags = keywords; // Correct: send the array of keyword strings
+    if (hasContentChanged) updatePayload.content = processedCurrentContent as BlockNoteDocument;
+    if (hasKeywordsChanged) updatePayload.tags = keywords.map(kw => kw.startsWith('#') ? kw.substring(1).toLowerCase() : kw.toLowerCase());
+
+    // Include newly uploaded image metadata if any
+    if (newlyUploadedImageMetadata.length > 0) {
+      updatePayload.newImageMetadata = newlyUploadedImageMetadata;
+    }
 
     setIsSaving(true);
     setError(null);
 
-    console.log('Updating card with payload:', updatePayload); // Log payload being sent
-
     try {
-      // Use PUT to replace the entire card data (or PATCH if API supports partial)
-      // Assuming PUT for now based on previous context
       const response = await fetch(`/api/cards/${cardId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -332,34 +325,26 @@ export default function CardDetailPage() {
       });
 
       const updatedCard = await response.json();
-      console.log('API response for updated card:', updatedCard); // Log API response
 
       if (response.ok) {
         setCard(updatedCard as KnowledgeCard);
         setTitle(updatedCard.title);
-        setKeywords(
-          updatedCard.tags ? updatedCard.tags.map((tag) => tag.name) : [],
-        ); // Extract tag names
+        setKeywords(updatedCard.tags ? updatedCard.tags.map((tag: Tag) => tag.name) : []);
         setIsEditing(false);
-        toast({
-          title: 'Card updated successfully',
-          status: 'success',
-          duration: 3000,
-        });
+        toast({ title: 'Card updated successfully', status: 'success', duration: 3000 });
+        setNewlyUploadedImageMetadata([]); // Clear metadata for new images after successful save
+        if (editor && updatedCard.content) {
+            await editor.replaceBlocks(editor.topLevelBlocks, updatedCard.content as PartialBlock[]);
+            setEditorContent(updatedCard.content as PartialBlock[]);
+        }
       } else {
         throw new Error(updatedCard.message || 'Failed to update card');
       }
     } catch (err: unknown) {
       console.error('Save card error:', err);
-      const errorMessage =
-        err instanceof Error ? err.message : 'Could not save changes';
+      const errorMessage = err instanceof Error ? err.message : 'Could not save changes';
       setError(errorMessage);
-      toast({
-        title: 'Error saving card',
-        description: errorMessage,
-        status: 'error',
-        duration: 5000,
-      });
+      toast({ title: 'Error saving card', description: errorMessage, status: 'error', duration: 5000 });
     } finally {
       setIsSaving(false);
     }
@@ -612,10 +597,12 @@ export default function CardDetailPage() {
                 Content
               </FormLabel>
               <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
-                <BlockNoteEditorComponent
-                  onEditorChange={handleEditorInstanceReady}
-                  onContentUpdate={handleEditorContentUpdate}
-                  editable={isEditing}
+                <BlockNoteEditor
+                  onEditorReady={handleEditorInstanceReady}
+                  onChange={handleEditorContentUpdate}
+                  readOnly={!isEditing}
+                  initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock[] : undefined}
+                  onImageUploaded={handleImageUploadedDuringEdit}
                 />
               </Box>
             </FormControl>
@@ -691,10 +678,10 @@ export default function CardDetailPage() {
             minH="500px"
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
-            <BlockNoteEditorComponent
-              onEditorChange={handleEditorInstanceReady} // Editor instance still needed for initial load
-              onContentUpdate={handleEditorContentUpdate} // Keep content in sync if needed
-              editable={isEditing} // This will be false here
+            <BlockNoteEditor
+              onEditorReady={handleEditorInstanceReady}
+              readOnly={true}
+              initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock[] : undefined}
             />
           </Box>
         </Box>

@@ -8,63 +8,116 @@ import {
   PartialBlock,
 } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
-import { customSchema } from '@/lib/editor/blocks';
+import { customSchema } from '../../lib/editor/blocks';
 
-// Upload handler (copied from previous working version)
-const handleFileUpload = async (file: File): Promise<string> => {
-  console.log('BlockNote handleFileUpload - Selected file:', file.name);
+// Import the type from the API route
+import type { UploadApiResponse } from '@/app/api/upload/image/route'; // Adjust path if necessary
+
+// For direct inspection if needed
+// import { ImageBlock as DirectlyImportedImageBlock } from '../../components/blocks/ImageBlock';
+
+// Define what handleFileUpload returns for an image block
+// It will now include data attributes for the final URLs
+interface OptimisticImageBlockUploadResponse {
+  type: 'image';
+  props: {
+    url: string;
+    caption: string;
+    'data-app-served-url': string;
+    'data-gcs-path': string;
+    alt?: string;
+  };
+}
+
+// Keep track of created object URLs globally for this editor instance
+// This is not ideal if multiple editors are on the page, but simple for now.
+// A better approach would be to manage this within the component's lifecycle using state/refs.
+// We will use state within the component instead.
+
+// Upload handler modified for optimistic updates
+const createOptimisticHandleFileUpload = (
+  addCreatedObjectUrl: (url: string) => void,
+  onImageUploadStart?: () => void,
+  onImageUploaded?: (blobUrl: string, metadata: UploadApiResponse) => void,
+  onImageUploadError?: (error: Error) => void
+) => async (
+  file: File,
+): Promise<OptimisticImageBlockUploadResponse> => {
+  if (onImageUploadStart) {
+    onImageUploadStart();
+  }
+  
+  const objectUrl = URL.createObjectURL(file);
+  addCreatedObjectUrl(objectUrl);
+
   const formData = new FormData();
   formData.append('file', file);
   try {
-    console.log(
-      'BlockNote handleFileUpload - Attempting to upload to /api/upload/image...',
-    );
     const response = await fetch('/api/upload/image', {
       method: 'POST',
       body: formData,
     });
-    console.log(
-      'BlockNote handleFileUpload - Upload response status:',
-      response.status,
-    );
     const responseBody = await response.text();
-    console.log(
-      'BlockNote handleFileUpload - Upload response body:',
-      responseBody,
-    );
+
     if (!response.ok) {
-      let errorData;
+      let errorDetails = `Upload failed with status ${response.status}`;
       try {
-        errorData = JSON.parse(responseBody);
-      } catch {
-        errorData = {
-          message: `Upload failed with status ${response.status}. Response: ${responseBody}`,
-        };
+        const errorData = JSON.parse(responseBody);
+        errorDetails = errorData.details || errorData.error || errorData.message || responseBody;
+      } catch {}
+      console.error('[BlockNoteEditor.tsx] handleFileUpload - Upload failed:', errorDetails);
+      URL.revokeObjectURL(objectUrl);
+      const err = new Error(typeof errorDetails === 'string' ? errorDetails : JSON.stringify(errorDetails));
+      if (onImageUploadError) {
+        onImageUploadError(err);
       }
-      console.error('BlockNote handleFileUpload - Upload failed:', errorData);
-      alert(`Failed to upload image: ${errorData.message || responseBody}`);
-      throw new Error(`Upload failed: ${errorData.message || responseBody}`);
+      alert(`Failed to upload image: ${errorDetails}`);
+      throw err;
     }
-    const data = JSON.parse(responseBody);
-    console.log('BlockNote handleFileUpload - Upload successful, data:', data);
-    if (!data.url) {
+
+    const apiResponseData: UploadApiResponse = JSON.parse(responseBody);
+
+    if (!apiResponseData.appServedUrl || !apiResponseData.gcsPath || !apiResponseData.contentType || !apiResponseData.originalFilename) {
       console.error(
-        'BlockNote handleFileUpload - Upload response missing URL:',
-        data,
+        '[BlockNoteEditor.tsx] handleFileUpload - Upload response missing crucial data:',
+        apiResponseData,
       );
-      alert('Upload succeeded but the server did not return an image URL.');
-      throw new Error('Upload response missing URL');
+      URL.revokeObjectURL(objectUrl);
+      const err = new Error('Upload succeeded but the server response was incomplete.');
+      if (onImageUploadError) {
+        onImageUploadError(err);
+      }
+      alert('Upload succeeded but the server response was incomplete.');
+      throw err;
     }
-    return data.url;
+
+    if (onImageUploaded) {
+      onImageUploaded(objectUrl, apiResponseData);
+    }
+
+    return {
+      type: 'image',
+      props: {
+        url: objectUrl,
+        caption: apiResponseData.originalFilename,
+        alt: apiResponseData.originalFilename,
+        appServedUrl: apiResponseData.appServedUrl,
+        gcsPath: apiResponseData.gcsPath,
+      }
+    };
   } catch (error) {
     console.error(
-      'BlockNote handleFileUpload - Error during image upload process:',
+      '[BlockNoteEditor.tsx] handleFileUpload - Error during image upload process:',
       error,
     );
-    alert(
-      `An unexpected error occurred during upload: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    throw error;
+    const typedError = error instanceof Error ? error : new Error(String(error));
+    if (onImageUploadError && !(error instanceof Error && error.message.startsWith("Failed to upload image:")) && !(error instanceof Error && error.message.startsWith("Upload succeeded but the server response was incomplete."))) {
+      onImageUploadError(typedError);
+    }
+    if (!(error instanceof Error && (error.message.startsWith("Failed to upload image:") || error.message.startsWith("Upload succeeded but the server response was incomplete.")))) {
+        alert(`An unexpected error occurred during upload: ${typedError.message}`);
+    }
+    throw typedError;
   }
 };
 
@@ -73,24 +126,47 @@ interface BlockNoteEditorProps {
   readOnly?: boolean;
   onEditorReady?: (editor: BlockNoteEditorType) => void;
   initialContent?: PartialBlock[];
+  onImageUploadStart?: () => void;
+  onImageUploaded?: (blobUrl: string, metadata: UploadApiResponse) => void;
+  onImageUploadError?: (error: Error) => void;
 }
 
-export function BlockNoteEditor({
+export default function BlockNoteEditor({
   onChange,
   readOnly = false,
   onEditorReady,
   initialContent,
+  onImageUploadStart,
+  onImageUploaded,
+  onImageUploadError,
 }: BlockNoteEditorProps) {
   const [editable, setEditable] = useState(!readOnly);
+  const [createdObjectUrls, setCreatedObjectUrls] = useState<string[]>([]);
+
+  const addCreatedObjectUrl = (url: string) => {
+    setCreatedObjectUrls(prev => [...prev, url]);
+  };
+  
+  useEffect(() => {
+    return () => {
+      createdObjectUrls.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [createdObjectUrls]);
 
   useEffect(() => {
     setEditable(!readOnly);
   }, [readOnly]);
+  
+  const handleFileUploadOptimistic = React.useMemo(
+    () => createOptimisticHandleFileUpload(addCreatedObjectUrl, onImageUploadStart, onImageUploaded, onImageUploadError),
+    [onImageUploadStart, onImageUploaded, onImageUploadError]
+  );
 
   const editor = useCreateBlockNote({
     schema: customSchema,
     initialContent: initialContent,
-    uploadFile: handleFileUpload,
+    uploadFile: handleFileUploadOptimistic,
+    // blockComponents: customBlockComponents, // This remains commented out
   });
 
   useEffect(() => {

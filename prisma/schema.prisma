@@ -31,6 +31,7 @@ model User {
   // Application-specific relations
   folders        Folder[]
   knowledgeCards KnowledgeCard[]
+  imageMetadata  ImageMetadata[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -96,22 +97,21 @@ model Folder {
 model KnowledgeCard {
   id        String   @id @default(cuid())
   title     String
-  content   Json // Using Json type as per ADR-004
+  content   Json?    // Assuming BlockNote content is stored as JSON
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   folderId  String?
-  folder    Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull) // SetNull on folder deletion
+  folder    Folder?  @relation(fields: [folderId], references: [id])
   tags      Tag[]    @relation("CardTags")
+  isStarred Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  isStarred Boolean  @default(false)
+
+  // Relation to ImageMetadata
+  imageMetadata ImageMetadata[]
 
   @@index([userId])
   @@index([folderId])
-  @@index([userId, isStarred])
-  @@index([userId, updatedAt])
-  @@index([userId, id])
-  @@index([userId, isStarred, updatedAt])
 }
 
 model Tag {
@@ -120,4 +120,26 @@ model Tag {
   cards     KnowledgeCard[] @relation("CardTags")
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+}
+
+// --- Add this new model for Image Metadata ---
+model ImageMetadata {
+  id               String   @id @default(cuid())
+  knowledgeCardId  String?  // Nullable if an image can exist before being attached to a card
+  knowledgeCard    KnowledgeCard? @relation(fields: [knowledgeCardId], references: [id], onDelete: Cascade)
+
+  userId           String   // The user who uploaded/owns this image instance
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  gcsPath          String   @unique // Actual, unique path to the object in GCS
+  appServedUrl     String   // The /api/images/... URL stored in BlockNote (or used for display)
+  contentType      String   // e.g., image/png
+  originalFilename String
+  size             Int      // File size in bytes
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([knowledgeCardId])
+  @@index([userId])
 }

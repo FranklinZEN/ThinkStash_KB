@@ -48,15 +48,15 @@ describe('API /api/cards/[cardId]', () => {
 
     it('should return 404 if card not found or not owned', async () => {
       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(null);
-      const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { // Use NextRequest
+      const request = new NextRequest(`http://localhost/api/cards/${mockCardId}`, { 
         method: 'PUT',
         body: JSON.stringify(validUpdatePayload)
       });
-      const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) }); // Wrap params
+      const response = await PUT(request, { params: Promise.resolve({ cardId: mockCardId }) });
       expect(response.status).toBe(404);
       expect(prisma.knowledgeCard.findUnique).toHaveBeenCalledWith({
          where: { id: mockCardId, userId: mockUserId },
-         select: { id: true },
+         include: { imageMetadata: { select: { gcsPath: true } } }, 
       });
     });
 
@@ -100,7 +100,7 @@ describe('API /api/cards/[cardId]', () => {
     });
 
     it('should update card title successfully', async () => {
-      const mockExistingCard = { id: mockCardId, userId: mockUserId };
+      const mockExistingCard = { id: mockCardId, userId: mockUserId, imageMetadata: [] };
       const mockUpdatedCard = { ...mockExistingCard, title: validUpdatePayload.title };
       (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);
       (prisma.knowledgeCard.update as jest.Mock).mockResolvedValue(mockUpdatedCard);
@@ -120,7 +120,7 @@ describe('API /api/cards/[cardId]', () => {
     });
 
     it('should move card to a valid folder successfully', async () => {
-      const mockExistingCard = { id: mockCardId, userId: mockUserId };
+      const mockExistingCard = { id: mockCardId, userId: mockUserId, imageMetadata: [] };
       const mockTargetFolder = { id: mockFolderId, userId: mockUserId };
       const mockUpdatedCardResult = { ...mockExistingCard, folderId: mockFolderId, folder: mockTargetFolder, tags: [] };
       
@@ -144,7 +144,7 @@ describe('API /api/cards/[cardId]', () => {
     });
 
      it('should move card to root (remove folder) successfully', async () => {
-       const mockExistingCard = { id: mockCardId, userId: mockUserId, folderId: mockFolderId }; 
+       const mockExistingCard = { id: mockCardId, userId: mockUserId, folderId: mockFolderId, imageMetadata: [] };
        const mockUpdatedCardResult = { ...mockExistingCard, folderId: null, folder: null, tags: [] };
 
        (prisma.knowledgeCard.findUnique as jest.Mock).mockResolvedValue(mockExistingCard);

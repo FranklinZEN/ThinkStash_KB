@@ -38,10 +38,9 @@ interface CardState {
   isLoading: boolean;
   error: string | null;
   fetchCards: (page?: number, pageSize?: number) => Promise<void>;
-  // deleteCard action added
   deleteCard: (cardId: string) => Promise<void>;
-  // moveCard action added (if not handled elsewhere)
   moveCard: (cardId: string, targetFolderId: string | null) => Promise<void>;
+  addCard: (newCard: CardListItem) => void; // Added addCard action
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -92,6 +91,20 @@ export const useCardStore = create<CardState>((set, get) => ({
         pagination: null,
       });
     }
+  },
+
+  addCard: (newCard: CardListItem) => {
+    set((state) => ({
+      cards: [newCard, ...state.cards], // Add to the beginning of the list
+      // Optionally adjust pagination if the new card affects the total count
+      pagination: state.pagination
+        ? { ...state.pagination, totalItems: state.pagination.totalItems + 1 }
+        : state.pagination, // Or null if pagination wasn't set
+    }));
+    // For a more robust solution, you might want to refetch the current page
+    // after adding, or adjust pagination more carefully if the new card
+    // should appear on the current page based on sorting.
+    // For now, this optimistically adds it to the currently loaded list.
   },
 
   deleteCard: async (cardId: string) => {

@@ -87,8 +87,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependencies and blockers documentation
 
 ## [Unreleased]
+
+### Fixed
+- **Robust Image URL Handling in Editor:**
+    - Resolved critical issue where temporary `blob:` URLs for uploaded images were being saved to the database instead of permanent, backend-served URLs. This was causing images to not display (`net::ERR_FILE_NOT_FOUND`) when viewing saved cards.
+    - Implemented a reliable mechanism in `NewCardPage.tsx` (and to be applied to `EditCardPage`) using a `useRef` map (`blobUrlToPermanentDataMapRef`) to associate temporary blob URLs with their final `appServedUrl` and `gcsPath` received after successful GCS upload.
+    - The card saving process now correctly uses this map to transform image block `props.url` to the permanent `appServedUrl` before sending content to the backend.
+    - Explicitly added `appServedUrl` and `gcsPath` as properties within the saved image block's `props` for data integrity.
+    - Corrected BlockNote custom schema prop naming for image blocks (e.g., `data-app-served-url` to `appServedUrl`) to ensure props are correctly handled by the editor.
+    - Implemented an `activeUploads` counter to disable save buttons during image uploads, preventing saves before upload completion and metadata acquisition.
+    - Utilized `editorRef` for stable access to the BlockNote editor instance in asynchronous callbacks.
+- **Backend Image Serving (`/api/images/[...gcsPath]`):**
+    - Fixed a 500 Internal Server Error caused by `TypeError: dest.on is not a function`. This occurred due to attempting to directly pipe a Node.js `Readable` stream (from GCS) to a Web API `WritableStream`.
+    - Resolved by converting the GCS Node.js stream to a Web API `ReadableStream` using `Readable.toWeb()` (from Node.js `stream` module) before passing it to `NextResponse`.
+    - Addressed a Next.js API route parameter handling warning in the image serving route by changing the function signature to use a `context` object (`context: { params: { ... } }`).
+- **Editor Upload Option:** Ensured the "Upload" option for images is consistently available in the editor on relevant pages (this was an earlier fix confirmed during the session).
+
+## [0.3.0] - 2025-05-17
+
 ### Added
-- Successfully configured Google Cloud Build trigger for the Next.js backend (linked to `ThinkStash_KB_Fresh_Filter/cloudbuild.yaml`). The build now correctly sets up Node.js (using nvm) and installs npm dependencies, and uses `CLOUD_LOGGING_ONLY`.
+- **Secure Image Handling (Sidecar Data Strategy):**
+    - Implemented private GCS bucket storage for all user-uploaded images.
+    - Created backend API (`/api/images/[...gcsPath]`) to serve images with authentication and ownership-based authorization.
+    - Introduced `ImageMetadata` database table to store image details and link them to cards and users.
+- **Optimistic Image Updates in Editor:**
+    - Images now display instantly in the BlockNote editor upon upload using temporary object URLs.
+    - Permanent image URLs are correctly processed and saved with the card content.
+- **Comprehensive Image Data Management:**
+    - Implemented logic to delete images from GCS and their metadata from the database when:
+        - A `KnowledgeCard` is deleted.
+        - An image is removed from a card's content during an update.
+- **Tag Management Enhancement:**
+    - Implemented logic to delete orphaned tags from the database if they are no longer associated with any cards after a card deletion.
+
+### Changed
+- **Refactored Image Upload Flow:** Updated client-side and server-side logic to support the new sidecar data strategy and optimistic updates.
+- **Database Schema:** Reviewed and confirmed appropriate indexes for `ImageMetadata` and `Tag` relations for improved performance and data integrity.
+- **Backend API Routes:** Enhanced `/api/cards` and `/api/cards/[cardId]` to manage `ImageMetadata` and handle image/tag deletion logic within transactions.
+
+### Fixed
+- Resolved previous issues where images would not display immediately after upload in the editor.
+- Ensured consistent tag normalization (lowercase) during creation and updates.
 
 [0.2.1]: https://github.com/FranklinZEN/ThinkStash_KB/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/FranklinZEN/ThinkStash_KB/releases/tag/v0.2.0 

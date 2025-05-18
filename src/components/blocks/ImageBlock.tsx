@@ -1,99 +1,92 @@
-import { Block } from '@blocknote/core';
-import { useBlockNote } from '@blocknote/react';
-import { Box, Button, Image, useToast } from '@chakra-ui/react';
-import { useCallback } from 'react';
+import React from 'react';
+// Make sure this path is correct for your schema definition
+import { customSchema } from "@/lib/editor/blocks"; 
+import { BlockNoteEditor as BEM, Block } from "@blocknote/core";
+import { Image, Button, Input, VStack, Text } from "@chakra-ui/react"; // Or your preferred UI components
+
+// Define the type for the image block based on your custom schema
+type CustomImageBlock = Block<typeof customSchema.image.type, typeof customSchema.image.props>;
 
 interface ImageBlockProps {
-  block: Block;
+  block: CustomImageBlock;
+  editor: BEM<typeof customSchema>; // Pass the editor instance
 }
 
-export function ImageBlock({ block }: ImageBlockProps) {
-  const toast = useToast();
-  const { updateBlock } = useBlockNote();
+const ImageBlock = ({ block, editor }: ImageBlockProps) => {
+  const { props } = block;
+  const imageSrc = props.url;
+  const captionText = props.caption || "";
+  const altText = props.alt || "";
+  const gcsPath = props.gcsPath || "";
+  const contentType = props.contentType || "";
 
-  const handleImageUpload = useCallback(async () => {
-    try {
-      // Create a file input element
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-
-      input.onchange = async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (!file) return;
-
-        // Create form data
-        const formData = new FormData();
-        formData.append('file', file);
-
-        // Upload to our API
-        const response = await fetch('/api/upload/image', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to upload image');
-        }
-
-        const data = await response.json();
-
-        // Update the block with the image URL
-        updateBlock(block, {
-          type: 'image',
-          props: {
-            url: data.url,
-            caption: file.name,
-          },
-        });
-      };
-
-      input.click();
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to upload image',
-        status: 'error',
-        duration: 5000,
-        isClosable: true,
-      });
+  // For this test, we'll have a button to manually trigger updateBlock
+  const handleTestUpdateProps = () => {
+    if (!editor) {
+      console.error("Editor instance not available in ImageBlock");
+      return;
     }
-  }, [block, toast, updateBlock]);
 
-  // If the block is an image block and has a URL, display it
-  if (block.type === 'image' && block.props.url) {
-    return (
-      <Box position="relative" width="100%" maxWidth="800px" margin="0 auto">
-        <Image
-          src={block.props.url}
-          alt={block.props.caption || 'Uploaded image'}
-          width="100%"
-          height="auto"
-          objectFit="contain"
+    const testProps = {
+      url: "/api/images/test/user/sample-updated-image.png", // Example final URL
+      caption: "Updated caption from ImageBlock",
+      alt: "Updated alt text from ImageBlock",
+      gcsPath: "test/user/sample-updated-image.png",
+      contentType: "image/png",
+      // Ensure any other props defined in your schema (even with defaults) are here
+      // e.g., if you had 'alignment', 'width', etc.
+    };
+
+    console.log("[ImageBlock.tsx] Attempting to update block with testProps:", testProps);
+    editor.updateBlock(block, {
+      props: testProps,
+    });
+    console.log("[ImageBlock.tsx] updateBlock called. Check editor content.");
+  };
+  
+  // A simple input for editing caption, to see if that also works via updateBlock
+  const handleCaptionChange = (newCaption: string) => {
+    editor.updateBlock(block, {
+      props: { ...props, caption: newCaption },
+    });
+  };
+
+  return (
+    <VStack 
+      alignItems="stretch" 
+      spacing={2} 
+      style={{ padding: '8px', border: '1px solid #eee', borderRadius: '4px', background: '#f9f9f9' }}
+    >
+      {imageSrc ? (
+        <Image 
+          src={imageSrc} 
+          alt={altText || captionText || 'Uploaded image'} 
+          style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
         />
-      </Box>
-    );
-  }
+      ) : (
+        <Text color="gray.500">No image URL</Text>
+      )}
+      
+      <Input 
+        value={captionText}
+        onChange={(e) => handleCaptionChange(e.target.value)}
+        placeholder="Enter caption"
+        size="sm"
+      />
+      
+      <Text fontSize="xs" color="gray.600">Alt: {altText || "(not set)"}</Text>
+      <Text fontSize="xs" color="gray.600">GCS Path: {gcsPath || "(not set)"}</Text>
+      <Text fontSize="xs" color="gray.600">Content Type: {contentType || "(not set)"}</Text>
+      <Text fontSize="xs" color="gray.600">URL: {imageSrc || "(not set)"}</Text>
 
-  // Otherwise, show the upload button, also ensuring it's an image block.
-  if (block.type === 'image') {
-    return (
-      <Box
-        border="2px dashed"
-        borderColor="gray.200"
-        borderRadius="md"
-        p={4}
-        textAlign="center"
-      >
-        <Button onClick={handleImageUpload} colorScheme="blue">
-          Upload Image
-        </Button>
-      </Box>
-    );
-  }
+      <Button onClick={handleTestUpdateProps} colorScheme="teal" size="sm" mt={2}>
+        Test Update All Props
+      </Button>
+      <Text fontSize="xs" color="gray.500" mt={1}>
+        Clicking "Test Update All Props" will attempt to set url, caption, alt, gcsPath, and contentType.
+      </Text>
+    </VStack>
+  );
+};
 
-  // Fallback for when the block is not an image type or if further logic is needed.
-  // console.warn("ImageBlock rendered with a non-image block or an unhandled case:", block);
-  return null;
-}
+export default ImageBlock;

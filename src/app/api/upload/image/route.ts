@@ -1,102 +1,111 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { uploadFile } from '@/lib/gcs';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth'; // Adjust path to your authOptions
+import { Storage } from '@google-cloud/storage';
+import { v4 as uuidv4 } from 'uuid';
+import prisma from '@/lib/prisma'; // Adjust path to your Prisma client
 
-// Define constants for validation
-const ALLOWED_MIME_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-];
-const MAX_FILE_SIZE_MB = 5; // 5MB
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+// Define and export the UploadApiResponse type
+export interface UploadApiResponse {
+  gcsPath: string;
+  appServedUrl: string;
+  contentType: string;
+  originalFilename: string;
+  size: number;
+  userId: string;
+}
 
-export async function POST(request: NextRequest) {
-  console.log('[/api/upload/image] POST request received');
-  try {
-    // Check authentication
-    console.log('Checking session...');
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      console.error('[/api/upload/image] Unauthorized: No session found');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    console.log(
-      '[/api/upload/image] Session valid for user:',
-      session.user?.email,
+const GCS_MEDIA_BUCKET_NAME = process.env.GCS_MEDIA_BUCKET_NAME;
+
+if (!GCS_MEDIA_BUCKET_NAME) {
+  console.error('GCS_MEDIA_BUCKET_NAME environment variable is not set.');
+  // Depending on your error handling strategy, you might throw an error here
+  // or ensure this is caught and handled gracefully during startup or request time.
+}
+
+// Initialize GCS Storage client
+// Ensure GOOGLE_APPLICATION_CREDENTIALS is set in your environment for this to work locally/on GCP.
+const storage = new Storage();
+const bucket = GCS_MEDIA_BUCKET_NAME ? storage.bucket(GCS_MEDIA_BUCKET_NAME) : null;
+
+export async function POST(req: NextRequest) {
+  if (!bucket) {
+    return NextResponse.json(
+      { error: 'GCS bucket not configured. GCS_MEDIA_BUCKET_NAME is missing.' }, 
+      { status: 500 }
     );
+  }
 
-    // Get the form data
-    console.log('[/api/upload/image] Parsing form data...');
-    const formData = await request.formData();
-    const file = formData.get('file') as File;
+  const session = await getServerSession(authOptions);
+  if (!session || !session.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const userId = session.user.id;
+
+  try {
+    const formData = await req.formData();
+    const file = formData.get('file') as File | null;
 
     if (!file) {
-      console.error('[/api/upload/image] No file provided in form data');
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-    }
-    console.log(
-      `[/api/upload/image] File received: ${file.name}, type: ${file.type}, size: ${file.size}`,
-    );
-
-    // Validate MIME type
-    if (!ALLOWED_MIME_TYPES.includes(file.type)) {
-      console.error(
-        `[/api/upload/image] Invalid file type: ${file.type}. Allowed: ${ALLOWED_MIME_TYPES.join(', ')}`,
-      );
-      return NextResponse.json(
-        {
-          error: `Invalid file type. Allowed types are: ${ALLOWED_MIME_TYPES.join(', ')}.`,
-        },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'No file provided.' }, { status: 400 });
     }
 
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      console.error(
-        `[/api/upload/image] File too large: ${file.size} bytes. Max size: ${MAX_FILE_SIZE_BYTES} bytes.`,
-      );
-      return NextResponse.json(
-        { error: `File exceeds maximum size of ${MAX_FILE_SIZE_MB}MB.` },
-        { status: 400 },
-      );
-    }
-
-    // Convert File to Buffer
-    console.log('[/api/upload/image] Converting file to buffer...');
-    const buffer = Buffer.from(await file.arrayBuffer());
-    console.log(
-      '[/api/upload/image] File converted to buffer, length:',
-      buffer.length,
-    );
+    // Generate a unique path/filename for GCS
+    const fileExtension = file.name.split('.').pop();
+    const uniqueFilename = `${uuidv4()}${fileExtension ? '.' + fileExtension : ''}`;
+    const gcsPath = `images/${userId}/${uniqueFilename}`;
 
     // Upload to GCS
-    console.log(`[/api/upload/image] Calling uploadFile for ${file.name}...`);
-    const result = await uploadFile(buffer, file.name, file.type);
-    console.log('[/api/upload/image] uploadFile result:', result);
+    const gcsFile = bucket.file(gcsPath);
+    const stream = gcsFile.createWriteStream({
+      metadata: {
+        contentType: file.type,
+      },
+      resumable: false, // simpler for single uploads, consider true for large files with retries
+    });
 
-    return NextResponse.json(result);
+    // Convert ArrayBuffer to Buffer for streaming if needed, or use file.stream()
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await new Promise((resolve, reject) => {
+      stream.on('error', (err) => {
+        console.error('GCS Upload Error:', err);
+        reject(err);
+      });
+      stream.on('finish', resolve);
+      stream.end(buffer);
+    });
+
+    const appServedUrl = `/api/images/${gcsPath}`;
+
+    const metadata: UploadApiResponse = {
+      gcsPath,
+      appServedUrl,
+      contentType: file.type,
+      originalFilename: file.name,
+      size: file.size,
+      userId,
+    };
+
+    // Note: We are NOT saving to ImageMetadata table here.
+    // That will be done when the card is saved, using the metadata returned by this API.
+
+    return NextResponse.json(metadata, { status: 200 });
+
   } catch (error) {
-    console.error(
-      '[/api/upload/image] Error during file upload process:',
-      error,
-    );
-    // Check if error is an object and has a message property
-    const errorMessage =
-      error instanceof Error ? error.message : 'An unknown error occurred';
-    return NextResponse.json(
-      { error: 'Failed to upload file', details: errorMessage },
-      { status: 500 },
-    );
+    console.error('Image upload failed:', error);
+    let errorMessage = 'Image upload failed.';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    }
+    return NextResponse.json({ error: 'Image upload failed', details: errorMessage }, { status: 500 });
   }
 }
 
-// Configure the API route to accept multipart/form-data
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+// The config object for bodyParser: false is not needed for App Router route handlers
+// as Next.js handles FormData parsing by default for them.
+// If you were using Pages Router (pages/api), you would need it:
+// export const config = {
+//   api: {
+//     bodyParser: false,
+//   },
+// };
