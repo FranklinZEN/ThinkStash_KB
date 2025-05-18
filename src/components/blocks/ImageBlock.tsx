@@ -1,53 +1,46 @@
 import React from 'react';
-// Make sure this path is correct for your schema definition
-import { customSchema } from "@/lib/editor/blocks"; 
-import { BlockNoteEditor as BEM, Block } from "@blocknote/core";
-import { Image, Button, Input, VStack, Text } from "@chakra-ui/react"; // Or your preferred UI components
+import { customSchema } from "@/lib/editor/blocks"; // Import customSchema
+import { BlockNoteEditor, Block } from "@blocknote/core"; // Import core types
+import { Image, Button, Input, VStack, Text } from "@chakra-ui/react"; 
 
-// Define the type for the image block based on your custom schema
-type CustomImageBlock = Block<typeof customSchema.image.type, typeof customSchema.image.props>;
+type CustomImageBlockType = Block<typeof customSchema, "image">;
 
 interface ImageBlockProps {
-  block: CustomImageBlock;
-  editor: BEM<typeof customSchema>; // Pass the editor instance
+  block: CustomImageBlockType;
+  editor: BlockNoteEditor<typeof customSchema>; // Use core type with customSchema
 }
 
 const ImageBlock = ({ block, editor }: ImageBlockProps) => {
-  const { props } = block;
+  const { props } = block; 
   const imageSrc = props.url;
   const captionText = props.caption || "";
   const altText = props.alt || "";
-  const gcsPath = props.gcsPath || "";
-  const contentType = props.contentType || "";
+  const gcsPath = props['data-gcs-path'] || ""; 
+  const contentType = props.contentType || ""; 
 
-  // For this test, we'll have a button to manually trigger updateBlock
   const handleTestUpdateProps = () => {
     if (!editor) {
       console.error("Editor instance not available in ImageBlock");
       return;
     }
-
+    const currentProps = block.props;
     const testProps = {
-      url: "/api/images/test/user/sample-updated-image.png", // Example final URL
+      ...currentProps, 
+      url: "/api/images/test/user/sample-updated-image.png", 
       caption: "Updated caption from ImageBlock",
       alt: "Updated alt text from ImageBlock",
-      gcsPath: "test/user/sample-updated-image.png",
+      'data-gcs-path': "test/user/sample-updated-image.png", 
       contentType: "image/png",
-      // Ensure any other props defined in your schema (even with defaults) are here
-      // e.g., if you had 'alignment', 'width', etc.
+      'data-app-served-url': "/api/images/test/user/sample-updated-image.png", 
     };
-
-    console.log("[ImageBlock.tsx] Attempting to update block with testProps:", testProps);
     editor.updateBlock(block, {
-      props: testProps,
+      props: testProps as Partial<CustomImageBlockType['props']>, 
     });
-    console.log("[ImageBlock.tsx] updateBlock called. Check editor content.");
   };
   
-  // A simple input for editing caption, to see if that also works via updateBlock
   const handleCaptionChange = (newCaption: string) => {
     editor.updateBlock(block, {
-      props: { ...props, caption: newCaption },
+      props: { ...block.props, caption: newCaption }, 
     });
   };
 
@@ -83,7 +76,7 @@ const ImageBlock = ({ block, editor }: ImageBlockProps) => {
         Test Update All Props
       </Button>
       <Text fontSize="xs" color="gray.500" mt={1}>
-        Clicking "Test Update All Props" will attempt to set url, caption, alt, gcsPath, and contentType.
+        Clicking &quot;Test Update All Props&quot; will attempt to set url, caption, alt, gcsPath, and contentType.
       </Text>
     </VStack>
   );

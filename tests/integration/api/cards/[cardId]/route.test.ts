@@ -139,7 +139,7 @@ describe('API /api/cards/[cardId]', () => {
       expect(prisma.knowledgeCard.update).toHaveBeenCalledWith({
         where: { id: mockCardId },
         data: { folder: { connect: { id: mockFolderId } } }, // Corrected data structure
-        include: { tags: true, folder: true }, // Added include to match route
+        include: { tags: true, folder: true, imageMetadata: true }, // Added include to match route
       });
     });
 
@@ -161,7 +161,7 @@ describe('API /api/cards/[cardId]', () => {
        expect(prisma.knowledgeCard.update).toHaveBeenCalledWith({
          where: { id: mockCardId },
          data: { folder: { disconnect: true } }, // Corrected data structure
-         include: { tags: true, folder: true }, // Added include to match route
+         include: { tags: true, folder: true, imageMetadata: true }, // Added include to match route
        });
        expect(prisma.folder.findUnique).not.toHaveBeenCalled(); 
      });

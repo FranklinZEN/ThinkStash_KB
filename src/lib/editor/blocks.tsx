@@ -2,44 +2,96 @@ import {
   BlockNoteSchema,
   defaultBlockSpecs,
   defaultStyleSpecs,
-  // createReactBlockSpec, // No longer using this directly for this test
+  defaultInlineContentSpecs,
+  type BlockConfig,
+  type BlockSchemaFromSpecs // Import BlockSchemaFromSpecs
+  // Removed BlockSpecs, BlockNoteSchemaTyped as they might be implicitly handled or unused now
 } from '@blocknote/core';
 
 // Import your custom ImageBlock component using path alias
 import ImageBlock from '@/components/blocks/ImageBlock';
 
 // Define the props for your custom image block
-const customImageProps = {
-  ...defaultBlockSpecs.image.props, // Start with default image props
+export const customImageProps = {
+  ...defaultBlockSpecs.image.config.propSchema, // Corrected to config.propSchema
   url: { default: "" as const },      // Ensure all defaults from base spec are covered or redefined
   caption: { default: "" as const },
   alt: { default: "" as const },
-  gcsPath: { default: "" as const }, // For storing the GCS path
-  contentType: { default: "" as const },
-  appServedUrl: { default: "" as const }, // CHANGED from 'data-app-served-url'
-  // Add any other props your ImageBlock or schema expects, e.g.:
-  // uploadInProgress: { default: false as const },
-  // 'data-gcs-path': { default: "" as const }, // This was redundant and commented out
+  'data-gcs-path': { default: "" as const }, // Reverted to hyphenated
+  contentType: { default: "" as const }, // Stays camelCase as it's fully custom
+  'data-app-served-url': { default: "" as const }, // Reverted to hyphenated
 };
 
-// Alternative way to define the custom image spec without createReactBlockSpec
-const customImageSpec = {
-  ...defaultBlockSpecs.image, // Spread default image spec to get its type, content handling etc.
-  props: customImageProps,     // Override with your custom props definition
-  component: ImageBlock,       // Assign your custom React component for rendering
-};
+// 1. Build blockConfigs from defaultBlockSpecs with safety check
+const blockConfigs: Record<string, BlockConfig> = {};
+for (const [key, spec] of Object.entries(defaultBlockSpecs)) {
+  if (spec.config) { 
+    blockConfigs[key] = spec.config;
+  } else {
+    console.warn(`[BlockNote Schema] Default spec for '${key}' is missing a .config property.`);
+    // Optionally provide a minimal fallback or skip
+  }
+}
 
-// Create the custom schema
-export const customSchema = BlockNoteSchema.create({
-  blockSpecs: {
-    ...defaultBlockSpecs,
-    image: customImageSpec as any, // Using 'as any' to bypass strict type checking if needed for this direct approach
-                                 // BlockNote types can be complex. Ideally, this would type-check correctly.
-  },
+// 2. Define your custom image config with safety checks
+let customImageConfig: BlockConfig;
+const defaultImageConfigRef = defaultBlockSpecs.image?.config;
+
+if (defaultImageConfigRef) {
+  customImageConfig = {
+    type: "image", 
+    propSchema: customImageProps,
+    content: defaultImageConfigRef.content || "none", 
+    styleSchema: defaultImageConfigRef.styleSchema, 
+    ...(defaultImageConfigRef.allowsBlocks !== undefined && { allowsBlocks: defaultImageConfigRef.allowsBlocks }),
+    ...(defaultImageConfigRef.childPlaceholder !== undefined && { childPlaceholder: defaultImageConfigRef.childPlaceholder }),
+  };
+} else {
+  console.error("[BlockNote Schema] Default image block config not found! Cannot create custom image config properly.");
+  customImageConfig = {
+    type: "image",
+    propSchema: customImageProps,
+    content: "none",
+  };
+}
+
+// Add/override the image config in blockConfigs
+if (blockConfigs.image || defaultImageConfigRef) { // Only override if default image config existed or image key already in blockConfigs
+    blockConfigs.image = customImageConfig;
+} else {
+    // If defaultBlockSpecs didn't even have an 'image' (highly unlikely), add it.
+    // But this case should ideally be handled by the loop above if defaultBlockSpecs.image was missing a .config
+    console.warn("[BlockNote Schema] Default image spec was entirely missing. Adding custom image config.");
+    blockConfigs.image = customImageConfig; 
+}
+
+// Explicitly define the type of the processed block schema
+export type CustomBlockSchemaInternal = BlockSchemaFromSpecs<typeof blockConfigs, typeof defaultInlineContentSpecs, typeof defaultStyleSpecs>;
+
+// Type customSchema using this explicit internal schema type
+export const customSchema = BlockNoteSchema.create({ // Let type be inferred as it was before this runtime error
+  blockSpecs: blockConfigs, 
+  inlineContentSpecs: defaultInlineContentSpecs,
   styleSpecs: defaultStyleSpecs,
 });
 
-// You might not need customBlockComponents if component is defined in spec
-// export const customBlockComponents = {
-//   image: ImageBlock, // This would be an alternative way if not using component in createReactBlockSpec
+// Export schema-derived types
+// export type CustomBlockNoteEditor = typeof customSchema.BlockNoteEditor;
+// export type CustomBlock = typeof customSchema.Block;
+// export type CustomPartialBlock = typeof customSchema.PartialBlock;
+// Potentially also: CustomInlineContent, CustomStyle if needed elsewhere
+
+// Provide custom components (for rendering)
+export const customBlockComponents = {
+  image: ImageBlock,
+};
+
+// Old definitions - can be removed if no longer used elsewhere
+// export const customImageSpec = {
+//   ...defaultBlockSpecs.image, 
+//   props: customImageProps,    
+// };
+// export const editorBlockSpecs: BlockSpecs = {
+//   ...defaultBlockSpecs,
+//   image: customImageSpec,
 // };

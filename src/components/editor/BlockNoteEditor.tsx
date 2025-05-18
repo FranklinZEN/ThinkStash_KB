@@ -1,17 +1,16 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import {
-  BlockNoteEditor as BlockNoteEditorType,
+  BlockNoteEditor as BlockNoteEditorCoreType,
   PartialBlock,
 } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
-import { customSchema } from '../../lib/editor/blocks';
+import { customSchema, customBlockComponents } from '../../lib/editor/blocks';
 
-// Import the type from the API route
-import type { UploadApiResponse } from '@/app/api/upload/image/route'; // Adjust path if necessary
+import type { UploadApiResponse } from '@/app/api/upload/image/route';
 
 // For direct inspection if needed
 // import { ImageBlock as DirectlyImportedImageBlock } from '../../components/blocks/ImageBlock';
@@ -23,9 +22,10 @@ interface OptimisticImageBlockUploadResponse {
   props: {
     url: string;
     caption: string;
+    alt?: string;
     'data-app-served-url': string;
     'data-gcs-path': string;
-    alt?: string;
+    contentType?: string;
   };
 }
 
@@ -101,8 +101,9 @@ const createOptimisticHandleFileUpload = (
         url: objectUrl,
         caption: apiResponseData.originalFilename,
         alt: apiResponseData.originalFilename,
-        appServedUrl: apiResponseData.appServedUrl,
-        gcsPath: apiResponseData.gcsPath,
+        'data-app-served-url': apiResponseData.appServedUrl,
+        'data-gcs-path': apiResponseData.gcsPath,
+        contentType: apiResponseData.contentType,
       }
     };
   } catch (error) {
@@ -122,10 +123,10 @@ const createOptimisticHandleFileUpload = (
 };
 
 interface BlockNoteEditorProps {
-  onChange?: (content: PartialBlock[]) => void;
+  onChange?: (content: PartialBlock<typeof customSchema>[]) => void;
   readOnly?: boolean;
-  onEditorReady?: (editor: BlockNoteEditorType) => void;
-  initialContent?: PartialBlock[];
+  onEditorReady?: (editor: BlockNoteEditorCoreType<typeof customSchema>) => void;
+  initialContent?: PartialBlock<typeof customSchema>[];
   onImageUploadStart?: () => void;
   onImageUploaded?: (blobUrl: string, metadata: UploadApiResponse) => void;
   onImageUploadError?: (error: Error) => void;
@@ -157,36 +158,35 @@ export default function BlockNoteEditor({
     setEditable(!readOnly);
   }, [readOnly]);
   
-  const handleFileUploadOptimistic = React.useMemo(
+  const handleFileUploadOptimistic = useMemo(
     () => createOptimisticHandleFileUpload(addCreatedObjectUrl, onImageUploadStart, onImageUploaded, onImageUploadError),
     [onImageUploadStart, onImageUploaded, onImageUploadError]
   );
 
-  const editor = useCreateBlockNote({
+  const editor: BlockNoteEditorCoreType<typeof customSchema> = useCreateBlockNote({ 
     schema: customSchema,
-    initialContent: initialContent,
+    initialContent: initialContent, 
     uploadFile: handleFileUploadOptimistic,
-    // blockComponents: customBlockComponents, // This remains commented out
   });
 
   useEffect(() => {
     if (editor && onEditorReady) {
-      onEditorReady(editor);
+      onEditorReady(editor); 
     }
   }, [editor, onEditorReady]);
 
-  if (!editor) {
-    return <p>Loading editor...</p>;
-  }
+  if (!editor) { return <p>Loading editor...</p>; }
 
+  // @ts-expect-error Known BlockNote type issue with BlockNoteView props, likely due to schema inference.
   return (
     <BlockNoteView
-      editor={editor}
+      editor={editor} 
       theme="light"
       editable={editable}
+      blockComponents={customBlockComponents}
       onChange={() => {
         if (onChange && editor) {
-          onChange(editor.topLevelBlocks);
+          onChange(editor.topLevelBlocks as PartialBlock<typeof customSchema>[]); 
         }
       }}
       slashMenu={true}

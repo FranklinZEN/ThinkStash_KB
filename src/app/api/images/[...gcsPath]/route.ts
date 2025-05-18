@@ -16,9 +16,9 @@ const bucket = GCS_MEDIA_BUCKET_NAME ? storage.bucket(GCS_MEDIA_BUCKET_NAME) : n
 
 export async function GET(
   req: NextRequest,
-  context: { params: { gcsPath: string[] } }
+  context: { params: Promise<{ gcsPath: string[] }> }
 ) {
-  const params = context.params;
+  const resolvedParams = await context.params;
 
   if (!bucket) {
     console.error('[GET /api/images] GCS bucket not configured.');
@@ -33,7 +33,7 @@ export async function GET(
 
   // Reconstruct the GCS path from the URL segments
   // e.g., if URL is /api/images/images/userId/filename.jpg, params.gcsPath will be ["images", "userId", "filename.jpg"]
-  const fullGcsPath = params.gcsPath.join('/');
+  const fullGcsPath = resolvedParams.gcsPath.join('/');
 
   if (!fullGcsPath) {
     return NextResponse.json({ error: 'Image path not provided.' }, { status: 400 });

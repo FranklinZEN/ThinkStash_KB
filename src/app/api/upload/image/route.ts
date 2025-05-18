@@ -3,7 +3,6 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path to your authOptions
 import { Storage } from '@google-cloud/storage';
 import { v4 as uuidv4 } from 'uuid';
-import prisma from '@/lib/prisma'; // Adjust path to your Prisma client
 
 // Define and export the UploadApiResponse type
 export interface UploadApiResponse {

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { getCurrentUserId } from '@/lib/sessionUtils';
 import { deleteGCSFile } from '@lib/gcs'; // Reverted to import deleteGCSFile directly
 import { PartialBlock } from '@blocknote/core'; // Import PartialBlock
-import { UploadApiResponse } from '@/app/api/upload/image/route'; // Import this type if not already
+import { UploadApiResponse as _UploadApiResponse } from '@/app/api/upload/image/route'; // Import this type if not already
 
 // interface RouteParams { // This interface will be removed
 //   params: Promise<{ cardId: string }>;
@@ -201,7 +201,10 @@ export async function PUT(
                 if (gcsPathFromUrl) {
                   gcsPathsInNewContent.add(gcsPathFromUrl);
                 }
-              } catch (e) { console.warn('Malformed URL in image block:', block.props.url); }
+              } catch {
+                // No need to use the error object, just log a warning
+                console.warn('Malformed URL in image block:', block.props.url);
+              }
             }
             // Check if children exist and is an array, then cast to PartialBlock[] for recursion
             if (block.children && Array.isArray(block.children)) {
@@ -269,7 +272,7 @@ export async function PUT(
 
       const updateData: Prisma.KnowledgeCardUpdateInput = {};
       if (validatedData.title !== undefined) updateData.title = validatedData.title;
-      if (validatedData.content !== undefined) updateData.content = validatedData.content as InputJsonValue;
+      if (validatedData.content !== undefined) updateData.content = validatedData.content as Prisma.InputJsonValue;
 
       if (validatedData.folderId !== undefined) {
         if (validatedData.folderId === null) {

@@ -1,0 +1,35 @@
+Got it. I’ll investigate the persistent type error you're seeing when installing a media block in Blocknote:
+
+"Type 'BlockSpecs' (Record\<string, BlockSpec\>) is not assignable to type 'Record\<string, BlockConfig\>' because BlockSpec is not assignable to BlockConfig."
+
+I’ll focus on identifying whether this is a known compatibility or typing issue in the Blocknote ecosystem—especially when extending it with media blocks—and check if others have faced and resolved the same error. I’ll share workarounds or updates from the community or maintainers.
+
+## **BlockSpec vs. BlockConfig – A Type Mismatch in BlockNote**
+
+**The Error & Underlying Cause:** Developers have reported a TypeScript error when adding custom or “media” blocks (e.g. image/video) in BlockNote. The error says that `Record<string, BlockSpec>` (often referred to as `BlockSpecs`) is not assignable to `Record<string, BlockConfig>`. In essence, a `BlockSpec` is not matching the expected `BlockConfig` type. This stems from BlockNote’s type design: **`BlockConfig`** describes the shape of a block’s schema (its `type`, whether it has inline content, and its props), whereas a **`BlockSpec`** represents the full specification of a block in the editor’s schema (often including the ProseMirror node and render logic). In newer versions, the library separated the *config* of a block from its *implementation*, which introduced a structural mismatch. For example, the React integration defines a `ReactBlockConfig` by extending the core BlockConfig (replacing the render with a React component) and then produces a `BlockSpec` that includes the actual TipTap node spec. The resulting `BlockSpec` object contains fields (like an internal `node` spec) that are **not present in** `BlockConfig`, and conversely may omit required `BlockConfig` fields (like the `type` string, since the type might be implicit in the node). This discrepancy is why TypeScript complains: structurally, a `BlockSpec` doesn’t satisfy the `BlockConfig` interface.
+
+**Recent Changes and Incompatibility:** It appears that a BlockNote update introduced this split between BlockConfig and BlockSpec. The **default built-in blocks** (e.g. paragraphs, headings, image, audio, etc.) are provided in a constant `defaultBlockSpecs` – a record of **BlockSpec** objects – while the `BlockNoteSchema.create()` function’s typing expects a record of **BlockConfig** for the `blockSpecs` option. The official docs illustrate adding a custom block like this:
+
+const schema \= BlockNoteSchema.create({  
+  blockSpecs: {  
+    ...defaultBlockSpecs,       // includes default blocks (BlockSpec objects)  
+    alert: Alert,              // a custom block spec returned by createReactBlockSpec  
+  },  
+});
+
+. This pattern works at runtime (BlockNote will merge in the default specs and your custom spec), but it confuses the type checker. In practice, **`defaultBlockSpecs` is typed as `Record<string, BlockSpec>`**, and `Alert` (from `createReactBlockSpec`) is also a BlockSpec – yet the `blockSpecs` parameter is typed to accept `Record<string, BlockConfig>`. This mismatch suggests an oversight in the type definitions. Essentially, recent versions expect just the **config shape** but are actually given full **spec objects**, leading to the type signature incompatibility.
+
+**Impact on Media/Custom Blocks:** This issue commonly surfaces when registering **media blocks or custom blocks**. Media blocks (like the built-in Image, Audio, or Video blocks) are defined with `content: "none"` (since they don’t contain inline text) and have custom prop schemas (e.g. an Image block has props for `url`, `caption`, etc.). Internally, BlockNote uses a **“File Block Config”** for such blocks, but it still ultimately produces a BlockSpec with a TipTap node for that media. If you attempt to **customize or re-register a media block**, or create a similar custom block, you may run into this same error. For instance, if you tried to override the default image block or add a new file-based block by constructing a BlockSpec and spreading `...defaultBlockSpecs`, TypeScript will flag the BlockSpec vs BlockConfig incompatibility. The problem isn’t with your block’s logic – it’s with the type definitions not lining up between BlockNote’s core and react parts.
+
+**Workarounds & Correct Registration:** For now, developers have taken a couple of approaches to bypass this issue. One practical workaround is **using type assertions or casts** to bridge the gap. For example, you can cast `defaultBlockSpecs` (or your custom spec) to `Record<string, BlockConfig>` when passing it into `BlockNoteSchema.create`, e.g. `blockSpecs: defaultBlockSpecs as Record<string, BlockConfig>` (or even `as any` as a last resort). This satisfies the compiler and lets you proceed, effectively acknowledging that the BlockSpec does fulfill the BlockConfig shape needed by the schema (even if TypeScript can’t infer it). The BlockNote team’s own examples simply spread `defaultBlockSpecs` and custom specs as shown above – implying that at runtime it’s correct, and the type error can be safely suppressed. **Ensuring your BlockNote packages are all the same version** is also important – mixing versions of `@blocknote/core` and `@blocknote/react` could exacerbate type mismatches. If you still encounter the error on the latest version, using the cast or a `// @ts-expect-error` comment on that line is a temporary measure.
+
+**Maintainer Acknowledgment:** This appears to be a known quirk of BlockNote’s type system rather than intended behavior. The maintainers haven’t explicitly documented this as a feature, so it’s likely an unintended bug or type signature oversight. In the BlockNote codebase, you can see that a `createReactBlockSpec` returns a BlockSpec object (with a TipTap node and propSchema), while the schema creation expects BlockConfig – a disconnect that the team will presumably resolve in future updates. There hasn’t been a specific public issue titled for the BlockSpec vs BlockConfig assignment error, but developers discussing custom blocks have implicitly run into it. Until an official fix or clarification is released, you can treat it as a minor type inconsistency. In summary, **BlockSpec and BlockConfig are structurally mismatched in current versions of BlockNote** – a likely byproduct of a recent refactor – and the recommended path is to follow the docs for registering custom blocks (using `BlockNoteSchema.create` with your blockspecs) and apply a small type coercion if needed. This will unblock you while the maintainers consider aligning the types. The core functionality is unaffected – it’s the TypeScript definitions that lag behind the implementation.
+
+**References:**
+
+* BlockNote documentation on **BlockConfig** and custom blocks
+
+* BlockNote’s React integration source (showing how `ReactBlockConfig` extends BlockConfig and produces a `BlockSpec`)
+
+* BlockNote issue discussions indicating usage of `createReactBlockSpec` and schema creation with block specs (illustrating how the types come into play)
+

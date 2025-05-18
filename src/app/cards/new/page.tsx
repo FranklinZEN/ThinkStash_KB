@@ -21,16 +21,27 @@ import {
   TagLabel,
   TagCloseButton
 } from '@chakra-ui/react';
-import {
-  BlockNoteEditor as BlockNoteEditorType,
-  PartialBlock,
-} from '@blocknote/core';
+// Remove direct imports from @blocknote/core, use schema-derived types instead
+// import {
+//   BlockNoteEditor as BlockNoteEditorType,
+//   PartialBlock,
+// } from '@blocknote/core';
 import { useCardStore } from '@/stores/cardStore';
 import dynamic from 'next/dynamic';
 import type { UploadApiResponse } from '@/app/api/upload/image/route';
 
+// Import schema-derived types
+// import {
+//   type CustomBlockNoteEditor,
+//   type CustomPartialBlock,
+// } from '@/lib/editor/blocks';
+
+// Import core BlockNote types and customSchema
+import { BlockNoteEditor, PartialBlock } from '@blocknote/core';
+import { customSchema } from '@/lib/editor/blocks';
+
 // Dynamically import BlockNoteEditor to prevent SSR issues
-const BlockNoteEditor = dynamic(() => import('@/components/editor/BlockNoteEditor'), { 
+const BlockNoteEditorComponent = dynamic(() => import('@/components/editor/BlockNoteEditor'), { 
   ssr: false,
   loading: () => (
     <Flex justify="center" align="center" height="200px">
@@ -47,7 +58,7 @@ interface ErrorResponse {
 }
 
 export default function NewCardPage() {
-  const { data: session, status: sessionStatus } = useSession();
+  const { data: _session, status: sessionStatus } = useSession();
   const router = useRouter();
   const toast = useToast();
   const [title, setTitle] = useState('');
@@ -59,12 +70,10 @@ export default function NewCardPage() {
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeUploads, setActiveUploads] = useState(0); // New state for active uploads
-  const editorRef = useRef<BlockNoteEditorType | null>(null);
-  const [editorContent, setEditorContent] = useState<
-    PartialBlock[] | undefined
-  >(undefined);
+  const editorRef = useRef<BlockNoteEditor<typeof customSchema> | null>(null);
+  const [editorContent, setEditorContent] = useState<PartialBlock<typeof customSchema>[] | undefined>(undefined);
   const [uploadedImageMetadata, setUploadedImageMetadata] = useState<UploadApiResponse[]>([]);
-  const addCard = useCardStore((state) => state.addCard);
+  const _addCard = useCardStore((state) => state.addCard);
 
   // New Ref to map blob URLs to their permanent metadata
   const blobUrlToPermanentDataMapRef = useRef<Record<string, { appServedUrl: string; gcsPath: string }>>({});
@@ -82,7 +91,7 @@ export default function NewCardPage() {
   }, [editorContent]);
 
   const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditorType | null) => {
+    (editorInstance: BlockNoteEditor<typeof customSchema> | null) => {
       editorRef.current = editorInstance;
       console.log('[NewCardPage] handleEditorInstanceReady: editor instance set in ref.');
     },
@@ -206,7 +215,7 @@ export default function NewCardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: title.trim(),
-          content: processedEditorContent,
+          content: processedEditorContent as PartialBlock<typeof customSchema>[],
           tags: keywords.map(kw => kw.startsWith('#') ? kw.substring(1).toLowerCase() : kw.toLowerCase()),
           // imageMetadata is still sent, containing all UploadApiResponse objects for the session
           // The backend can use this to create ImageMetadata entries if needed, linking them by gcsPath perhaps,
@@ -226,7 +235,7 @@ export default function NewCardPage() {
         throw new Error(serverError);
       }
 
-      const newCardData = await response.json();
+      const _newCardData = await response.json();
 
       toast({
         title: 'Card created successfully.',
@@ -352,7 +361,7 @@ export default function NewCardPage() {
             <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
               Content
             </FormLabel>
-            <BlockNoteEditor
+            <BlockNoteEditorComponent
               initialContent={editorContent}
               onChange={setEditorContent}
               onEditorReady={handleEditorInstanceReady}

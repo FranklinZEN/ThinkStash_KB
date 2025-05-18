@@ -1,44 +1,58 @@
 import { DELETE } from '@/app/api/cards/[cardId]/route';
 import { getCurrentUserId } from '@/lib/sessionUtils';
 import prisma from '@/lib/prisma'; // Jest will use src/lib/__mocks__/prisma.ts
-import * as GCSService from '@/lib/gcs';
+// import * as GCSService from '@/lib/gcs'; // No longer needed as we fully mock it
 import { NextRequest } from 'next/server';
-import { mockReset, DeepMockProxy } from 'jest-mock-extended'; // mockDeep is in the __mocks__ file
+import { mockReset, mockDeep, DeepMockProxy } from 'jest-mock-extended';
 
 // Mock sessionUtils
 jest.mock('@/lib/sessionUtils');
 const mockGetCurrentUserId = getCurrentUserId as jest.Mock;
 
 // Mock @lib/gcs (factory pattern)
+// Define mock functions directly inside the factory or ensure they are lexically available if defined outside.
+// Forcing them inside here for clarity and to avoid hoisting issues.
 const mockDeleteGCSFileFn = jest.fn();
 const mockUploadBufferToGCSFn_delete = jest.fn();
 const mockGetGCSFileStreamFn_delete = jest.fn();
+
 jest.mock('@lib/gcs', () => ({
     __esModule: true,
-    deleteGCSFile: mockDeleteGCSFileFn,
-    uploadBufferToGCS: mockUploadBufferToGCSFn_delete,
-    getGCSFileStream: mockGetGCSFileStreamFn_delete,
+    // These will now refer to the jest.fn() instances created above this jest.mock call.
+    // If this still causes issues, the jest.fn() themselves should be created *inside* this factory.
+    // Let's try moving them inside directly.
+    deleteGCSFile: jest.fn(), 
+    uploadBufferToGCS: jest.fn(),
+    getGCSFileStream: jest.fn(),
     bucketName: 'mock-bucket-for-delete-card-test'
 }));
-
-// REMOVED explicit jest.mock('@/lib/prisma', ...)
-// Manual mock src/lib/__mocks__/prisma.ts should be used.
 
 let mockPrismaInTest: DeepMockProxy<typeof prisma>; 
 
 describe('DELETE /api/cards/[cardId]', () => {
+  // Hold references to the mocks created within the factory for use in tests
+  let actualMockDeleteGCSFileFn: jest.Mock;
+  let actualMockUploadBufferToGCSFn_delete: jest.Mock;
+  let actualMockGetGCSFileStreamFn_delete: jest.Mock;
+
   beforeEach(() => {
     mockPrismaInTest = prisma as DeepMockProxy<typeof prisma>;
     mockReset(mockPrismaInTest);
-
     mockReset(mockGetCurrentUserId);
-    mockDeleteGCSFileFn.mockReset();
-    mockUploadBufferToGCSFn_delete.mockReset();
-    mockGetGCSFileStreamFn_delete.mockReset();
+
+    // Dynamically require the GCS mock to get the functions created in the factory
+    const gcsMock = require('@lib/gcs');
+    actualMockDeleteGCSFileFn = gcsMock.deleteGCSFile;
+    actualMockUploadBufferToGCSFn_delete = gcsMock.uploadBufferToGCS;
+    actualMockGetGCSFileStreamFn_delete = gcsMock.getGCSFileStream;
+
+    actualMockDeleteGCSFileFn.mockReset();
+    actualMockUploadBufferToGCSFn_delete.mockReset();
+    actualMockGetGCSFileStreamFn_delete.mockReset();
   });
 
   const mockUserId = 'user-delete-123';
-  const mockCardId = 'card-to-delete-cuid';
+  const mockCardId = 'clxxxxxxxxxxxxxxxxxxxxxxx'; // Valid CUID format placeholder
 
   const createMockRequest = () => mockDeep<NextRequest>();
 
@@ -62,7 +76,7 @@ describe('DELETE /api/cards/[cardId]', () => {
             imageMetadata: mockImageMeta,
             tags: mockTags,
         } as any);
-        mockDeleteGCSFileFn.mockResolvedValue(Promise.resolve());
+        actualMockDeleteGCSFileFn.mockResolvedValue(Promise.resolve());
         txMock.imageMetadata.deleteMany.mockResolvedValue({ count: mockImageMeta.length });
         txMock.knowledgeCard.delete.mockResolvedValue({ id: mockCardId } as any);
         txMock.tag.findUnique
@@ -78,7 +92,7 @@ describe('DELETE /api/cards/[cardId]', () => {
     // Assert that $transaction was called
     expect(mockPrismaInTest.$transaction).toHaveBeenCalledTimes(1);
     // Further assertions can check if deleteGCSFile was called, etc.
-    expect(mockDeleteGCSFileFn).toHaveBeenCalledTimes(mockImageMeta.length);
+    expect(actualMockDeleteGCSFileFn).toHaveBeenCalledTimes(mockImageMeta.length);
   });
 
   it('should return 401 if user is not authenticated', async () => {
@@ -124,7 +138,7 @@ describe('DELETE /api/cards/[cardId]', () => {
     // Assert
     expect(response.status).toBe(404);
     expect(body.error).toBe('Card not found or not owned by user');
-    expect(mockDeleteGCSFileFn).not.toHaveBeenCalled();
+    expect(actualMockDeleteGCSFileFn).not.toHaveBeenCalled();
   });
 
   it('should handle GCS deletion errors gracefully and still attempt DB cleanup', async () => {
@@ -143,7 +157,7 @@ describe('DELETE /api/cards/[cardId]', () => {
       });
 
       // Simulate GCS deletion failure
-      mockDeleteGCSFileFn.mockRejectedValueOnce(new Error('GCS Kaboom')); 
+      actualMockDeleteGCSFileFn.mockRejectedValueOnce(new Error('GCS Kaboom')); 
 
       txMock.imageMetadata.deleteMany.mockResolvedValueOnce({ count: 1 });
       txMock.knowledgeCard.delete.mockResolvedValueOnce({ id: mockCardId } as any);
@@ -164,7 +178,7 @@ describe('DELETE /api/cards/[cardId]', () => {
     // Assert
     expect(response.status).toBe(200); // Still 200 as DB cleanup should succeed
     expect(body.message).toContain('deleted successfully');
-    expect(mockDeleteGCSFileFn).toHaveBeenCalledWith(mockImageMeta[0].gcsPath);
+    expect(actualMockDeleteGCSFileFn).toHaveBeenCalledWith(mockImageMeta[0].gcsPath);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('[DELETE /api/cards/[cardId]] Failed to delete GCS file'),
       expect.any(Error)

@@ -35,15 +35,13 @@ import {
 import { DeleteIcon } from '@chakra-ui/icons';
 import type { UploadApiResponse } from '@/app/api/upload/image/route';
 
-// Import BlockNote components - STATICALLY
-// import { useBlockNote } from '@blocknote/react'; // REMOVE this direct import
-// import { BlockNoteView } from '@blocknote/mantine'; // REMOVE this, will be used by BlockNoteEditorComponent
-import { BlockNoteEditor, type PartialBlock } from '@blocknote/core';
+// Import core BlockNote types and customSchema
+import { BlockNoteEditor, PartialBlock } from '@blocknote/core';
+import { customSchema } from '@/lib/editor/blocks'; 
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
 
-// Dynamically import the CORRECT editor component
-const BlockNoteEditor = dynamic(
+const BlockNoteEditorComponent = dynamic(
   () => import('@/components/editor/BlockNoteEditor'),
   {
     ssr: false,
@@ -105,24 +103,27 @@ export default function CardDetailPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
-  const [editorContent, setEditorContent] = useState<PartialBlock[] | undefined>(undefined);
+  const [editor, setEditor] = useState<BlockNoteEditor<typeof customSchema> | null>(null);
+  const [_editorContent, setEditorContent] = useState<PartialBlock<typeof customSchema>[] | undefined>(undefined);
   
   // State to hold metadata for images newly uploaded during this edit session
   const [newlyUploadedImageMetadata, setNewlyUploadedImageMetadata] = useState<UploadApiResponse[]>([]);
 
-  const handleEditorInstanceReady = useCallback((editorInstance: BlockNoteEditor | null) => {
+  const handleEditorInstanceReady = useCallback((editorInstance: BlockNoteEditor<typeof customSchema> | null) => {
     setEditor(editorInstance);
   }, []);
 
-  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
+  const handleEditorContentUpdate = useCallback((blocks: PartialBlock<typeof customSchema>[]) => {
     setEditorContent(blocks);
   }, []);
 
   // Handler for newly uploaded images during an edit session
-  const handleImageUploadedDuringEdit = useCallback((metadata: UploadApiResponse) => {
-    setNewlyUploadedImageMetadata((prev) => [...prev, metadata]);
-  }, []);
+  const handleImageUploadedDuringEdit = useCallback(
+    (blobUrl: string, metadata: UploadApiResponse) => {
+      setNewlyUploadedImageMetadata((prev) => [...prev, metadata]);
+    },
+    []
+  );
 
   const fetchCard = useCallback(async () => {
     if (!cardId || status !== 'authenticated') return;
@@ -190,9 +191,9 @@ export default function CardDetailPage() {
             // only load if not null
             await editor.replaceBlocks(
               editor.topLevelBlocks,
-              contentToLoad as PartialBlock[],
+              contentToLoad as PartialBlock<typeof customSchema>[], // Ensure non-generic
             );
-            setEditorContent(contentToLoad as PartialBlock[]);
+            setEditorContent(contentToLoad as PartialBlock<typeof customSchema>[]); // Ensure non-generic
           }
         } catch (err: unknown) {
           console.error('Error loading content into editor:', err);
@@ -252,11 +253,11 @@ export default function CardDetailPage() {
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
 
-    const currentDocumentState = editor.document; // Get the latest document state directly from editor
+    const currentDocumentState = editor.document as PartialBlock<typeof customSchema>[];
     
     const processedCurrentContent = currentDocumentState.map(block => {
       if (block.type === 'image' && block.props && block.props['data-app-served-url']) {
-        const newProps = { ...block.props };
+        const newProps = { ...block.props } as any; // Temp any for prop assignment
         newProps.url = newProps['data-app-served-url'] as string;
         return { ...block, props: newProps };
       }
@@ -267,7 +268,7 @@ export default function CardDetailPage() {
 
     const hasTitleChanged = title.trim() !== card.title;
     
-    let originalContentForComparison: BlockNoteDocument | undefined;
+    let originalContentForComparison: PartialBlock<typeof customSchema>[] | undefined;
     if (originalContent) {
       if (typeof originalContent === 'string') {
         const trimmedContent = originalContent.trim();
@@ -285,7 +286,7 @@ export default function CardDetailPage() {
           ];
         }
       } else {
-        originalContentForComparison = originalContent as BlockNoteDocument;
+        originalContentForComparison = originalContent as PartialBlock<typeof customSchema>[];
       }
     }
     const hasContentChanged = JSON.stringify(processedCurrentContent) !== JSON.stringify(originalContentForComparison || []);
@@ -334,8 +335,8 @@ export default function CardDetailPage() {
         toast({ title: 'Card updated successfully', status: 'success', duration: 3000 });
         setNewlyUploadedImageMetadata([]); // Clear metadata for new images after successful save
         if (editor && updatedCard.content) {
-            await editor.replaceBlocks(editor.topLevelBlocks, updatedCard.content as PartialBlock[]);
-            setEditorContent(updatedCard.content as PartialBlock[]);
+            await editor.replaceBlocks(editor.topLevelBlocks, updatedCard.content as PartialBlock<typeof customSchema>[]); // Use schema-derived type
+            setEditorContent(updatedCard.content as PartialBlock<typeof customSchema>[]); // Use schema-derived type
         }
       } else {
         throw new Error(updatedCard.message || 'Failed to update card');
@@ -426,7 +427,7 @@ export default function CardDetailPage() {
 
   // Determine if content has changed (simple check for enabling save button)
   // Normalize original content for comparison
-  let originalContentForComparisonCanSave: BlockNoteDocument | undefined;
+  let originalContentForComparisonCanSave: PartialBlock<typeof customSchema>[] | undefined;
   if (card.content) {
     if (typeof card.content === 'string') {
       const trimmedContent = card.content.trim();
@@ -448,7 +449,7 @@ export default function CardDetailPage() {
         ];
       }
     } else {
-      originalContentForComparisonCanSave = card.content as BlockNoteDocument;
+      originalContentForComparisonCanSave = card.content as PartialBlock<typeof customSchema>[];
     }
   }
   const contentChanged = editor
@@ -593,15 +594,15 @@ export default function CardDetailPage() {
             </FormControl>
 
             <FormControl isRequired>
-              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-                Content
+              <FormLabel htmlFor="card-content" mb={2}>
+                Content:
               </FormLabel>
               <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
-                <BlockNoteEditor
+                <BlockNoteEditorComponent
                   onEditorReady={handleEditorInstanceReady}
                   onChange={handleEditorContentUpdate}
                   readOnly={!isEditing}
-                  initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock[] : undefined}
+                  initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock<typeof customSchema>[] : undefined}
                   onImageUploaded={handleImageUploadedDuringEdit}
                 />
               </Box>
@@ -678,10 +679,10 @@ export default function CardDetailPage() {
             minH="500px"
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
-            <BlockNoteEditor
+            <BlockNoteEditorComponent
               onEditorReady={handleEditorInstanceReady}
               readOnly={true}
-              initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock[] : undefined}
+              initialContent={card?.content ? (typeof card.content === 'string' ? JSON.parse(card.content) : card.content) as PartialBlock<typeof customSchema>[] : undefined}
             />
           </Box>
         </Box>

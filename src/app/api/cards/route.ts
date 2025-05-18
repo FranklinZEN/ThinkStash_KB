@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Use default import
 import { Prisma } from '@prisma/client'; // Import Prisma
+import { PartialBlock } from '@blocknote/core'; // Import PartialBlock
 
 // --- GET Handler (List Cards) ---
 export async function GET(req: NextRequest) {
@@ -116,7 +117,7 @@ interface ImageMetadataInput {
 // Interface for the expected request body for creating a card
 interface CreateCardRequestBody {
   title: string;
-  content: any; // BlockNote editor content (JSON)
+  content: PartialBlock[]; // BlockNote editor content (JSON)
   tags?: string[]; // Array of tag names/IDs. Assuming tag names for simplicity here.
                   // If using IDs, ensure they exist or handle creation.
   imageMetadata?: ImageMetadataInput[]; // Uses updated ImageMetadataInput

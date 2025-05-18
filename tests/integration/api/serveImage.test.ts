@@ -1,44 +1,48 @@
 import { GET } from '@/app/api/images/[...gcsPath]/route';
 import { getServerSession } from 'next-auth/next';
 import prisma from '@/lib/prisma'; // Jest should automatically use src/lib/__mocks__/prisma.ts
-import * as GCSService from '@/lib/gcs';
+// We do not need to import from '@lib/gcs' if we are mocking @google-cloud/storage directly
 import { NextRequest } from 'next/server';
 import { Readable } from 'stream';
-import { mockReset, DeepMockProxy } from 'jest-mock-extended'; // mockDeep is in the __mocks__ file
+import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
+
+// --- Mock @google-cloud/storage --- START ---
+const mockFileExists = jest.fn();
+const mockCreateReadStream = jest.fn();
+const mockFile = jest.fn(() => ({
+  exists: mockFileExists,
+  createReadStream: mockCreateReadStream,
+}));
+const mockBucket = jest.fn(() => ({ file: mockFile }));
+
+jest.mock('@google-cloud/storage', () => ({
+  Storage: jest.fn(() => ({
+    bucket: mockBucket,
+  })),
+}));
+// --- Mock @google-cloud/storage --- END ---
 
 // Mock next-auth
 jest.mock('next-auth/next');
 const mockGetServerSession = getServerSession as jest.Mock;
 
-// Mock @lib/gcs (factory pattern)
-const mockGetGCSFileStreamFn = jest.fn();
-const mockUploadBufferToGCSFn_serve = jest.fn(); 
-const mockDeleteGCSFileFn_serve = jest.fn();
-jest.mock('@lib/gcs', () => ({
-    __esModule: true,
-    getGCSFileStream: mockGetGCSFileStreamFn,
-    uploadBufferToGCS: mockUploadBufferToGCSFn_serve,
-    deleteGCSFile: mockDeleteGCSFileFn_serve,
-    bucketName: 'mock-bucket-for-serve-image-test'
-}));
-
-// REMOVED explicit jest.mock('@/lib/prisma', ...)
-// Manual mock src/lib/__mocks__/prisma.ts should be used.
-
-let mockPrismaInTest: DeepMockProxy<typeof prisma>; // Type with the imported prisma (which is mocked)
-
+let mockPrismaInTest: DeepMockProxy<typeof prisma>;
 
 describe('/api/images/[...gcsPath]', () => {
   beforeEach(() => {
-    // prisma is now the deep mock instance from the __mocks__ directory
-    mockPrismaInTest = prisma as DeepMockProxy<typeof prisma>; 
+    mockPrismaInTest = prisma as DeepMockProxy<typeof prisma>;
     mockReset(mockPrismaInTest);
-
     mockReset(mockGetServerSession);
-    mockGetGCSFileStreamFn.mockReset();
-    mockUploadBufferToGCSFn_serve.mockReset();
-    mockDeleteGCSFileFn_serve.mockReset();
+
+    // Reset GCS mocks
+    mockFileExists.mockReset();
+    mockCreateReadStream.mockReset();
+    mockFile.mockClear(); // Use mockClear for functions that return other mocks
+    mockBucket.mockClear();
+    // The Storage constructor mock itself doesn't need reset usually unless its behavior changes per test
   });
+
+  // afterEach can be removed if spies are not used globally or if jest.clearAllMocks() is in setup
 
   describe('GET', () => {
     const mockRequestingUserId = 'user-authed-123';
@@ -48,104 +52,77 @@ describe('/api/images/[...gcsPath]', () => {
     const mockGCSPathArray = ['images', 'user-authed-123', 'test-image.png'];
     const mockContentType = 'image/png';
 
-    // Helper to create a NextRequest mock
     const createMockRequest = () => mockDeep<NextRequest>();
 
     it('should successfully serve an image for an authenticated and authorized user', async () => {
-      // Arrange
       mockGetServerSession.mockResolvedValue({ user: { id: mockRequestingUserId } });
       mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue({
         contentType: mockContentType,
         knowledgeCard: { userId: mockCardOwnerId },
-        id: 'meta-id',
-        knowledgeCardId: 'card-id',
-        userId: mockCardOwnerId,
-        gcsPath: mockGCSPath,
-        originalFilename: 'test-image.png',
-        size: 12345,
-        appServedUrl: '/api/images/' + mockGCSPath,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      const mockStream = new Readable({ read() { this.push('image data'); this.push(null); } });
-      mockGetGCSFileStreamFn.mockResolvedValue(mockStream);
-
-      const request = createMockRequest();
-      const context = { params: { gcsPath: mockGCSPathArray } };
-
-      // Act
-      const response = await GET_serveImage(request, context);
-      // const responseBody = await response.text(); // Reading stream consumes it
-
-      // Assert
-      expect(response.status).toBe(200);
-      expect(response.headers.get('Content-Type')).toBe(mockContentType);
-      expect(mockGetGCSFileStreamFn).toHaveBeenCalledWith(mockGCSPath);
-      // expect(responseBody).toBe('image data'); // Uncomment if you want to verify stream content
-    });
-
-    it('should return 401 if user is not authenticated', async () => {
-      // Arrange
-      mockGetServerSession.mockResolvedValue(null);
-      const request = createMockRequest();
-      const context = { params: { gcsPath: mockGCSPathArray } };
-
-      // Act
-      const response = await GET_serveImage(request, context);
-      const body = await response.json();
-
-      // Assert
-      expect(response.status).toBe(401);
-      expect(body.error).toBe('Unauthorized');
-      expect(mockPrismaInTest.imageMetadata.findUnique).not.toHaveBeenCalled();
-      expect(mockGetGCSFileStreamFn).not.toHaveBeenCalled();
-    });
-
-    it('should return 403 if user is authenticated but not authorized (different owner)', async () => {
-      // Arrange
-      mockGetServerSession.mockResolvedValue({ user: { id: mockOtherUserId } }); // Requesting user is different
-      mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue({
-        contentType: mockContentType,
-        knowledgeCard: { userId: mockCardOwnerId }, // Card owner is mockCardOwnerId
         id: 'meta-id', knowledgeCardId: 'card-id', userId: mockCardOwnerId,
         gcsPath: mockGCSPath, originalFilename: 'test-image.png', size: 12345,
         appServedUrl: '/api/images/' + mockGCSPath, createdAt: new Date(), updatedAt: new Date(),
       });
+      mockFileExists.mockResolvedValue([true]); // .exists() returns [boolean]
+      const mockNodeStream = new Readable({ read() { this.push('image data'); this.push(null); } });
+      mockCreateReadStream.mockReturnValue(mockNodeStream);
 
       const request = createMockRequest();
       const context = { params: { gcsPath: mockGCSPathArray } };
+      const response = await GET(request, context);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe(mockContentType);
+      expect(mockFile).toHaveBeenCalledWith(mockGCSPath);
+      expect(mockCreateReadStream).toHaveBeenCalled();
+    });
 
-      // Act
-      const response = await GET_serveImage(request, context);
+    it('should return 401 if user is not authenticated', async () => {
+      mockGetServerSession.mockResolvedValue(null);
+      const request = createMockRequest();
+      const context = { params: { gcsPath: mockGCSPathArray } };
+      const response = await GET(request, context);
       const body = await response.json();
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Unauthorized');
+      expect(mockPrismaInTest.imageMetadata.findUnique).not.toHaveBeenCalled();
+      expect(mockCreateReadStream).not.toHaveBeenCalled();
+    });
 
-      // Assert
+    it('should return 403 if user is authenticated but not authorized (different owner)', async () => {
+      mockGetServerSession.mockResolvedValue({ user: { id: mockOtherUserId } });
+      mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue({
+        contentType: mockContentType,
+        knowledgeCard: { userId: mockCardOwnerId }, 
+        id: 'meta-id', knowledgeCardId: 'card-id', userId: mockCardOwnerId,
+        gcsPath: mockGCSPath, originalFilename: 'test-image.png', size: 12345,
+        appServedUrl: '/api/images/' + mockGCSPath, createdAt: new Date(), updatedAt: new Date(),
+      });
+      const request = createMockRequest();
+      const context = { params: { gcsPath: mockGCSPathArray } };
+      const response = await GET(request, context);
+      const body = await response.json();
       expect(response.status).toBe(403);
       expect(body.error).toBe('Forbidden');
-      expect(mockPrismaInTest.imageMetadata.findUnique).toHaveBeenCalledWith({ where: { gcsPath: mockGCSPath }, select: expect.any(Object) });
-      expect(mockGetGCSFileStreamFn).not.toHaveBeenCalled();
+      expect(mockPrismaInTest.imageMetadata.findUnique).toHaveBeenCalledWith({ 
+        where: { gcsPath: mockGCSPath }, 
+        include: { knowledgeCard: { select: { userId: true } } } 
+      });
+      expect(mockCreateReadStream).not.toHaveBeenCalled();
     });
 
     it('should return 404 if ImageMetadata is not found', async () => {
-      // Arrange
       mockGetServerSession.mockResolvedValue({ user: { id: mockRequestingUserId } });
-      mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue(null); // Simulate metadata not found
-
+      mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue(null);
       const request = createMockRequest();
       const context = { params: { gcsPath: mockGCSPathArray } };
-
-      // Act
-      const response = await GET_serveImage(request, context);
+      const response = await GET(request, context);
       const body = await response.json();
-
-      // Assert
       expect(response.status).toBe(404);
-      expect(body.error).toBe('File not found');
-      expect(mockGetGCSFileStreamFn).not.toHaveBeenCalled();
+      expect(body.error).toBe('Image not found.');
+      expect(mockCreateReadStream).not.toHaveBeenCalled();
     });
 
-    it('should return 404 if GCS file stream is null (file not in GCS)', async () => {
-      // Arrange
+    it('should return 404 if GCS file does not exist (file.exists() is false)', async () => {
       mockGetServerSession.mockResolvedValue({ user: { id: mockRequestingUserId } });
       mockPrismaInTest.imageMetadata.findUnique.mockResolvedValue({
         contentType: mockContentType,
@@ -154,34 +131,24 @@ describe('/api/images/[...gcsPath]', () => {
         gcsPath: mockGCSPath, originalFilename: 'test-image.png', size: 12345,
         appServedUrl: '/api/images/' + mockGCSPath, createdAt: new Date(), updatedAt: new Date(),
       });
-      mockGetGCSFileStreamFn.mockResolvedValue(null); // Simulate GCS file not found
-
+      mockFileExists.mockResolvedValue([false]); // Simulate GCS file not existing     
       const request = createMockRequest();
       const context = { params: { gcsPath: mockGCSPathArray } };
-
-      // Act
-      const response = await GET_serveImage(request, context);
+      const response = await GET(request, context);
       const body = await response.json();
-
-      // Assert
       expect(response.status).toBe(404);
-      expect(body.error).toBe('File not found in storage backend');
+      expect(body.error).toBe('File not found in storage.'); 
+      expect(mockCreateReadStream).not.toHaveBeenCalled();
     });
 
-     it('should return 400 if gcsPath parameter is missing or empty', async () => {
-      // Arrange
+    it('should return 400 if gcsPath parameter is missing or empty', async () => {
       mockGetServerSession.mockResolvedValue({ user: { id: mockRequestingUserId } });
       const request = createMockRequest();
-      const context = { params: { gcsPath: [] } }; // Empty gcsPath array
-
-      // Act
-      const response = await GET_serveImage(request, context);
+      const context = { params: { gcsPath: [] } }; 
+      const response = await GET(request, context);
       const body = await response.json();
-
-      // Assert
       expect(response.status).toBe(400);
-      expect(body.error).toBe('File path is required');
+      expect(body.error).toBe('Image path not provided.');
     });
-
   });
 }); 

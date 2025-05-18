@@ -1,4 +1,4 @@
-import { mockDeep, DeepMockProxy } from 'jest-mock-extended';
+import { mockDeep, DeepMockProxy as _DeepMockProxy } from 'jest-mock-extended';
 import { PrismaClient } from '@prisma/client';
 
 // This is the type of the actual PrismaClient if we were importing it directly for typing
