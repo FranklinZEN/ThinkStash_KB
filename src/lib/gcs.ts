@@ -6,13 +6,13 @@ const storage = new Storage();
 
 // Helper function to get the bucket and ensure bucketName is set at runtime
 function getBucket() {
-  const bucketName = process.env.GCS_MEDIA_BUCKET_NAME;
+  const bucketName = process.env.GCS_BUCKET_NAME;
   if (!bucketName) {
     // Log a warning during build, but throw error only if this function is somehow called during build for a real operation
     if (process.env.NODE_ENV === 'production' && !process.env.NEXT_RUNTIME) {
       // NEXT_RUNTIME check can help differentiate build vs. server runtime in some cases
       console.warn(
-        'Build-time warning: GCS_MEDIA_BUCKET_NAME is not set. This is expected during build unless performing GCS operations.',
+        'Build-time warning: GCS_BUCKET_NAME is not set. This is expected during build unless performing GCS operations.',
       );
       // For build, we might need to return a dummy/mock bucket or handle it differently if functions are invoked.
       // However, the goal is to prevent throwing an error just on module import.
@@ -21,7 +21,7 @@ function getBucket() {
     } else {
       // This error will be thrown if a GCS operation is attempted at runtime without the env var.
       throw new Error(
-        'GCS_MEDIA_BUCKET_NAME environment variable is not set at runtime',
+        'GCS_BUCKET_NAME environment variable is not set at runtime',
       );
     }
   }
@@ -52,9 +52,8 @@ export async function uploadFile(
   options: UploadOptions = {},
 ): Promise<UploadedFile> {
   const bucket = getBucket(); // Get bucket at runtime
-  const bucketName = process.env.GCS_MEDIA_BUCKET_NAME;
-  if (!bucketName)
-    throw new Error('GCS_MEDIA_BUCKET_NAME not set for uploadFile');
+  const bucketName = process.env.GCS_BUCKET_NAME;
+  if (!bucketName) throw new Error('GCS_BUCKET_NAME not set for uploadFile');
 
   const mergedOptions = { ...DEFAULT_OPTIONS, ...options };
 
@@ -88,8 +87,11 @@ export async function uploadFile(
   // Make the file publicly accessible - REMOVED due to Uniform Bucket-Level Access
   // await blob.makePublic();
 
+  // Generate a short-lived signed URL for immediate preview
+  const signedUrl = await getSignedUrl(filename, 15 * 60); // 15 minutes for preview
+
   return {
-    url: `https://storage.googleapis.com/${bucketName}/${filename}`,
+    url: signedUrl,
     filename,
     contentType,
     size: file.length,
@@ -114,4 +116,26 @@ export async function getSignedUrl(
     expires: Date.now() + expiresInSeconds * 1000,
   });
   return url;
+}
+
+/**
+ * Returns the direct GCS storage object path (gsutil URI).
+ * This URL is typically used for backend operations or integration with other GCP services,
+ * not for direct client-side access if the bucket is private.
+ * @param filename The name of the file in the bucket.
+ * @returns The GCS object path, e.g., gs://your-bucket-name/your-file.jpg
+ */
+export function getStorageObjectPath(filename: string): string {
+  const bucketName = process.env.GCS_BUCKET_NAME;
+  if (!bucketName) {
+    // This might be called in contexts where an error is not ideal,
+    // but the bucket name is essential.
+    console.error(
+      'GCS_BUCKET_NAME environment variable is not set when calling getStorageObjectPath',
+    );
+    // Depending on strictness, could throw an error or return a placeholder/empty string.
+    // For now, returning a string that indicates the issue.
+    return `gs://[GCS_BUCKET_NAME_NOT_SET]/${filename}`;
+  }
+  return `gs://${bucketName}/${filename}`;
 }

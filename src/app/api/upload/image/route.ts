@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile } from '@/lib/gcs';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import prisma from '@/lib/prisma';
 
 // Define constants for validation
 const ALLOWED_MIME_TYPES = [
@@ -19,10 +20,13 @@ export async function POST(request: NextRequest) {
     // Check authentication
     console.log('Checking session...');
     const session = await getServerSession(authOptions);
-    if (!session) {
-      console.error('[/api/upload/image] Unauthorized: No session found');
+    if (!session || !session.user?.id) {
+      console.error(
+        '[/api/upload/image] Unauthorized: No session or user ID found',
+      );
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const userId = session.user.id;
     console.log(
       '[/api/upload/image] Session valid for user:',
       session.user?.email,
@@ -75,25 +79,80 @@ export async function POST(request: NextRequest) {
 
     // Upload to GCS
     console.log(`[/api/upload/image] Calling uploadFile for ${file.name}...`);
-    const result = await uploadFile(buffer, file.name, file.type);
-    console.log('[/api/upload/image] uploadFile result:', result);
+    const gcsUploadResult = await uploadFile(buffer, file.name, file.type);
+    console.log('[/api/upload/image] uploadFile result:', gcsUploadResult);
 
-    return NextResponse.json(result);
-  } catch (error) {
+    // Create ImageRecord in the database
+    console.log('[/api/upload/image] Creating ImageRecord...');
+    const newImageRecord = await prisma.imageRecord.create({
+      data: {
+        userId: userId,
+        gcsPath: gcsUploadResult.filename,
+        contentType: file.type,
+        originalFilename: file.name,
+        size: file.size,
+        appServedUrl: '',
+      },
+    });
+
+    const appServedUrl = `/api/images/serve/${newImageRecord.id}`;
+
+    // Update ImageRecord with the correct appServedUrl
+    const updatedImageRecord = await prisma.imageRecord.update({
+      where: { id: newImageRecord.id },
+      data: { appServedUrl: appServedUrl },
+    });
+    console.log(
+      '[/api/upload/image] ImageRecord created/updated:',
+      updatedImageRecord.id,
+    );
+
+    return NextResponse.json({
+      success: true,
+      appServedUrl: updatedImageRecord.appServedUrl,
+      imageRecordId: updatedImageRecord.id,
+    });
+  } catch (error: unknown) {
     console.error(
       '[/api/upload/image] Error during file upload process:',
       error,
     );
-    // Check if error is an object and has a message property
-    const errorMessage =
-      error instanceof Error ? error.message : 'An unknown error occurred';
+
+    let errorMessage = 'An unknown error occurred';
+    let errorDetails: string | undefined = undefined;
+
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      // Handle Prisma-specific errors
+      if (error.name === 'PrismaClientKnownRequestError') {
+        console.error('[/api/upload/image] Prisma Error:', error.message);
+        // Potentially log error.code and error.meta for more details if needed by casting error
+        // e.g., const prismaError = error as Prisma.PrismaClientKnownRequestError;
+        errorMessage = 'Database operation failed.';
+        errorDetails = error.message;
+        return NextResponse.json(
+          { error: errorMessage, details: errorDetails },
+          { status: 500 },
+        );
+      }
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+
+    // Specific checks for messages from earlier in the try block (validation errors)
+    if (
+      errorMessage.includes('File size exceeds') ||
+      errorMessage.includes('Content type is not allowed')
+    ) {
+      return NextResponse.json({ error: errorMessage }, { status: 400 });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to upload file', details: errorMessage },
+      { error: 'Failed to upload file', details: errorDetails || errorMessage }, // Use refined errorMessage and errorDetails
       { status: 500 },
     );
   }
 }
-
 // Configure the API route to accept multipart/form-data
 export const config = {
   api: {
