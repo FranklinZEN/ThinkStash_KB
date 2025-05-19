@@ -115,45 +115,42 @@ export async function DELETE(
   context: { params: Promise<{ folderId: string }> },
 ) {
   const resolvedParams = await context.params;
-  console.log(
-    '[DELETE /api/folders/[folderId]] Resolved params:',
-    resolvedParams,
-  );
+  // console.log(
+  //   '[DELETE /api/folders/[folderId]] Resolved params:',
+  //   resolvedParams,
+  // ); // Keep if useful for general debugging, or remove.
 
-  // Validate route parameters using resolvedParams
   const paramsValidation = RouteParamsSchema.safeParse(resolvedParams);
   if (!paramsValidation.success) {
-    console.error(
-      '[DELETE /api/folders/[folderId]] Zod validation failed:',
-      paramsValidation.error.format(),
-    );
+    // console.error(
+    //   '[DELETE /api/folders/[folderId]] Zod validation failed:',
+    //   paramsValidation.error.format(),
+    // ); // Keep if useful, or remove.
     return NextResponse.json(
       { errors: paramsValidation.error.format() },
       { status: 400 },
     );
   }
   const { folderId } = paramsValidation.data;
-  console.log(
-    `[DELETE /api/folders/[folderId]] Validated folderId: ${folderId}`,
-  );
+  // console.log(
+  //   `[DELETE /api/folders/[folderId]] Validated folderId: ${folderId}`,
+  // ); // Keep if useful, or remove.
 
-  // Check authentication
   const userId = await getCurrentUserId();
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Remove these SETUP_FILE_CONFIGURED_ID logs
+  // console.log(`[route.ts DELETE] Using prisma ID: ${(prisma as any).SETUP_FILE_CONFIGURED_ID} for $transaction call.`);
+  // console.log(`[route.ts DELETE] Does prisma.$transaction have mockImplementation? ${!!(prisma.$transaction as any)?.mockImplementation}`);
+
   try {
-    // Find the folder to get its parentId and verify ownership
     const folderToDelete = await prisma.folder.findUnique({
-      where: {
-        id: folderId,
-        userId: userId, // Ensure user owns the folder
-      },
-      select: { parentId: true }, // Need parentId for promoting children
+      where: { id: folderId, userId: userId },
+      select: { parentId: true },
     });
 
-    // Handle folder not found or not owned
     if (!folderToDelete) {
       return NextResponse.json(
         { error: 'Folder not found or not owned by user' },
@@ -161,35 +158,36 @@ export async function DELETE(
       );
     }
 
-    // Perform updates and delete within a transaction
     await prisma.$transaction(async (tx) => {
-      // 1. Uncategorize cards within the folder
+      // Remove these SETUP_FILE_CONFIGURED_ID logs
+      // console.log(`[route.ts DELETE] Inside transaction. Initial prisma ID: ${(prisma as any).SETUP_FILE_CONFIGURED_ID}`);
+      // console.log(`[route.ts DELETE] tx object ID from transaction callback: ${(tx as any).SETUP_FILE_CONFIGURED_ID}`);
+      // console.log(`[route.ts DELETE] Are prisma (imported to route) and tx (from callback) the same object instance? ${prisma === tx}`);
+
       await tx.knowledgeCard.updateMany({
         where: { folderId: folderId },
         data: { folderId: null },
       });
 
-      // 2. Promote direct subfolders
       await tx.folder.updateMany({
         where: { parentId: folderId },
-        data: { parentId: folderToDelete.parentId }, // Move children to grandparent
+        data: { parentId: folderToDelete.parentId },
       });
 
-      // 3. Delete the folder itself
+      // Remove these logs
+      // console.log('[route.ts DELETE] About to call tx.folder.delete');
+      // console.log(`[route.ts DELETE] Attempting tx.folder.delete. tx.folder.delete is mock? ${!!(tx.folder.delete as any)?.mockClear}`);
       await tx.folder.delete({
         where: { id: folderId },
       });
     });
 
-    // Return success response
     return NextResponse.json(
       { message: 'Folder deleted successfully' },
       { status: 200 },
     );
   } catch (error) {
-    // Log unexpected errors
-    console.error('Failed to delete folder:', error);
-    // Consider more specific error handling if needed
+    console.error('Failed to delete folder:', error); // Keep this important error log
     return NextResponse.json(
       { error: 'Internal Server Error' },
       { status: 500 },

@@ -2,14 +2,16 @@ import { PUT, DELETE } from '@/app/api/folders/[folderId]/route'; // Import hand
 import { getCurrentUserId } from '@/lib/sessionUtils';
 import { NextRequest } from 'next/server'; // Import NextRequest
 import { Prisma } from '@prisma/client'; // Import Prisma namespace
-// PrismaClient and jest-mock-extended types are not needed here if mock is global
-// import { PrismaClient } from '@prisma/client';
-// import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended'; 
 
-// --- In-File Prisma Mock REMOVED --- 
-// All backend tests will now use the global mock from jest.setup.backend.mjs
+// Explicitly mock prisma again to ensure this file gets the deep mock where all methods are jest.fn()
+jest.mock('@/lib/prisma'); 
 
-import prisma from '@/lib/prisma'; // This will now use the global mock setup
+import prisma from '@/lib/prisma'; 
+
+// Remove diagnostic logs
+// console.log(`[folders/[folderId]/route.test.ts] Imported prisma ID (after explicit jest.mock): ${(prisma as any).SETUP_FILE_CONFIGURED_ID}`);
+// console.log(`[folders/[folderId]/route.test.ts] Does prisma.folder.findUnique have mockResolvedValue? ${!!(prisma.folder.findUnique as any)?.mockResolvedValue}`);
+// console.log(`[folders/[folderId]/route.test.ts] Does imported prisma.$transaction have mockImplementation? ${!!(prisma.$transaction as any)?.mockImplementation}`);
 
 jest.mock('@/lib/sessionUtils', () => ({
   getCurrentUserId: jest.fn(),
@@ -168,14 +170,18 @@ describe('API /api/folders/[folderId]', () => {
     it('should delete the folder successfully if it is empty and owned', async () => {
       const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 }, parentId: null };
       (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
-      (prisma.folder.delete as jest.Mock).mockResolvedValue({ id: mockFolderId });
+      (prisma.knowledgeCard.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.folder.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+      
+      const specificDeleteMock = jest.fn().mockResolvedValue({ id: mockFolderId });
+      (prisma.folder.delete as jest.Mock) = specificDeleteMock; // Assign our own jest.fn()
 
       const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
       const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.message).toBe('Folder deleted successfully');
-      expect(prisma.folder.delete).toHaveBeenCalledWith({ where: { id: mockFolderId } });
+      expect(specificDeleteMock).toHaveBeenCalledWith({ where: { id: mockFolderId } }); // Assert on our specific mock
     });
 
     it('should return 500 for database errors during delete check', async () => {
@@ -189,8 +195,13 @@ describe('API /api/folders/[folderId]', () => {
      it('should return 500 for database errors during actual delete', async () => {
         const mockFolder = { id: mockFolderId, userId: mockUserId, _count: { cards: 0, children: 0 }, parentId: null };
         (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockFolder);
+        (prisma.knowledgeCard.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+        (prisma.folder.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
         const dbError = new Error('Delete failed');
-        (prisma.folder.delete as jest.Mock).mockRejectedValue(dbError);
+        
+        const specificDeleteMockWithError = jest.fn().mockRejectedValue(dbError);
+        (prisma.folder.delete as jest.Mock) = specificDeleteMockWithError; // Assign our own jest.fn()
+
         const request = new NextRequest(`http://localhost/api/folders/${mockFolderId}`, { method: 'DELETE' });
         const response = await DELETE(request, { params: Promise.resolve({ folderId: mockFolderId }) });
         expect(response.status).toBe(500);

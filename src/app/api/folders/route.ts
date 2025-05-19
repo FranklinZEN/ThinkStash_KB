@@ -1,8 +1,12 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { getCurrentUserId } from '@/lib/sessionUtils';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+import {
+  getFoldersLogic,
+  createFolderLogic,
+  CreateFolderInput,
+} from '@/lib/services/folderService';
 
 // Schema for validating the request body
 const CreateFolderSchema = z.object({
@@ -15,52 +19,30 @@ const CreateFolderSchema = z.object({
 });
 
 // --- GET Handler (List Folders) ---
-export async function GET(_request: Request) {
+export async function GET(_request: NextRequest) {
   console.time('[GET /api/folders] Total Handler');
-  console.time('[GET /api/folders] getCurrentUserId');
   const userId = await getCurrentUserId();
-  console.timeEnd('[GET /api/folders] getCurrentUserId');
 
   if (!userId) {
     console.timeEnd('[GET /api/folders] Total Handler');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  try {
-    console.time('[GET /api/folders] Prisma findMany');
-    const folders = await prisma.folder.findMany({
-      where: { userId: userId },
-      select: {
-        id: true,
-        name: true,
-        parentId: true,
-        updatedAt: true, // Include updatedAt for potential future sorting/display
-        _count: {
-          select: {
-            cards: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc',
-      },
-    });
-    console.timeEnd('[GET /api/folders] Prisma findMany');
-    console.timeEnd('[GET /api/folders] Total Handler');
-    return NextResponse.json(folders);
-  } catch (error) {
-    console.error('Failed to fetch folders:', error);
-    console.timeEnd('[GET /api/folders] Total Handler');
-    // Consider more specific error handling if needed
+  const result = await getFoldersLogic(userId, prisma);
+  console.timeEnd('[GET /api/folders] Total Handler');
+
+  if (result.success) {
+    return NextResponse.json(result.data);
+  } else {
     return NextResponse.json(
-      { error: 'Internal Server Error' },
-      { status: 500 },
+      { error: result.error },
+      { status: result.status || 500 },
     );
   }
 }
 
 // --- POST Handler (Create Folder) ---
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   const userId = await getCurrentUserId();
 
   if (!userId) {
@@ -73,7 +55,6 @@ export async function POST(request: Request) {
     const validation = CreateFolderSchema.safeParse(body);
 
     if (!validation.success) {
-      // console.error("Zod validation failed:", validation.error.flatten()); // For more detailed server log
       return NextResponse.json(
         {
           error: 'Validation failed',
@@ -83,54 +64,27 @@ export async function POST(request: Request) {
       );
     }
     validatedData = validation.data;
-  } catch /* _error */ {
+  } catch {
     return NextResponse.json(
       { error: 'Invalid request body' },
       { status: 400 },
     );
   }
 
-  try {
-    // Validate parentId ownership if provided
-    if (validatedData.parentId) {
-      const parentFolder = await prisma.folder.findUnique({
-        where: { id: validatedData.parentId, userId: userId },
-        select: { id: true }, // Only select needed field
-      });
-      if (!parentFolder) {
-        return NextResponse.json(
-          { error: 'Parent folder not found or not owned by user' },
-          { status: 400 },
-        );
-      }
-    }
+  const serviceInput: CreateFolderInput = {
+    userId,
+    name: validatedData.name,
+    parentId: validatedData.parentId,
+  };
 
-    // Create the folder
-    const newFolder = await prisma.folder.create({
-      data: {
-        name: validatedData.name,
-        parentId: validatedData.parentId,
-        userId: userId,
-      },
-    });
+  const result = await createFolderLogic(serviceInput, prisma);
 
-    return NextResponse.json(newFolder, { status: 201 });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      // Handle unique constraint violation (duplicate name at the same level)
-      if (error.code === 'P2002') {
-        return NextResponse.json(
-          { error: 'A folder with this name already exists at this level.' },
-          { status: 409 }, // 409 Conflict
-        );
-      }
-    }
-
-    // Log unexpected errors
-    console.error('Failed to create folder:', error);
+  if (result.success) {
+    return NextResponse.json(result.data, { status: result.status || 201 });
+  } else {
     return NextResponse.json(
-      { error: 'Internal Server Error' },
-      { status: 500 },
+      { error: result.error, details: result.details },
+      { status: result.status || 500 },
     );
   }
 }

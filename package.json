@@ -7,7 +7,7 @@
     "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "cross-env ESLINT_USE_FLAT_CONFIG=true eslint src/ pages/ lib/ --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
-    "test": "jest && cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.backend.js",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs",
     "test:fe": "npx jest --watch",
     "test:be": "cross-env NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.backend.js --watch",
     "prisma:generate": "prisma generate",
@@ -55,6 +55,7 @@
     "@typescript-eslint/eslint-plugin": "^8.31.0",
     "@typescript-eslint/parser": "^8.31.0",
     "cross-env": "^7.0.3",
+    "cross-fetch": "^4.1.0",
     "eslint": "^9.25.1",
     "eslint-config-next": "^15.3.1",
     "eslint-config-prettier": "^10.1.2",
@@ -65,10 +66,12 @@
     "jest-environment-jsdom": "^29.7.0",
     "jest-mock-extended": "^3.0.7",
     "lint-staged": "^15.5.1",
+    "next-test-api-route-handler": "^4.0.16",
     "prettier": "^3.5.3",
     "prisma": "^6.6.0",
     "ts-jest": "^29.3.2",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "undici": "^7.9.0"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx,md,json}": "prettier --write"

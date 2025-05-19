@@ -1,45 +1,31 @@
-const backendJestConfig = {
-  // preset: 'ts-jest', // We'll define the transform directly to set useESM
-  testEnvironment: 'node', // Specify Node.js environment
-  // Automatically clear mock calls and instances between every test
+console.log('jest.config.backend.js: EXECUTING CONFIGURATION'); // Diagnostic log
+const nextJest = require('next/jest')({
+  dir: './', // Path to your Next.js app to load next.config.js and .env files
+});
+
+// Add any custom Jest config to be passed to the Next.js preset
+const customJestConfig = {
+  testEnvironment: 'node',
   clearMocks: true,
-
-  // The directory where Jest should output its coverage files
-  coverageDirectory: "coverage/backend",
-
-  // A map from regular expressions to module names or to arrays of module names that allow to stub out resources with a single module
+  // coverageDirectory: "coverage/backend", // You can keep this if you use coverage
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    // No longer explicitly mapping @/lib/prisma due to DI in service and __mocks__ convention
   },
-
-  // A list of paths to modules that run some code to configure or set up the testing framework before each test
-  setupFilesAfterEnv: ['./jest.setup.backend.mjs'],
-
-  // The glob patterns Jest uses to detect test files (ignore frontend tests)
+  setupFiles: ['<rootDir>/jest.polyfills.js'], // Polyfills run before environment setup
+  setupFilesAfterEnv: ['./jest.setup.backend.mjs'], // For mocks and other setup after env
   testMatch: [
-    "<rootDir>/tests/integration/api/**/*.test.ts",
+    // Adjust if next/jest has different defaults or if you want to keep current structure
+    "<rootDir>/tests/integration/api/**/*.test.ts", 
+    "<rootDir>/src/**/__tests__/**/*.test.ts",
+    // "<rootDir>/src/**/*.test.ts" // if you have other src tests
   ],
-
-  // An array of regexp pattern strings that are matched against all test paths, matched tests are skipped
-  // testPathIgnorePatterns: [
-  //   "/node_modules/"
-  // ],
-
-  // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
-  transformIgnorePatterns: [
-    "/node_modules/",
-    "\\.pnp\\.[^/]+$"
-  ],
-
-  transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        useESM: true,
-        // tsconfig: 'tsconfig.json', // or specific tsconfig if needed, often ts-jest finds it
-      },
-    ],
-  },
+  // transform: {}, // next/jest handles transformation via SWC, so ts-jest transform is removed
+  // testEnvironmentOptions: { // next/jest should set up the environment correctly; remove this for now
+  //   customExportConditions: ['node', 'node-addons'],
+  // },
+  // extensionsToTreatAsEsm: ['.ts'], // next/jest should handle ESM based on your Next.js config
 };
 
-export default backendJestConfig; 
+// createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async
+module.exports = nextJest(customJestConfig); 

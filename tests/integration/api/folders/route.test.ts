@@ -1,245 +1,181 @@
-import { GET, POST } from '@/app/api/folders/route'; // Import the handler
-import { getCurrentUserId } from '@/lib/sessionUtils'; // Import session util to mock
-import { Prisma } from '@prisma/client'; // Import Prisma namespace
-// PrismaClient and jest-mock-extended types are not needed here if mock is global
-// import { PrismaClient } from '@prisma/client';
-// import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
+/**
+ * @jest-environment node
+ */
+import 'next-test-api-route-handler'; // Must be first
+import { testApiHandler } from 'next-test-api-route-handler';
+import * as folderApiHandler from '@/app/api/folders/route';
+import { getCurrentUserId } from '@/lib/sessionUtils';
+import { getFoldersLogic, createFolderLogic } from '@/lib/services/folderService';
+// No direct import of prisma here
 
-// --- In-File Prisma Mock REMOVED --- 
-// All backend tests will now use the global mock from jest.setup.backend.mjs
-
-import prisma from '@/lib/prisma'; // This will now use the global mock setup
-
+// Mock dependencies
 jest.mock('@/lib/sessionUtils', () => ({
   getCurrentUserId: jest.fn(),
 }));
+jest.mock('@/lib/services/folderService', () => ({
+  getFoldersLogic: jest.fn(),
+  createFolderLogic: jest.fn(),
+}));
 
-// Mock NextRequest if necessary (often not needed for simple GET)
-// const mockRequest = {} as NextRequest;
+const mockGetCurrentUserId = getCurrentUserId as jest.Mock;
+const mockGetFoldersLogic = getFoldersLogic as jest.Mock;
+const mockCreateFolderLogic = createFolderLogic as jest.Mock;
 
-describe('GET /api/folders', () => {
+const createFolderPayload = (name: string, parentId?: string | null) => ({ name, parentId });
+
+describe('GET /api/folders (Route Handler Tests)', () => {
   beforeEach(() => {
-    // jest.clearAllMocks(); // Handled by global setup or mockReset
-    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
-    (getCurrentUserId as jest.Mock).mockReset(); 
+    mockGetCurrentUserId.mockReset();
+    mockGetFoldersLogic.mockReset();
   });
 
   it('should return 401 if user is not authenticated', async () => {
-    (getCurrentUserId as jest.Mock).mockResolvedValue(null);
-
-    const response = await GET(new Request('http://localhost/api/folders'));
-
-    expect(response.status).toBe(401);
-    const body = await response.json();
-    expect(body.error).toBe('Unauthorized');
-    expect(prisma.folder.findMany).not.toHaveBeenCalled();
-  });
-
-  it('should return an empty array if user has no folders', async () => {
-    const mockUserId = 'user-123';
-    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-    (prisma.folder.findMany as jest.Mock).mockResolvedValue([]);
-
-    const request = new Request('http://localhost/api/folders') // Note: Test uses new Request, route expects Request
-    const response = await GET(request);
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toEqual([]);
-    expect(prisma.folder.findMany).toHaveBeenCalledWith({
-      where: { userId: mockUserId },
-      select: {
-        id: true,
-        name: true,
-        parentId: true,
-        updatedAt: true,
-        _count: { // Ensure this matches the route handler's select
-          select: {
-            cards: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc',
+    mockGetCurrentUserId.mockResolvedValue(null);
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'GET' });
+        const json = await res.json();
+        expect(res.status).toBe(401);
+        expect(json.error).toBe('Unauthorized');
+        expect(mockGetFoldersLogic).not.toHaveBeenCalled();
       },
     });
   });
 
-  it('should return a flat list of folders for the authenticated user', async () => {
-    const mockUserId = 'user-123';
-    const mockFolders = [
-      { id: 'f1', name: 'Folder A', parentId: null, updatedAt: new Date() },
-      { id: 'f2', name: 'Folder B', parentId: 'f1', updatedAt: new Date() },
-    ];
-    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-    (prisma.folder.findMany as jest.Mock).mockResolvedValue(mockFolders);
+  it('should call getFoldersLogic and return its success response', async () => {
+    const userId = 'user-123';
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    // Define what the service mock should return
+    const serviceResponseData = [{ id: 'f1', name: 'Folder1', parentId: null, updatedAt: new Date(), _count: { cards: 0 } }];
+    const serviceResult = { success: true, data: serviceResponseData, status: 200 };
+    mockGetFoldersLogic.mockResolvedValue(serviceResult);
 
-    const response = await GET(new Request('http://localhost/api/folders'));
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    // Dates need careful comparison or serialization check
-    expect(body).toHaveLength(2);
-    expect(body[0].id).toBe(mockFolders[0].id);
-    expect(body[1].name).toBe(mockFolders[1].name);
-    expect(prisma.folder.findMany).toHaveBeenCalledTimes(1);
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'GET' });
+        const json = await res.json();
+        expect(mockGetFoldersLogic).toHaveBeenCalledWith(userId, expect.anything()); // Prisma is passed by route to service
+        expect(res.status).toBe(200);
+        // API route returns result.data directly on success for GET
+        expect(json).toEqual(serviceResponseData.map(f => ({...f, updatedAt: f.updatedAt.toISOString() })));
+      },
+    });
   });
 
-  it('should return 500 if there is a database error', async () => {
-    const mockUserId = 'user-123';
-    (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-    const dbError = new Error('Database connection failed');
-    (prisma.folder.findMany as jest.Mock).mockRejectedValue(dbError);
+  it('should call getFoldersLogic and return its error response', async () => {
+    const userId = 'user-123';
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    const serviceResult = { success: false, error: 'Service layer GET error', status: 500 };
+    mockGetFoldersLogic.mockResolvedValue(serviceResult);
 
-    const response = await GET(new Request('http://localhost/api/folders'));
-
-    expect(response.status).toBe(500);
-    const body = await response.json();
-    expect(body.error).toBe('Internal Server Error');
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'GET' });
+        const json = await res.json();
+        expect(mockGetFoldersLogic).toHaveBeenCalledWith(userId, expect.anything());
+        expect(res.status).toBe(500);
+        expect(json.error).toBe('Service layer GET error');
+      },
+    });
   });
 });
 
-describe('API /api/folders', () => {
+describe('POST /api/folders (Route Handler Tests)', () => {
   beforeEach(() => {
-    // jest.clearAllMocks(); // Handled by global setup or mockReset
-    // mockReset(actualPrismaMockInstance); // Removed, global mock handles reset
-    (getCurrentUserId as jest.Mock).mockReset();
+    mockGetCurrentUserId.mockReset();
+    mockCreateFolderLogic.mockReset();
   });
 
-  // --- POST Tests ---
-  describe('POST', () => {
-    const mockUserId = 'user-post-123';
-
-    it('should return 401 if user is not authenticated', async () => {
-      (getCurrentUserId as jest.Mock).mockResolvedValue(null);
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'New Folder' })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(401);
-      expect(prisma.folder.create).not.toHaveBeenCalled();
+  it('should return 401 if user is not authenticated', async () => {
+    mockGetCurrentUserId.mockResolvedValue(null);
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'POST', body: JSON.stringify(createFolderPayload('test')) });
+        const json = await res.json();
+        expect(res.status).toBe(401);
+        expect(json.error).toBe('Unauthorized');
+        expect(mockCreateFolderLogic).not.toHaveBeenCalled();
+      },
     });
+  });
 
-    it('should return 400 if name is missing or invalid', async () => {
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: '   ' }) // Invalid name
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(400);
-      const body = await response.json();
-      expect(body.details?.name).toBeDefined(); // Check Zod error structure in 'details'
+  it('should return 400 for invalid request body (Zod validation fail)', async () => {
+    const userId = 'user-123';
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'POST', body: JSON.stringify({ name: '' }) }); // Empty name
+        const json = await res.json();
+        expect(res.status).toBe(400);
+        expect(json.error).toBe('Validation failed');
+        expect(json.details?.name).toBeDefined();
+        expect(mockCreateFolderLogic).not.toHaveBeenCalled();
+      },
     });
+  });
 
-    it('should return 400 if parentId is provided but invalid format', async () => {
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'Subfolder', parentId: 'invalid-cuid' })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(400);
-      const body = await response.json();
-      expect(body.details?.parentId).toBeDefined(); // Check Zod error structure in 'details'
+   it('should return 400 for non-JSON request body', async () => {
+    const userId = 'user-123';
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'POST', body: 'not-json' });
+        const json = await res.json();
+        expect(res.status).toBe(400);
+        expect(json.error).toBe('Invalid request body');
+        expect(mockCreateFolderLogic).not.toHaveBeenCalled();
+      },
     });
+  });
 
-    it('should return 400 if parent folder is not found or not owned by user', async () => {
-      const parentId = 'cmao3szy30001u5v84edvgpgj';
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(null);
+  it('should call createFolderLogic and return its success response', async () => {
+    const userId = 'user-123';
+    const folderName = 'New Folder';
+    const parentId = null;
+    const payload = createFolderPayload(folderName, parentId);
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    const serviceResponseData = { id: 'new-id', name: folderName, parentId, userId };
+    const serviceResult = { success: true, data: serviceResponseData, status: 201 };
+    mockCreateFolderLogic.mockResolvedValue(serviceResult);
 
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: 'Subfolder', parentId: parentId })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(400);
-      const body = await response.json();
-      expect(body.error).toContain('Parent folder not found');
-      expect(prisma.folder.findUnique).toHaveBeenCalledWith({
-        where: { id: parentId, userId: mockUserId },
-        select: { id: true },
-      });
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'POST', body: JSON.stringify(payload) });
+        const json = await res.json();
+        expect(mockCreateFolderLogic).toHaveBeenCalledWith(
+          { userId, name: folderName, parentId },
+          expect.anything()
+        );
+        expect(res.status).toBe(201);
+        expect(json).toEqual(serviceResponseData);
+      },
     });
+  });
 
-    it('should create a root folder successfully', async () => {
-      const folderName = 'My Root Folder';
-      const mockCreatedFolder = { id: 'new-folder-id', name: folderName, parentId: null, userId: mockUserId };
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      (prisma.folder.create as jest.Mock).mockResolvedValue(mockCreatedFolder);
+  it('should call createFolderLogic and return its error response', async () => {
+    const userId = 'user-123';
+    const folderName = 'Existing Folder';
+    const payload = createFolderPayload(folderName);
+    mockGetCurrentUserId.mockResolvedValue(userId);
+    const serviceResult = { success: false, error: 'Folder exists', status: 409 };
+    mockCreateFolderLogic.mockResolvedValue(serviceResult);
 
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: folderName, parentId: null })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(201);
-      const body = await response.json();
-      expect(body).toEqual(mockCreatedFolder);
-      expect(prisma.folder.create).toHaveBeenCalledWith({
-        data: { name: folderName, parentId: null, userId: mockUserId },
-      });
+    await testApiHandler({
+      appHandler: folderApiHandler,
+      test: async ({ fetch }) => {
+        const res = await fetch({ method: 'POST', body: JSON.stringify(payload) });
+        const json = await res.json();
+        expect(mockCreateFolderLogic).toHaveBeenCalledTimes(1);
+        expect(res.status).toBe(409);
+        expect(json.error).toBe(serviceResult.error);
+      },
     });
-
-    it('should create a subfolder successfully', async () => {
-      const parentId = 'cmao1cph90004u5jsmlpf0lku';
-      const folderName = 'My Subfolder';
-      const mockParentFolder = { id: parentId, userId: mockUserId };
-      const mockCreatedFolder = { id: 'clxpsu3na000008k1g2h3i4j5', name: folderName, parentId: parentId, userId: mockUserId };
-
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      (prisma.folder.findUnique as jest.Mock).mockResolvedValue(mockParentFolder);
-      (prisma.folder.create as jest.Mock).mockResolvedValue(mockCreatedFolder);
-
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: folderName, parentId: parentId })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(201);
-      const body = await response.json();
-      expect(body).toEqual(mockCreatedFolder);
-      expect(prisma.folder.create).toHaveBeenCalledWith({
-        data: { name: folderName, parentId: parentId, userId: mockUserId },
-      });
-    });
-
-    it('should return 409 if folder name already exists at the same level', async () => {
-      const folderName = 'Duplicate Folder';
-      (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-      const conflictError = new Prisma.PrismaClientKnownRequestError(
-        'Unique constraint failed', 
-        { code: 'P2002', clientVersion: 'test' }
-      );
-      (prisma.folder.create as jest.Mock).mockRejectedValue(conflictError);
-
-      const request = new Request('http://localhost/api/folders', {
-        method: 'POST',
-        body: JSON.stringify({ name: folderName, parentId: null })
-      });
-      const response = await POST(request);
-      expect(response.status).toBe(409);
-      const body = await response.json();
-      expect(body.error).toContain('already exists at this level');
-    });
-
-     it('should return 500 for other database errors during creation', async () => {
-       const folderName = 'Error Folder';
-       (getCurrentUserId as jest.Mock).mockResolvedValue(mockUserId);
-       const dbError = new Error('Some other DB error');
-       (prisma.folder.create as jest.Mock).mockRejectedValue(dbError);
-
-       const request = new Request('http://localhost/api/folders', {
-         method: 'POST',
-         body: JSON.stringify({ name: folderName, parentId: null })
-       });
-       const response = await POST(request);
-       expect(response.status).toBe(500);
-       const body = await response.json();
-       expect(body.error).toBe('Internal Server Error');
-     });
-
   });
 }); 
