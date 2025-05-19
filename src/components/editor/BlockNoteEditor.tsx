@@ -47,15 +47,17 @@ const handleFileUpload = async (file: File): Promise<string> => {
     }
     const data = JSON.parse(responseBody);
     console.log('BlockNote handleFileUpload - Upload successful, data:', data);
-    if (!data.url) {
+    if (!data.appServedUrl) {
       console.error(
-        'BlockNote handleFileUpload - Upload response missing URL:',
+        'BlockNote handleFileUpload - Upload response missing appServedUrl:',
         data,
       );
-      alert('Upload succeeded but the server did not return an image URL.');
-      throw new Error('Upload response missing URL');
+      alert(
+        'Upload succeeded but the server did not return an image URL (appServedUrl).',
+      );
+      throw new Error('Upload response missing appServedUrl');
     }
-    return data.url;
+    return data.appServedUrl;
   } catch (error) {
     console.error(
       'BlockNote handleFileUpload - Error during image upload process:',

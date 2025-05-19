@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 // Initialize the GCS client
 const storage = new Storage();
 
+export { storage }; // Export the storage instance
+
 // Helper function to get the bucket and ensure bucketName is set at runtime
 function getBucket() {
   const bucketName = process.env.GCS_BUCKET_NAME;
