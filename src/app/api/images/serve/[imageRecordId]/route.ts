@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { storage } from '@/lib/gcs'; // Import the exported storage instance
+import { getBucket } from '@/lib/gcs'; // Changed from 'storage' to 'getBucket'
 
 // Define an interface for the route parameters
 // interface RouteHandlerContext { // Keeping this commented out for clarity with the 'any' type below
@@ -26,14 +26,15 @@ export async function GET(
 
   if (!session || !session.user || !session.user.id) {
     console.log('[/api/images/serve] Unauthorized: No session or user ID');
-    return new NextResponse('Unauthorized', { status: 401 });
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   if (!imageRecordId) {
     console.log('[/api/images/serve] Bad Request: Missing imageRecordId');
-    return new NextResponse('Bad Request: Missing imageRecordId', {
-      status: 400,
-    });
+    return NextResponse.json(
+      { error: 'Bad Request: Missing imageRecordId' },
+      { status: 400 },
+    );
   }
 
   const gcsBucketName = process.env.GCS_BUCKET_NAME;
@@ -41,8 +42,8 @@ export async function GET(
     console.error(
       '[/api/images/serve] GCS_BUCKET_NAME environment variable is not set',
     );
-    return new NextResponse(
-      'Server configuration error: GCS bucket name not set',
+    return NextResponse.json(
+      { error: 'Server configuration error for GCS bucket.' },
       { status: 500 },
     );
   }
@@ -56,7 +57,7 @@ export async function GET(
       console.log(
         `[/api/images/serve] Not Found: No ImageRecord for ID ${imageRecordId}`,
       );
-      return new NextResponse('Image not found', { status: 404 });
+      return NextResponse.json({ error: 'Image not found' }, { status: 404 });
     }
 
     // Basic authorization: For now, any authenticated user can access any image
@@ -65,7 +66,7 @@ export async function GET(
     //   // Add logic here if images are private to users even before granular auth
     //   // For now, allowing access if authenticated and record exists
     //   console.log(`[/api/images/serve] Forbidden: User ${session.user.id} trying to access image of user ${imageRecord.userId}`);
-    //   return new NextResponse(\'Forbidden\', { status: 403 });
+    //   return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     // }
 
     console.log(
@@ -73,7 +74,7 @@ export async function GET(
     );
 
     // const storage = getStorage(); // No longer needed, storage is imported directly
-    const bucket = storage.bucket(gcsBucketName); // Use imported storage and env var for bucket name
+    const bucket = getBucket(); // NEW WAY
     const file = bucket.file(imageRecord.gcsPath);
 
     // Check if file exists in GCS
@@ -83,9 +84,10 @@ export async function GET(
         `[/api/images/serve] GCS Error: File not found at path ${imageRecord.gcsPath}`,
       );
       // Potentially mark imageRecord as problematic or log for cleanup
-      return new NextResponse('Image file not found in storage', {
-        status: 404,
-      });
+      return NextResponse.json(
+        { error: 'Image file not found in storage' },
+        { status: 404 },
+      );
     }
 
     // Get a readable stream for the file
@@ -121,8 +123,9 @@ export async function GET(
     );
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error';
-    return new NextResponse(`Internal Server Error: ${errorMessage}`, {
-      status: 500,
-    });
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: errorMessage },
+      { status: 500 },
+    );
   }
 }
