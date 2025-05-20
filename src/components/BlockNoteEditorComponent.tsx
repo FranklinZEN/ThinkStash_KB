@@ -2,49 +2,241 @@
 
 import React, { useEffect } from 'react';
 import { Box, Flex, Spinner, Text } from '@chakra-ui/react';
-
-// Import hook from react, but View component and styles from mantine
 import { useCreateBlockNote } from '@blocknote/react';
-import { BlockNoteView } from '@blocknote/mantine'; // Import from mantine
-import { BlockNoteEditor, PartialBlock } from '@blocknote/core';
-import '@blocknote/mantine/style.css'; // Import mantine styles
+import { BlockNoteView } from '@blocknote/mantine';
+import {
+  BlockNoteEditor as BlockNoteEditorType,
+  PartialBlock,
+  BlockNoteSchema,
+  defaultBlockSpecs,
+  getDefaultSlashMenuItems,
+} from '@blocknote/core';
+import '@blocknote/mantine/style.css';
+
+// --- Helper functions ---
+const handleFileUpload = async (file: File): Promise<string> => {
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const response = await fetch('/api/upload/image', {
+      method: 'POST',
+      body: formData,
+    });
+    const responseBody = await response.text();
+    if (!response.ok) {
+      let errorData = {
+        message: `Upload failed: ${response.statusText} - ${responseBody}`,
+      };
+      try {
+        errorData = JSON.parse(responseBody);
+      } catch (parseError) {
+        console.warn(
+          '[BlockNoteEditorComponent] handleFileUpload - Could not parse error response as JSON:',
+          parseError,
+        );
+      }
+      console.error(
+        '[BlockNoteEditorComponent] handleFileUpload - Upload FAILED:',
+        errorData,
+      );
+      const finalErrorMessage =
+        typeof errorData.message === 'string'
+          ? errorData.message
+          : responseBody;
+      alert(`Failed to upload image: ${finalErrorMessage}`);
+      throw new Error(`Upload failed: ${finalErrorMessage}`);
+    }
+    const data = JSON.parse(responseBody);
+    if (!data.appServedUrl) {
+      console.error(
+        '[BlockNoteEditorComponent] handleFileUpload - Response MISSING appServedUrl',
+      );
+      throw new Error('Upload response missing appServedUrl');
+    }
+    return data.appServedUrl;
+  } catch (error) {
+    console.error(
+      '[BlockNoteEditorComponent] handleFileUpload - CATCH block error:',
+      error,
+    );
+    if (
+      !(error instanceof Error && error.message.startsWith('Upload failed:'))
+    ) {
+      alert(
+        `Upload error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    throw error;
+  }
+};
+
+const IMAGE_URL_REGEX = /\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i;
+const isValidURL = (string: string) => {
+  try {
+    new URL(string);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function handlePastedImageURL(
+  pastedText: string,
+  editor: BlockNoteEditorType<
+    typeof appSchema.blockSchema,
+    typeof appSchema.inlineContentSchema,
+    typeof appSchema.styleSchema
+  >,
+): Promise<void> {
+  try {
+    const response = await fetch('/api/images/import-by-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ externalImageUrl: pastedText }),
+    });
+    if (!response.ok) {
+      const errorData = await response
+        .json()
+        .catch(() => ({ message: 'Failed to import pasted image URL' }));
+      console.error(
+        '[BlockNoteEditorComponent] Import via URL FAILED:',
+        errorData,
+      );
+      alert(
+        `Error importing image URL: ${errorData.message || 'Unknown error'}`,
+      );
+      return;
+    }
+    const result = await response.json();
+    if (result.appServedUrl) {
+      const currentBlock = editor.getTextCursorPosition().block;
+      const shouldReplace =
+        Array.isArray(currentBlock.content) &&
+        currentBlock.content.length === 0 &&
+        currentBlock.type === 'paragraph';
+      editor.insertBlocks(
+        [
+          {
+            type: 'image',
+            props: { url: result.appServedUrl, caption: 'Pasted Image' },
+          },
+        ],
+        currentBlock.id,
+        shouldReplace ? undefined : 'after',
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[BlockNoteEditorComponent] Error in handlePastedImageURL:',
+      error,
+    );
+  }
+}
+
+async function processPastedOrDroppedFile(
+  file: File,
+  editor: BlockNoteEditorType<
+    typeof appSchema.blockSchema,
+    typeof appSchema.inlineContentSchema,
+    typeof appSchema.styleSchema
+  >,
+): Promise<void> {
+  try {
+    const appServedUrl = await handleFileUpload(file);
+    if (appServedUrl) {
+      const currentBlock = editor.getTextCursorPosition().block;
+      const shouldReplace =
+        Array.isArray(currentBlock.content) &&
+        currentBlock.content.length === 0 &&
+        currentBlock.type === 'paragraph';
+      editor.insertBlocks(
+        [{ type: 'image', props: { url: appServedUrl, caption: file.name } }],
+        currentBlock.id,
+        shouldReplace ? undefined : 'after',
+      );
+    }
+  } catch (error) {
+    console.error(
+      '[BlockNoteEditorComponent] Error processing pasted/dropped file:',
+      error,
+    );
+  }
+}
+
+// Export appSchema so it can be used by parent components for typing
+export const appSchema = BlockNoteSchema.create({
+  blockSpecs: defaultBlockSpecs,
+});
 
 interface BlockNoteEditorComponentProps {
-  onEditorChange: (editor: BlockNoteEditor | null) => void;
+  onEditorChange: (editor: BlockNoteEditorType | null) => void;
   onContentUpdate?: (blocks: PartialBlock[]) => void;
   editable?: boolean;
+  initialContent?: PartialBlock[];
 }
 
 export default function BlockNoteEditorComponent({
   onEditorChange,
   onContentUpdate,
   editable = false,
+  initialContent,
 }: BlockNoteEditorComponentProps) {
-  // Remove toast and UI component state
-  // const toast = useToast();
-  // const [BlockNoteUIComponent, setBlockNoteUIComponent] = useState<React.ComponentType<any> | null>(null);
+  const editorOptions = {
+    schema: appSchema,
+    initialContent: initialContent,
+    uploadFile: handleFileUpload,
+    pasteHandler: ({
+      event,
+      editor: currentEditor,
+      defaultPasteHandler,
+    }: {
+      event: ClipboardEvent;
+      editor: BlockNoteEditorType<
+        typeof appSchema.blockSchema,
+        typeof appSchema.inlineContentSchema,
+        typeof appSchema.styleSchema
+      >;
+      defaultPasteHandler: () => boolean;
+    }) => {
+      const pastedFiles = event.clipboardData?.files;
+      if (pastedFiles && pastedFiles.length > 0) {
+        const imageFile = Array.from(pastedFiles).find((file) =>
+          file.type.startsWith('image/'),
+        );
+        if (imageFile) {
+          processPastedOrDroppedFile(imageFile, currentEditor);
+          return true;
+        }
+      }
+      const pastedText = event.clipboardData?.getData('text/plain');
+      if (
+        pastedText &&
+        isValidURL(pastedText) &&
+        IMAGE_URL_REGEX.test(pastedText)
+      ) {
+        handlePastedImageURL(pastedText, currentEditor);
+        return true;
+      }
+      return defaultPasteHandler();
+    },
+    slashMenuItems: getDefaultSlashMenuItems,
+  };
 
-  // Initialize editor instance using useCreateBlockNote - remove deprecated option
-  const editor = useCreateBlockNote();
+  const editor = useCreateBlockNote<
+    typeof appSchema.blockSchema,
+    typeof appSchema.inlineContentSchema,
+    typeof appSchema.styleSchema
+  >(editorOptions);
 
-  // Effect to pass the editor instance up when it's ready
   useEffect(() => {
     if (editor) {
       onEditorChange(editor);
     }
   }, [editor, onEditorChange]);
 
-  // Remove the useEffect hook for dynamic import
-  // useEffect(() => { ... });
-
-  // Render the mantine BlockNoteView component
   return (
-    // The mantine component might not need the Chakra Box wrapper,
-    // but let's keep it for now for layout consistency.
-    // Removing padding as the mantine component likely handles its own.
     <Box borderWidth="1px" borderRadius="md" p={0} minH="300px">
       {editor ? (
-        // Render BlockNoteView from @blocknote/mantine, pass editable prop
         <BlockNoteView
           editor={editor}
           theme="light"
@@ -54,6 +246,7 @@ export default function BlockNoteEditorComponent({
               onContentUpdate(editor.topLevelBlocks);
             }
           }}
+          slashMenu={true}
         />
       ) : (
         <Flex justify="center" align="center" height="100%" minH="200px">

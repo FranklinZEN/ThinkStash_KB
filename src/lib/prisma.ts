@@ -64,10 +64,10 @@ process.env.DATABASE_URL = finalDatabaseURL;
 //   '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Final DATABASE_URL that Prisma will use:',
 //   process.env.DATABASE_URL,
 // );
-console.log(
-  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - NODE_ENV:',
-  process.env.NODE_ENV,
-);
+//console.log(
+//  '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - NODE_ENV:',
+//  process.env.NODE_ENV,
+//);
 // !!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Initializing Prisma Client NOW...
 // console.log(
 //   '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Initializing Prisma Client NOW...',

@@ -1,4 +1,5 @@
 import { Prisma, KnowledgeCard, PrismaClient } from '@prisma/client';
+import type { Block } from '@blocknote/core'; // Added for BlockNote type
 
 // --- Interfaces for Prisma Subset ---
 export interface CardServicePrismaSubset {
@@ -30,6 +31,93 @@ export interface UpdateCardData {
   content?: Prisma.JsonValue; // Assuming content is Json
   folderId?: string | null;
   tags?: string[];
+}
+
+// Renamed to _linkImagesToCard and will be used by an exported function
+async function _linkImagesToCard(
+  prisma: PrismaClient,
+  content: Prisma.JsonValue | undefined | null,
+  cardId: string,
+  userId: string,
+) {
+  if (!content || !Array.isArray(content)) {
+    return;
+  }
+
+  const imageRecordIdsToUpdate: string[] = [];
+  const blocks = content as Block[];
+
+  for (const block of blocks) {
+    if (
+      block.type === 'image' &&
+      block.props &&
+      typeof block.props.url === 'string'
+    ) {
+      const url = block.props.url as string;
+      // console.log('[_linkImagesToCard] Processing image block with URL:', url); // Removed log
+
+      const urlParts = url.split('/');
+      if (urlParts.length > 0) {
+        const potentialId = urlParts[urlParts.length - 1];
+        // console.log('[_linkImagesToCard] Extracted potentialId:', potentialId); // Removed log
+
+        const isCuidLike =
+          potentialId &&
+          potentialId.length === 25 &&
+          potentialId.startsWith('c');
+        // console.log('[_linkImagesToCard] Is potentialId CUID-like?:', isCuidLike, '(ID:', potentialId, ')'); // Removed log
+
+        if (isCuidLike) {
+          const imageRecord = await prisma.imageRecord.findFirst({
+            where: { id: potentialId, userId: userId },
+            select: { id: true, knowledgeCardId: true },
+          });
+          // console.log('[_linkImagesToCard] DB query result for ImageRecord:', imageRecord, '(for ID:', potentialId, ')'); // Removed log
+
+          if (imageRecord && imageRecord.knowledgeCardId !== cardId) {
+            imageRecordIdsToUpdate.push(potentialId);
+          }
+        }
+      }
+    }
+    if (block.children && block.children.length > 0) {
+      await _linkImagesToCard(
+        prisma,
+        block.children as unknown as Prisma.JsonValue,
+        cardId,
+        userId,
+      );
+    }
+  }
+
+  if (imageRecordIdsToUpdate.length > 0) {
+    try {
+      await prisma.imageRecord.updateMany({
+        where: {
+          id: { in: imageRecordIdsToUpdate },
+          userId: userId,
+        },
+        data: { knowledgeCardId: cardId },
+      });
+      // console.log(`[cardService] Linked ${imageRecordIdsToUpdate.length} images to card ${cardId}`); // Optional: keep for info
+    } catch (dbError) {
+      console.error(
+        `[cardService] Error linking images to card ${cardId} in DB:`,
+        dbError,
+      );
+      // Decide if this error should be propagated or just logged
+    }
+  }
+}
+
+// New exported function to handle image associations
+export async function handleCardImageAssociations(
+  prisma: PrismaClient,
+  content: Prisma.JsonValue | undefined | null,
+  cardId: string,
+  userId: string,
+) {
+  await _linkImagesToCard(prisma, content, cardId, userId);
 }
 
 // --- GET Card Logic ---
@@ -107,7 +195,9 @@ export async function updateCardLogic(
     const updatePayload: Prisma.KnowledgeCardUpdateInput = {};
     if (data.title !== undefined) updatePayload.title = data.title;
 
+    let contentChanged = false; // Flag to see if content was part of the update
     if (data.content !== undefined) {
+      contentChanged = true;
       if (data.content === null) {
         updatePayload.content = Prisma.JsonNull; // Use Prisma.JsonNull for explicit null
       } else {
@@ -155,6 +245,16 @@ export async function updateCardLogic(
       data: updatePayload,
       include: { tags: true, folder: true },
     });
+
+    // After successfully updating the card, if content was part of the update, link images
+    if (updatedCard && contentChanged && data.content) {
+      await handleCardImageAssociations(
+        prismaInstance,
+        data.content,
+        updatedCard.id,
+        userId,
+      ); // Use the new exported function
+    }
 
     return { success: true, data: updatedCard, status: 200 };
   } catch (error) {

@@ -13,11 +13,8 @@ import { storage } from '@/lib/gcs'; // Import the exported storage instance
 
 export async function GET(
   request: NextRequest,
-  // Using 'any' for context due to a persistent build error with Next.js 15.3.2's
-  // internal ParamCheck<RouteContext> type for dynamic route handlers.
-  // This seems related to the (misnomer) runtime warning about awaiting params.
-  // See documentation/Development Reference/Nextjs_Params_Warning - Thoughts & Clarification.md
-  context: any, // Type assertion to bypass build error
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: any, // Kept as any with eslint-disable due to known Next.js typing issues
 ) {
   // We still expect context.params.imageRecordId to exist and be a string based on runtime behavior.
   const imageRecordId = context.params?.imageRecordId as string;

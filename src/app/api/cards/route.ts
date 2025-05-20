@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Use default import
 import { Prisma } from '@prisma/client'; // Import Prisma
+import { handleCardImageAssociations } from '@/lib/services/cardService'; // Corrected import path
 
 // --- GET Handler (List Cards) ---
 export async function GET(req: NextRequest) {
@@ -158,10 +159,14 @@ export async function POST(req: NextRequest) {
     // Validate folderId if provided
     if (
       folderId !== undefined &&
+      folderId !== null &&
       (typeof folderId !== 'string' || folderId.trim().length === 0)
     ) {
       return NextResponse.json(
-        { error: 'folderId must be a non-empty string if provided.' },
+        {
+          error:
+            'folderId, if provided and not null, must be a non-empty string.',
+        },
         { status: 400 },
       );
     }
@@ -170,7 +175,7 @@ export async function POST(req: NextRequest) {
       title: title.trim(),
       content,
       user: {
-        connect: { id: session.user.id }, // --- REVERTED: Use session.user.id ---
+        connect: { id: session.user.id },
       },
     };
 
@@ -185,13 +190,13 @@ export async function POST(req: NextRequest) {
 
     if (folderId) {
       const folder = await prisma.folder.findFirst({
-        where: { id: folderId, userId: session.user.id }, // --- REVERTED: Use session.user.id ---
+        where: { id: folderId, userId: session.user.id },
       });
       if (!folder) {
         return NextResponse.json(
           { error: 'Folder not found or access denied.' },
           { status: 404 },
-        ); // Message updated
+        );
       }
       createData.folder = { connect: { id: folderId } };
     }
@@ -202,8 +207,33 @@ export async function POST(req: NextRequest) {
         // Optionally include relations in the response
         tags: true,
         folder: true,
+        // No need to include images here as they are processed separately
       },
     });
+
+    // After creating the card, associate images from its content
+    if (newCard && newCard.content) {
+      try {
+        await handleCardImageAssociations(
+          prisma,
+          newCard.content,
+          newCard.id,
+          session.user.id,
+        );
+        console.log(
+          `[POST /api/cards] Successfully processed image associations for new card ${newCard.id}`,
+        );
+      } catch (imageError) {
+        // Log the error but don't fail the card creation response itself.
+        // The card is created, image association is a secondary step.
+        console.error(
+          `[POST /api/cards] Error associating images for new card ${newCard.id}:`,
+          imageError,
+        );
+        // Optionally, you could add a field to the response or a separate notification system
+        // if image association failures need to be surfaced to the user or admin.
+      }
+    }
 
     return NextResponse.json(newCard, { status: 201 });
   } catch (error) {

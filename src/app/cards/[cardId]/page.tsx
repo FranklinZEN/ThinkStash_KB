@@ -34,10 +34,10 @@ import {
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
 
-// Import BlockNote components - STATICALLY
-// import { useBlockNote } from '@blocknote/react'; // REMOVE this direct import
-// import { BlockNoteView } from '@blocknote/mantine'; // REMOVE this, will be used by BlockNoteEditorComponent
-import { BlockNoteEditor, type PartialBlock } from '@blocknote/core';
+import {
+  BlockNoteEditor as BlockNoteEditorType,
+  type PartialBlock,
+} from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
 
@@ -103,23 +103,19 @@ export default function CardDetailPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editor, setEditor] = useState<BlockNoteEditor | null>(null);
+  const [editor, setEditor] = useState<BlockNoteEditorType | null>(null);
   const [editorContent, setEditorContent] = useState<
     PartialBlock[] | undefined
   >(undefined); // For content tracking
+  const [editorContentForInitialLoad, setEditorContentForInitialLoad] =
+    useState<PartialBlock[] | undefined>(undefined);
 
-  // Callback to receive the editor instance from the BlockNoteEditorComponent
   const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditor | null) => {
+    (editorInstance: BlockNoteEditorType | null) => {
       setEditor(editorInstance);
-      // When editor is ready, if we have fetched card data, try to load its content
-      // This might be redundant if fetchCard already handles it due to editor dependency
-      if (editorInstance && card && card.content) {
-        // Initial content loading logic is primarily within fetchCard, triggered by editor changing
-      }
     },
-    [card],
-  ); // Add card to dependencies to re-run if card data changes before editor is ready
+    [], // No dependencies needed if it just sets the editor instance
+  );
 
   // Callback to receive content updates from the editor component
   const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
@@ -134,10 +130,8 @@ export default function CardDetailPage() {
     try {
       const response = await fetch(`/api/cards/${cardId}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        cache: 'no-store', // Prevent caching
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
       });
 
       if (!response.ok) {
@@ -150,57 +144,41 @@ export default function CardDetailPage() {
       const data: KnowledgeCard = await response.json();
       setCard(data);
       setTitle(data.title);
-      setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []); // Extract tag names for keywords state
+      setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []);
 
-      // Load content into editor once fetched and editor is ready
-      if (editor && data.content) {
-        try {
-          // Ensure content is in the correct format (BlockNoteDocument)
-          let contentToLoad: BlockNoteDocument;
-          if (typeof data.content === 'string') {
-            // Should ideally not happen if API sends BlockNoteDocument
-            const trimmedContent = data.content.trim();
-            if (
-              trimmedContent.startsWith('[') ||
-              trimmedContent.startsWith('{')
-            ) {
-              contentToLoad = JSON.parse(trimmedContent);
-            } else {
-              console.warn(
-                'Fetched content is string but not JSON, treating as single paragraph.',
+      // Prepare initialContent for the editor
+      if (data.content) {
+        if (typeof data.content === 'string') {
+          const trimmedContent = data.content.trim();
+          if (
+            trimmedContent.startsWith('[') ||
+            trimmedContent.startsWith('{')
+          ) {
+            try {
+              setEditorContentForInitialLoad(
+                JSON.parse(trimmedContent) as PartialBlock[],
               );
-              contentToLoad = [
-                {
-                  id: `block-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`,
-                  type: 'paragraph',
-                  props: {
-                    textColor: 'default',
-                    backgroundColor: 'default',
-                    textAlignment: 'left',
-                  },
-                  content: [
-                    { type: 'text', text: data.content as string, styles: {} },
-                  ],
-                  children: [],
-                },
-              ];
+            } catch (e) {
+              console.warn(
+                'Failed to parse string content as JSON, using as plain text.',
+                e,
+              );
+              setEditorContentForInitialLoad([
+                { type: 'paragraph', content: trimmedContent },
+              ]);
             }
           } else {
-            contentToLoad = data.content as BlockNoteDocument; // Assuming it's already BlockNoteDocument or null
+            setEditorContentForInitialLoad([
+              { type: 'paragraph', content: data.content },
+            ]);
           }
-          // Use replaceBlocks API
-          if (contentToLoad) {
-            // only load if not null
-            await editor.replaceBlocks(
-              editor.topLevelBlocks,
-              contentToLoad as PartialBlock[],
-            );
-          }
-        } catch (err: unknown) {
-          console.error('Error loading content into editor:', err);
-          // Don't throw here, just log the error
+        } else if (Array.isArray(data.content)) {
+          setEditorContentForInitialLoad(data.content as PartialBlock[]);
         }
+      } else {
+        setEditorContentForInitialLoad(undefined);
       }
+      // REMOVED: explicit editor.replaceBlocks() call. initialContent prop handles this.
     } catch (err: unknown) {
       console.error('Fetch card error:', err);
       const errorMessage =
@@ -216,8 +194,7 @@ export default function CardDetailPage() {
     } finally {
       setIsLoading(false);
     }
-    // Fetch depends on cardId and auth status. Editor is dependency for loading content AFTER fetch.
-  }, [cardId, status, editor, toast]);
+  }, [cardId, status, toast]);
 
   useEffect(() => {
     if (status === 'authenticated' && cardId) {
@@ -616,6 +593,7 @@ export default function CardDetailPage() {
                   onEditorChange={handleEditorInstanceReady}
                   onContentUpdate={handleEditorContentUpdate}
                   editable={isEditing}
+                  initialContent={editorContentForInitialLoad}
                 />
               </Box>
             </FormControl>
@@ -692,9 +670,10 @@ export default function CardDetailPage() {
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
             <BlockNoteEditorComponent
-              onEditorChange={handleEditorInstanceReady} // Editor instance still needed for initial load
-              onContentUpdate={handleEditorContentUpdate} // Keep content in sync if needed
-              editable={isEditing} // This will be false here
+              onEditorChange={handleEditorInstanceReady}
+              onContentUpdate={handleEditorContentUpdate}
+              editable={isEditing}
+              initialContent={editorContentForInitialLoad}
             />
           </Box>
         </Box>
