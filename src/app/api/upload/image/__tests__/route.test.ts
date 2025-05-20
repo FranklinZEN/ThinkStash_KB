@@ -148,9 +148,9 @@ describe('/api/upload/image POST (Route Handler with next-test-api-route-handler
     const userId = 'user-123';
     const mockFile = createMockFile('error-case.gif', 'image/gif', 100);
     mockGetServerSession.mockResolvedValue({ user: { id: userId } });
-    mockHandleImageUploadLogic.mockRejectedValue(
-      new Error('Unexpected service crash'),
-    );
+    mockHandleImageUploadLogic.mockImplementation(async () => {
+      throw new Error('Unexpected service crash');
+    });
 
     await testApiHandler({
       appHandler,

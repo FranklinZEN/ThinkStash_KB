@@ -110,6 +110,46 @@ export default function CardDetailPage() {
   const [editorContentForInitialLoad, setEditorContentForInitialLoad] =
     useState<PartialBlock[] | undefined>(undefined);
 
+  // ADD THIS: A state variable to help change the key of the editor component
+  const [editorKey, setEditorKey] = useState(0);
+
+  // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
+  useEffect(() => {
+    // console.log('[CardDetail Page] useEffect for card.content, current card:', card);
+    if (card && card.content) {
+      let newInitialContent: PartialBlock[] | undefined;
+      if (typeof card.content === 'string') {
+        const trimmedContent = card.content.trim();
+        if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{ ')) {
+          try {
+            newInitialContent = JSON.parse(trimmedContent) as PartialBlock[];
+          } catch (e) {
+            console.warn(
+              '[CardDetail Page] Failed to parse string content as JSON, using as plain text.',
+              e,
+            );
+            newInitialContent = [
+              { type: 'paragraph', content: trimmedContent },
+            ];
+          }
+        } else {
+          newInitialContent = [{ type: 'paragraph', content: card.content }];
+        }
+      } else if (Array.isArray(card.content)) {
+        newInitialContent = card.content as PartialBlock[];
+      }
+      // console.log('[CardDetail Page] Setting editorContentForInitialLoad:', newInitialContent);
+      setEditorContentForInitialLoad(newInitialContent);
+      if (card && card.updatedAt) {
+        setEditorKey((prevKey) => prevKey + 1); // A simple increment, or use card.updatedAt
+      }
+    } else if (card) {
+      // console.log('[CardDetail Page] Card content is null or undefined, setting editorContentForInitialLoad to undefined');
+      setEditorContentForInitialLoad(undefined);
+    }
+    // Only run when `card` itself changes. Content is part of `card`.
+  }, [card]);
+
   const handleEditorInstanceReady = useCallback(
     (editorInstance: BlockNoteEditorType | null) => {
       setEditor(editorInstance);
@@ -145,39 +185,10 @@ export default function CardDetailPage() {
       setCard(data);
       setTitle(data.title);
       setKeywords(data.tags ? data.tags.map((tag) => tag.name) : []);
+      // console.log('[CardDetail Page] fetchCard - card set:', data);
 
-      // Prepare initialContent for the editor
-      if (data.content) {
-        if (typeof data.content === 'string') {
-          const trimmedContent = data.content.trim();
-          if (
-            trimmedContent.startsWith('[') ||
-            trimmedContent.startsWith('{')
-          ) {
-            try {
-              setEditorContentForInitialLoad(
-                JSON.parse(trimmedContent) as PartialBlock[],
-              );
-            } catch (e) {
-              console.warn(
-                'Failed to parse string content as JSON, using as plain text.',
-                e,
-              );
-              setEditorContentForInitialLoad([
-                { type: 'paragraph', content: trimmedContent },
-              ]);
-            }
-          } else {
-            setEditorContentForInitialLoad([
-              { type: 'paragraph', content: data.content },
-            ]);
-          }
-        } else if (Array.isArray(data.content)) {
-          setEditorContentForInitialLoad(data.content as PartialBlock[]);
-        }
-      } else {
-        setEditorContentForInitialLoad(undefined);
-      }
+      // Prepare initialContent for the editor - THIS LOGIC IS NOW MOVED TO useEffect
+      // if (data.content) { ... } else { setEditorContentForInitialLoad(undefined); }
       // REMOVED: explicit editor.replaceBlocks() call. initialContent prop handles this.
     } catch (err: unknown) {
       console.error('Fetch card error:', err);
@@ -288,16 +299,20 @@ export default function CardDetailPage() {
 
     const updatePayload: CardUpdatePayload = {};
     if (hasTitleChanged) updatePayload.title = title.trim();
-    // Use editorContent for consistency if available, otherwise editor.document
-    const contentToSave = editorContent || (editor ? editor.document : null);
-    if (hasContentChanged && contentToSave)
-      updatePayload.content = contentToSave as BlockNoteDocument;
-    if (hasKeywordsChanged) updatePayload.tags = keywords; // Correct: send the array of keyword strings
 
+    // Correctly use contentToSave and the original hasContentChanged
+    const contentToSave = editorContent || (editor ? editor.document : null);
+    if (hasContentChanged && contentToSave) {
+      updatePayload.content = contentToSave as BlockNoteDocument;
+    }
+
+    if (hasKeywordsChanged) updatePayload.tags = keywords;
+
+    // console.log('Updating card with payload:', updatePayload); // This was the one we discussed keeping/removing based on preference
+
+    // Ensure setIsSaving and setError(null) are correctly placed before the try block
     setIsSaving(true);
     setError(null);
-
-    console.log('Updating card with payload:', updatePayload); // Log payload being sent
 
     try {
       // Use PUT to replace the entire card data (or PATCH if API supports partial)
@@ -308,23 +323,30 @@ export default function CardDetailPage() {
         body: JSON.stringify(updatePayload),
       });
 
-      const updatedCard = await response.json();
-      console.log('API response for updated card:', updatedCard); // Log API response
+      const updatedCardData = await response.json();
+      // console.log('[CardDetail Page] handleSaveChanges - API response for updated card:', updatedCardData);
 
-      if (response.ok) {
-        setCard(updatedCard as KnowledgeCard);
-        setTitle(updatedCard.title);
+      if (response.ok && updatedCardData) {
+        setCard(updatedCardData as KnowledgeCard); // This will trigger the useEffect
+        setTitle(updatedCardData.title);
         setKeywords(
-          updatedCard.tags ? updatedCard.tags.map((tag) => tag.name) : [],
-        ); // Extract tag names
+          updatedCardData.tags
+            ? updatedCardData.tags.map((tag: Tag) => tag.name)
+            : [],
+        );
         setIsEditing(false);
         toast({
           title: 'Card updated successfully',
           status: 'success',
           duration: 3000,
         });
+        // router.refresh(); // Keep this commented out for now
       } else {
-        throw new Error(updatedCard.message || 'Failed to update card');
+        const errorMsg =
+          updatedCardData?.message ||
+          updatedCardData?.error ||
+          'Failed to update card';
+        throw new Error(errorMsg);
       }
     } catch (err: unknown) {
       console.error('Save card error:', err);
@@ -590,6 +612,7 @@ export default function CardDetailPage() {
               </FormLabel>
               <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
                 <BlockNoteEditorComponent
+                  key={`editor-${editorKey}`}
                   onEditorChange={handleEditorInstanceReady}
                   onContentUpdate={handleEditorContentUpdate}
                   editable={isEditing}
@@ -670,6 +693,7 @@ export default function CardDetailPage() {
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
             <BlockNoteEditorComponent
+              key={`editor-readonly-${editorKey}`}
               onEditorChange={handleEditorInstanceReady}
               onContentUpdate={handleEditorContentUpdate}
               editable={isEditing}

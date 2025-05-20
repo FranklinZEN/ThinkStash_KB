@@ -30,10 +30,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user.id;
-    console.log(
-      '[/api/upload/image] Session valid for user:',
-      session.user?.email,
-    );
+    console.log('[/api/upload/image] Session valid for user ID:', userId);
 
     // Get the form data
     console.log('[/api/upload/image] Parsing form data...');

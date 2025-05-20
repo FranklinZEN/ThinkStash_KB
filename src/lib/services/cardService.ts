@@ -256,7 +256,22 @@ export async function updateCardLogic(
       ); // Use the new exported function
     }
 
-    return { success: true, data: updatedCard, status: 200 };
+    // Re-fetch the card to ensure all associations and updates are reflected in the returned data
+    const fullyUpdatedCard = await prismaInstance.knowledgeCard.findUnique({
+      where: { id: cardId },
+      include: { tags: true, folder: true },
+    });
+
+    if (!fullyUpdatedCard) {
+      // This should not happen if the update succeeded, but as a safeguard
+      return {
+        success: false,
+        error: 'Failed to retrieve card after update.',
+        status: 500,
+      };
+    }
+
+    return { success: true, data: fullyUpdatedCard, status: 200 };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2003' || error.code === 'P2025') {
