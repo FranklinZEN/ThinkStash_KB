@@ -5,14 +5,15 @@ import {
   CardServicePrismaSubset,
   UpdateCardData,
 } from '../cardService';
+import { vi } from 'vitest'; // Import vi
 // import { ServiceResult } from '@/lib/services/serviceUtils'; // Unused
 // import { Prisma } from '@prisma/client'; // Unused
 
-// Mock Prisma operations
-const mockKnowledgeCardFindUnique = jest.fn();
-const mockKnowledgeCardUpdate = jest.fn();
-const mockKnowledgeCardDelete = jest.fn();
-const mockFolderFindUnique = jest.fn();
+// Mock Prisma operations using vi.fn()
+const mockKnowledgeCardFindUnique = vi.fn();
+const mockKnowledgeCardUpdate = vi.fn();
+const mockKnowledgeCardDelete = vi.fn();
+const mockFolderFindUnique = vi.fn();
 
 const mockPrismaInstance: CardServicePrismaSubset = {
   knowledgeCard: {
@@ -90,7 +91,7 @@ describe('cardService', () => {
     const mockExistingCardForOwnershipCheck = {
       id: MOCK_CARD_ID,
       userId: MOCK_USER_ID,
-    }; // Minimal for ownership
+    };
 
     it('should update a card successfully', async () => {
       // This is the expected shape of the card *after* update and *after* the final re-fetch
@@ -126,7 +127,7 @@ describe('cardService', () => {
       );
       expect(mockKnowledgeCardFindUnique).toHaveBeenCalledTimes(2); // Once for ownership, once for re-fetch
       expect(mockKnowledgeCardUpdate).toHaveBeenCalledWith({
-        where: { id: MOCK_CARD_ID },
+        where: { id: MOCK_CARD_ID, userId: MOCK_USER_ID },
         data: { title: 'Updated Title' }, // This is the actual payload for .update()
         include: { tags: true, folder: true },
       });
@@ -201,7 +202,7 @@ describe('cardService', () => {
         select: { id: true },
       });
       expect(mockKnowledgeCardUpdate).toHaveBeenCalledWith({
-        where: { id: MOCK_CARD_ID },
+        where: { id: MOCK_CARD_ID, userId: MOCK_USER_ID },
         data: {
           // This is the actual data payload for the .update() operation
           title: 'Card with Folder and Tags',

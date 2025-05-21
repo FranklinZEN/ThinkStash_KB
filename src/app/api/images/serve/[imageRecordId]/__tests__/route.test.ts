@@ -1,61 +1,66 @@
-// Define GCS mock functions that will be used by the jest.mock implementation
-// Using var here to help with Jest hoisting and initialization order issues.
-
-// These will be assigned jest.fn() after the jest.mock call for @/lib/gcs
-// eslint-disable-next-line no-var
-var gcsFileExists_mock: jest.Mock;
-// eslint-disable-next-line no-var
-var gcsCreateReadStream_mock: jest.Mock;
-// eslint-disable-next-line no-var
-var gcsFile_mock: jest.Mock; // This will mock the function returned by bucket.file()
-// eslint-disable-next-line no-var
-var getBucket_actualMock: jest.Mock; // This will mock the getBucket export
-
-import 'next-test-api-route-handler'; // Must be first
-import { testApiHandler } from 'next-test-api-route-handler';
-import * as appHandler from '../route'; // Use static import now
-import { prismaMock } from 'tests/__helpers__/prisma-mock'; // Import the actual mock
+import { GET as appHandlerGET } from '../route'; // Import your route handler
+import { getServerSession } from 'next-auth/next';
+import { getBucket } from '@/lib/gcs'; // Will be mocked, then imported as mock
+import { prismaMock } from 'tests/__helpers__/prisma-mock';
 import { Readable } from 'stream';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createMocks, RequestMethod } from 'node-mocks-http';
+import { NextRequest } from 'next/server';
 
-// --- MOCKS ---
-// Mock @/lib/auth to control authOptions
-jest.mock('@/lib/auth', () => ({
-  authOptions: {},
-}));
+// --- GCS Mocks (Vitest) ---
+vi.mock('@/lib/gcs', () => {
+  const mockFileExists = vi.fn();
+  const mockCreateReadStream = vi.fn();
+  const mockFile = vi.fn(() => ({
+    exists: mockFileExists,
+    createReadStream: mockCreateReadStream,
+  }));
+  const mockGetBucket = vi.fn(() => ({
+    file: mockFile,
+  }));
 
-// Mock next-auth (Revised Strategy)
-// eslint-disable-next-line no-var
-var mockGetServerSessionFn: jest.Mock; // Hoisted and initialized to undefined
+  // Attach nested mocks to the top-level mock for easier access in tests
+  // These are custom properties we add to the mock function object itself.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (mockGetBucket as any)._mockFile = mockFile; // Expose mockFile via mockGetBucket
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (mockFile as any)._mockExists = mockFileExists; // Expose mockFileExists via mockFile
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (mockFile as any)._mockCreateReadStream = mockCreateReadStream; // Expose mockCreateReadStream via mockFile
 
-jest.mock('next-auth/next', () => {
-  const actualNextAuthNext = jest.requireActual('next-auth/next');
   return {
     __esModule: true,
-    ...actualNextAuthNext,
-    getServerSession: (...args: unknown[]) => mockGetServerSessionFn(...args), // Use unknown[] for args
+    getBucket: mockGetBucket,
+    createGcsClient: vi.fn(),
+    uploadFile: vi.fn(),
+    deleteFile: vi.fn(),
+    getSignedUrl: vi.fn(),
+    getStorageObjectPath: vi.fn(),
   };
 });
 
-// Initialize after jest.mock has been processed by Jest
-mockGetServerSessionFn = jest.fn();
-const mockGetServerSessionTyped = mockGetServerSessionFn;
+// Import the mocked version of getBucket and cast it to access our custom properties
+const mockedGetBucket = getBucket as ReturnType<typeof vi.fn> & {
+  _mockFile?: ReturnType<typeof vi.fn> & {
+    _mockExists?: ReturnType<typeof vi.fn>;
+    _mockCreateReadStream?: ReturnType<typeof vi.fn>;
+  };
+};
 
-// Mock @/lib/gcs using a standard top-level jest.mock
-jest.mock('@/lib/gcs', () => ({
-  __esModule: true,
-  // The factory calls the getBucket_actualMock which will be defined later
-  getBucket: (...args: unknown[]) => getBucket_actualMock(...args), // Use unknown[] for args
-}));
+// --- NextAuth Mocks (Vitest) ---
+vi.mock('next-auth/next', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next-auth/next')>();
+  return {
+    ...actual,
+    getServerSession: vi.fn(),
+  };
+});
+const mockGetServerSessionTyped = getServerSession as ReturnType<typeof vi.fn>;
 
-// Initialize the GCS mock functions AFTER jest.mock has been declared
-gcsFileExists_mock = jest.fn();
-gcsCreateReadStream_mock = jest.fn();
-gcsFile_mock = jest.fn(() => ({
-  exists: gcsFileExists_mock,
-  createReadStream: gcsCreateReadStream_mock,
-}));
-getBucket_actualMock = jest.fn(() => ({
-  file: gcsFile_mock,
+// Mock @/lib/auth (if still needed, e.g. if route handler imports authOptions directly for some reason)
+// If not, this mock can be removed.
+vi.mock('@/lib/auth', () => ({
+  authOptions: {},
 }));
 
 // --- Typed Mocks & Variables ---
@@ -64,52 +69,73 @@ const MOCK_USER_ID = 'user-123';
 const MOCK_GCS_PATH = 'user-123/test-image.jpg';
 const MOCK_CONTENT_TYPE = 'image/jpeg';
 
-// Helper for a complete ImageRecord mock
-const createMockImageRecord = (
-  overrides: Partial<
-    NonNullable<Awaited<ReturnType<typeof prismaMock.imageRecord.findUnique>>>
-  > = {},
-) => {
-  const defaultRecord = {
-    id: MOCK_IMAGE_RECORD_ID,
-    userId: MOCK_USER_ID,
-    gcsPath: MOCK_GCS_PATH,
-    contentType: MOCK_CONTENT_TYPE,
-    originalFilename: 'test-image.jpg',
-    size: 12345,
-    appServedUrl: `/api/images/serve/${MOCK_IMAGE_RECORD_ID}`,
-    knowledgeCardId: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+const createMockImageRecord = (overrides = {}) => ({
+  id: MOCK_IMAGE_RECORD_ID,
+  userId: MOCK_USER_ID,
+  gcsPath: MOCK_GCS_PATH,
+  contentType: MOCK_CONTENT_TYPE,
+  originalFilename: 'test-image.jpg',
+  size: 12345,
+  appServedUrl: `/api/images/serve/${MOCK_IMAGE_RECORD_ID}`,
+  knowledgeCardId: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...overrides,
+});
+
+// Helper to create a mock NextRequest and context for dynamic routes
+interface ImageRecordRouteContext {
+  params: { imageRecordId: string }; // Params are the resolved object directly
+}
+
+function mockRequestAndContext(
+  method: RequestMethod,
+  routeParams: { imageRecordId: string },
+) {
+  const url = `/api/images/serve/${routeParams.imageRecordId}`;
+  const { req } = createMocks({ method, url });
+
+  const nextReq = req as unknown as NextRequest;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (nextReq as any).nextUrl = {
+    searchParams: new URLSearchParams(),
+    pathname: url,
   };
-  return { ...defaultRecord, ...overrides };
-};
+
+  // Context params should be the direct routeParams object
+  const context: ImageRecordRouteContext = { params: routeParams };
+  return { req: nextReq, context };
+}
 
 describe('/api/images/serve/[imageRecordId] GET', () => {
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {
-    // prismaMock is reset in tests/__helpers__/prisma-mock.ts
-    mockGetServerSessionTyped.mockReset();
+    vi.resetAllMocks();
     mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
 
-    // Reset GCS mocks
-    getBucket_actualMock.mockClear(); // Clear calls to the main getBucket mock
-    gcsFile_mock.mockClear(); // Clear calls to the file() mock
-    gcsFileExists_mock.mockReset().mockResolvedValue([true]);
-    gcsCreateReadStream_mock.mockReset().mockImplementation(() => {
-      const readable = new Readable();
-      readable._read = () => {};
-      process.nextTick(() => readable.push(null));
-      return readable;
-    });
+    // Reset and configure GCS mocks using the exposed nested mock functions from mockedGetBucket
+    const mockFile = mockedGetBucket._mockFile;
+    const mockFileExists = mockFile?._mockExists;
+    const mockCreateReadStream = mockFile?._mockCreateReadStream;
 
-    // Ensure the getBucket_actualMock returns the structure that leads to other mocks
-    getBucket_actualMock.mockImplementation(() => ({
-      file: gcsFile_mock.mockImplementation(() => ({
-        exists: gcsFileExists_mock,
-        createReadStream: gcsCreateReadStream_mock,
-      })),
+    if (mockFileExists) mockFileExists.mockReset().mockResolvedValue([true]);
+    if (mockCreateReadStream)
+      mockCreateReadStream.mockReset().mockImplementation(() => {
+        const readable = new Readable();
+        readable._read = () => {};
+        process.nextTick(() => readable.push(null));
+        return readable;
+      });
+    // Ensure mockFile itself is reset and re-implemented if it was called/configured by a previous test
+    if (mockFile)
+      mockFile.mockReset().mockImplementation(() => ({
+        exists: mockFileExists!,
+        createReadStream: mockCreateReadStream!,
+      }));
+    // Ensure mockedGetBucket is reset and re-implemented to return the (potentially re-configured) mockFile
+    mockedGetBucket.mockReset().mockImplementation(() => ({
+      file: mockFile!,
     }));
 
     originalEnv = { ...process.env };
@@ -122,159 +148,136 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
 
   it('should return 401 if user is not authenticated', async () => {
     mockGetServerSessionTyped.mockResolvedValue(null);
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(401);
-        const json = await res.json();
-        expect(json.error).toBe('Unauthorized');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-    expect(getBucket_actualMock).not.toHaveBeenCalled();
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(401);
+    expect(mockedGetBucket).not.toHaveBeenCalled(); // Assert on the top-level mockedGetBucket
   });
 
-  it('should return 500 if GCS_BUCKET_NAME is not configured in the route', async () => {
-    const originalBucketEnv = process.env.GCS_BUCKET_NAME;
+  it('should return 500 if GCS_BUCKET_NAME is not configured', async () => {
     delete process.env.GCS_BUCKET_NAME;
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(500);
-        const json = await res.json();
-        expect(json.error).toBe('Server configuration error for GCS bucket.');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-    process.env.GCS_BUCKET_NAME = originalBucketEnv;
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json.error).toBe('Server configuration error for GCS bucket.');
   });
 
-  it('should return 404 if ImageRecord is not found in Prisma', async () => {
+  it('should return 404 if ImageRecord is not found', async () => {
     prismaMock.imageRecord.findUnique.mockResolvedValue(null);
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: 'non-existent-id' },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(404);
-        const json = await res.json();
-        expect(json.error).toBe('Image not found');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: 'non-existent-id',
     });
-    expect(getBucket_actualMock).not.toHaveBeenCalled();
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(404);
+    const json = await response.json();
+    expect(json.error).toBe('Image not found');
+    expect(mockedGetBucket).not.toHaveBeenCalled();
   });
 
   it('should return 404 if file does not exist in GCS', async () => {
     prismaMock.imageRecord.findUnique.mockResolvedValue(
       createMockImageRecord(),
     );
-    gcsFileExists_mock.mockResolvedValue([false]);
+    // Specific mock for this test path
+    mockedGetBucket
+      ._mockFile!._mockExists!.mockReset()
+      .mockResolvedValue([false]);
 
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(404);
-        const json = await res.json();
-        expect(json.error).toBe('Image file not found in storage');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-    expect(getBucket_actualMock).toHaveBeenCalled();
-    expect(gcsFile_mock).toHaveBeenCalledWith(MOCK_GCS_PATH);
-    expect(gcsFileExists_mock).toHaveBeenCalled();
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(404);
+    const json = await response.json();
+    expect(json.error).toBe('Image file not found in storage');
+    expect(mockedGetBucket).toHaveBeenCalled();
+    expect(mockedGetBucket._mockFile!).toHaveBeenCalledWith(MOCK_GCS_PATH);
+    expect(mockedGetBucket._mockFile!._mockExists!).toHaveBeenCalled();
   });
 
-  it('should stream the image successfully with correct headers if found', async () => {
+  it('should stream the image successfully with correct headers', async () => {
     prismaMock.imageRecord.findUnique.mockResolvedValue(
       createMockImageRecord(),
     );
-    gcsFileExists_mock.mockResolvedValue([true]);
-    gcsCreateReadStream_mock.mockImplementation(() => {
-      const stream = new Readable();
-      stream.push('image data chunk');
-      stream.push(null);
-      return stream;
-    });
+    // Default beforeEach setup should have exists as true and a basic stream
+    // Override createReadStream for specific data
+    mockedGetBucket
+      ._mockFile!._mockCreateReadStream!.mockReset()
+      .mockImplementation(() => {
+        const stream = new Readable();
+        stream.push('image data chunk');
+        stream.push(null);
+        return stream;
+      });
 
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(200);
-        expect(res.headers.get('Content-Type')).toBe(MOCK_CONTENT_TYPE);
-        expect(res.headers.get('Cache-Control')).toBe(
-          'public, max-age=604800, immutable',
-        );
-        const receivedData = await res.text();
-        expect(receivedData).toBe('image data chunk');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-    expect(getBucket_actualMock).toHaveBeenCalled();
-    expect(gcsFile_mock).toHaveBeenCalledWith(MOCK_GCS_PATH);
-    expect(gcsFileExists_mock).toHaveBeenCalled();
-    expect(gcsCreateReadStream_mock).toHaveBeenCalled();
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe(MOCK_CONTENT_TYPE);
+    expect(response.headers.get('Cache-Control')).toBe(
+      'public, max-age=604800, immutable',
+    );
+    const receivedData = await response.text();
+    expect(receivedData).toBe('image data chunk');
+    expect(
+      mockedGetBucket._mockFile!._mockCreateReadStream!,
+    ).toHaveBeenCalled();
   });
 
-  it('should return 500 if Prisma findUnique throws an error', async () => {
+  it('should return 500 if Prisma findUnique throws', async () => {
     prismaMock.imageRecord.findUnique.mockRejectedValue(
       new Error('Prisma DB Error'),
     );
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(500);
-        const json = await res.json();
-        expect(json.error).toBe('Internal Server Error');
-        expect(json.details).toBe('Prisma DB Error');
-      },
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-    expect(getBucket_actualMock).not.toHaveBeenCalled();
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json.error).toBe('Internal Server Error');
+    expect(json.details).toBe('Prisma DB Error');
   });
 
-  it('should return 500 if GCS file.exists() throws an error', async () => {
+  it('should return 500 if GCS file.exists() throws', async () => {
     prismaMock.imageRecord.findUnique.mockResolvedValue(
       createMockImageRecord(),
     );
-    gcsFileExists_mock.mockRejectedValue(new Error('GCS exists error'));
-
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(500);
-        const json = await res.json();
-        expect(json.error).toBe('Internal Server Error');
-        expect(json.details).toBe('GCS exists error');
-      },
+    mockedGetBucket
+      ._mockFile!._mockExists!.mockReset()
+      .mockRejectedValue(new Error('GCS exists error'));
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json.error).toBe('Internal Server Error');
+    expect(json.details).toBe('GCS exists error');
   });
 
-  it('should return 500 if GCS createReadStream throws an error', async () => {
+  it('should return 500 if GCS createReadStream throws', async () => {
     prismaMock.imageRecord.findUnique.mockResolvedValue(
       createMockImageRecord(),
     );
-    gcsFileExists_mock.mockResolvedValue([true]);
-    gcsCreateReadStream_mock.mockImplementation(() => {
-      throw new Error('GCS stream error');
+    mockedGetBucket
+      ._mockFile!._mockCreateReadStream!.mockReset()
+      .mockImplementation(() => {
+        throw new Error('GCS stream error');
+      });
+    const { req, context } = mockRequestAndContext('GET', {
+      imageRecordId: MOCK_IMAGE_RECORD_ID,
     });
-
-    await testApiHandler({
-      appHandler,
-      params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
-      test: async ({ fetch }) => {
-        const res = await fetch({ method: 'GET' });
-        expect(res.status).toBe(500);
-        const json = await res.json();
-        expect(json.error).toBe('Internal Server Error');
-        expect(json.details).toBe('GCS stream error');
-      },
-    });
+    const response = await appHandlerGET(req, context);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json.error).toBe('Internal Server Error');
+    expect(json.details).toBe('GCS stream error');
   });
 });

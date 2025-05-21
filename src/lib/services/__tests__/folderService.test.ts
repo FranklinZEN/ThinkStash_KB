@@ -6,11 +6,12 @@ import {
   FolderBasicDetails,
 } from '../folderService';
 import { Prisma } from '@prisma/client'; // For Prisma types if needed for errors
+import { vi } from 'vitest'; // Import vi
 
-// Mock Prisma operations
-const mockFolderFindMany = jest.fn();
-const mockFolderFindUnique = jest.fn();
-const mockFolderCreate = jest.fn();
+// Mock Prisma operations using vi.fn()
+const mockFolderFindMany = vi.fn();
+const mockFolderFindUnique = vi.fn();
+const mockFolderCreate = vi.fn();
 
 const mockPrismaInstance: FolderPrismaSubset = {
   folder: {

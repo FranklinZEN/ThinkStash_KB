@@ -28,7 +28,8 @@
         "name": "next"
       }
     ],
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "types": ["node", "jest", "@testing-library/jest-dom", "vitest/globals"]
   },
   "include": [
     "next-env.d.ts",
@@ -37,7 +38,7 @@
     "**/*.tsx",
     "custom-next-auth.d.ts",
     "**/*.d.ts"
-  ],
+, "tests/integration/api/cards/[cardId]/route.test.ts"  ],
   "exclude": [
     "node_modules",
     "ThinkStash Stash Docs/**/*.ts"

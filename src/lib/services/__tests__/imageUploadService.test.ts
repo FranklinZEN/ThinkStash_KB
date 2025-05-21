@@ -4,18 +4,20 @@ import {
   ImageRecordPrismaSubset,
 } from '../imageUploadService';
 import { uploadFile } from '@/lib/gcs';
+import { vi } from 'vitest';
 // No import of prisma from '@/lib/prisma' needed here anymore
 
-jest.mock('@/lib/gcs', () => ({
+// Mock GCS using vi.mock
+vi.mock('@/lib/gcs', () => ({
   // Mock GCS
-  uploadFile: jest.fn(),
+  uploadFile: vi.fn(),
 }));
 
-const mockUploadFile = uploadFile as jest.Mock;
+const mockUploadFile = uploadFile as ReturnType<typeof vi.fn>;
 
-// Create standalone mock functions for Prisma operations
-const mockPrismaImageRecordCreateFn = jest.fn();
-const mockPrismaImageRecordUpdateFn = jest.fn();
+// Create standalone mock functions for Prisma operations using vi.fn()
+const mockPrismaImageRecordCreateFn = vi.fn();
+const mockPrismaImageRecordUpdateFn = vi.fn();
 
 // Create the mock Prisma subset object to be passed to the service
 const mockPrismaInstance: ImageRecordPrismaSubset = {

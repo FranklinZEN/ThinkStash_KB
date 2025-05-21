@@ -1,6 +1,6 @@
 // tests/__helpers__/folder-service-mock.ts
-import { jest } from '@jest/globals';
+import { vi } from 'vitest';
 
-export const mockGetFoldersLogic = jest.fn();
-export const mockCreateFolderLogic = jest.fn();
+export const mockGetFoldersLogic = vi.fn();
+export const mockCreateFolderLogic = vi.fn();
 // Add other folder service functions here if they exist and need mocking 

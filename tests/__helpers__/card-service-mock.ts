@@ -1,8 +1,8 @@
 // tests/__helpers__/card-service-mock.ts
-import { jest } from '@jest/globals';
+import { vi } from 'vitest';
 
 // Singletons that every test imports and the handler will use
-export const mockGetCardLogic = jest.fn();
-export const mockUpdateCardLogic = jest.fn();
-export const mockDeleteCardLogic = jest.fn();
-export const mockHandleCardImageAssociations = jest.fn(); 
+export const mockGetCardLogic = vi.fn();
+export const mockUpdateCardLogic = vi.fn();
+export const mockDeleteCardLogic = vi.fn();
+export const mockHandleCardImageAssociations = vi.fn(); 

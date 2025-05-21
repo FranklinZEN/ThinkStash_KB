@@ -1,0 +1,61 @@
+import '@testing-library/jest-dom/vitest'; // Extends Vitest's expect with jest-dom matchers
+import { server } from '../src/mocks/server'; // MSW server setup
+import { vi } from 'vitest'; // Ensure vi is imported
+import { prismaMock, resetPrismaMock } from './__helpers__/prisma-mock'; // Path from tests/vitest.setup.ts to tests/__helpers__/
+
+// Import singleton mock functions from helpers
+import { mockGetCardLogic, mockUpdateCardLogic, mockDeleteCardLogic, mockHandleCardImageAssociations } from './__helpers__/card-service-mock';
+import { mockGetFoldersLogic, mockCreateFolderLogic } from './__helpers__/folder-service-mock';
+
+// Optional: Add a small PoC here for happy-dom vs jsdom with a complex component if concerned about React 19
+// console.log('Running Vitest setup with environment:', process.env.VITEST_ENVIRONMENT);
+
+// Mock the Prisma client module
+vi.mock('@/lib/prisma', () => ({
+  __esModule: true,
+  default: prismaMock,
+  prisma: prismaMock, // If there are cases where it's accessed as prisma.prisma
+}));
+
+// --- Global Session Utils Mock ---
+export const mockGetCurrentUserId = vi.fn(); // Export if tests need to import and control it
+vi.mock('@/lib/sessionUtils', () => ({
+  __esModule: true,
+  getCurrentUserId: mockGetCurrentUserId,
+}));
+
+// --- Global Card Service Mock ---
+vi.mock('@/lib/services/cardService', () => ({
+  __esModule: true,
+  getCardLogic: mockGetCardLogic,
+  updateCardLogic: mockUpdateCardLogic,
+  deleteCardLogic: mockDeleteCardLogic,
+  handleCardImageAssociations: mockHandleCardImageAssociations,
+}));
+
+// --- Global Folder Service Mock ---
+vi.mock('@/lib/services/folderService', () => ({
+  __esModule: true,
+  getFoldersLogic: mockGetFoldersLogic,
+  createFolderLogic: mockCreateFolderLogic,
+}));
+
+// Establish API mocking before all tests.
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+
+// Reset any request handlers that we may add during the tests,
+// so they don't affect other tests.
+afterEach(() => {
+  server.resetHandlers();
+  resetPrismaMock(); // Use the new reset function for prismaMock
+});
+
+// Clean up after the tests are finished.
+afterAll(() => server.close());
+
+// Global mocks or polyfills if any (example)
+// vi.mock('some-global-dependency', () => ({ 
+//   // ... mock implementation ... 
+// }));
+
+// MSW lifecycle hooks will be added here later (beforeAll, afterEach, afterAll) 

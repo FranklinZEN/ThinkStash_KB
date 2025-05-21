@@ -1,11 +1,49 @@
 // tests/__helpers__/prisma-mock.ts
-import { PrismaClient } from '@prisma/client';
-import { mockDeep, mockReset, DeepMockProxy } from 'jest-mock-extended';
+import { vi } from 'vitest';
 
-// Create and export the deep mock for PrismaClient
-export const prismaMock = mockDeep<PrismaClient>();
+export const prismaMock = {
+  folder: {
+    findMany: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+  knowledgeCard: {
+    findUnique: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    count: vi.fn(),
+  },
+  imageRecord: {
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+  },
+  tag: {
+    findUnique: vi.fn(),
+    create: vi.fn(),
+  },
+  $transaction: vi.fn(),
+};
 
-// Ensure a clean slate for each test file that might use this mock
-beforeEach(() => {
-  mockReset(prismaMock);
-}); 
+export const resetPrismaMock = () => {
+  for (const modelKey in prismaMock) {
+    const model = (prismaMock as any)[modelKey];
+    if (typeof model === 'object' && model !== null) {
+      for (const methodKey in model) {
+        const method = (model as any)[methodKey];
+        if (typeof method?.mockReset === 'function') {
+          method.mockReset();
+        }
+      }
+    } else if (typeof model?.mockReset === 'function') { 
+      model.mockReset();
+    }
+  }
+}; 

@@ -7,9 +7,13 @@
     "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "cross-env ESLINT_USE_FLAT_CONFIG=true eslint src/ pages/ lib/ --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write .",
-    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs",
-    "test:fe": "npx jest --watch",
-    "test:be": "cross-env NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.backend.js --watch",
+    "test:jest": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs",
+    "test:jest:fe": "npx jest --watch",
+    "test:jest:be": "cross-env NODE_OPTIONS=--experimental-vm-modules npx jest --config jest.config.backend.js --watch",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:ui": "vitest --ui",
+    "coverage": "vitest run --coverage",
     "prisma:generate": "prisma generate",
     "prepare": "husky"
   },
@@ -51,9 +55,12 @@
     "@types/jest": "^29.5.14",
     "@types/node": "22.14.1",
     "@types/react": "19.1.2",
+    "@types/supertest": "^6.0.3",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
     "@typescript-eslint/parser": "^8.31.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "@vitest/ui": "^3.1.4",
     "cross-env": "^7.0.3",
     "cross-fetch": "^4.1.0",
     "eslint": "^9.25.1",
@@ -61,20 +68,31 @@
     "eslint-config-prettier": "^10.1.2",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "happy-dom": "^17.4.7",
     "husky": "^9.1.7",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "jest-mock-extended": "^3.0.7",
     "jest-silent-reporter": "^0.6.0",
     "lint-staged": "^15.5.1",
+    "msw": "^2.8.4",
     "next-test-api-route-handler": "^4.0.16",
+    "node-mocks-http": "^1.17.2",
     "prettier": "^3.5.3",
     "prisma": "^6.6.0",
+    "supertest": "^7.1.1",
     "ts-jest": "^29.3.2",
     "typescript": "5.8.3",
-    "undici": "^7.9.0"
+    "undici": "^7.9.0",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.1.4"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx,md,json}": "prettier --write"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
   }
 }
