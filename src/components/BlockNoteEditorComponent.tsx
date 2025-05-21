@@ -10,6 +10,7 @@ import {
   BlockNoteSchema,
   defaultBlockSpecs,
   getDefaultSlashMenuItems,
+  insertOrUpdateBlock,
 } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 
@@ -208,15 +209,41 @@ export default function BlockNoteEditorComponent({
           return true;
         }
       }
+
       const pastedText = event.clipboardData?.getData('text/plain');
+      if (pastedText && isValidURL(pastedText)) {
+        const isDirectImageExtension = IMAGE_URL_REGEX.test(pastedText);
+        const isKnownImageDomain = pastedText.includes('gstatic.com/images');
+
+        if (isDirectImageExtension || isKnownImageDomain) {
+          console.log(
+            '[BlockNoteEditorComponent] HTTP/HTTPS Image URL detected for import via handlePastedImageURL:',
+            pastedText.substring(0, 100) + '...',
+          );
+          handlePastedImageURL(pastedText, currentEditor);
+          return true;
+        }
+      }
+
+      // New check for plain text data: URLs pasted directly
       if (
         pastedText &&
-        isValidURL(pastedText) &&
-        IMAGE_URL_REGEX.test(pastedText)
+        pastedText.startsWith('data:image') &&
+        pastedText.includes(';base64,')
       ) {
-        handlePastedImageURL(pastedText, currentEditor);
-        return true;
+        console.log(
+          '[BlockNoteEditorComponent] Plain text data: URL pasted, creating image block:',
+          pastedText.substring(0, 100) + '...',
+        );
+
+        // Use insertOrUpdateBlock utility function, passing the editor as the first argument
+        insertOrUpdateBlock(currentEditor, {
+          type: 'image',
+          props: { url: pastedText, caption: 'Pasted Image' },
+        });
+        return true; // We've handled this paste.
       }
+
       return defaultPasteHandler();
     },
     slashMenuItems: getDefaultSlashMenuItems,

@@ -1,5 +1,7 @@
 import { Prisma, KnowledgeCard, PrismaClient } from '@prisma/client';
 import type { Block } from '@blocknote/core'; // Added for BlockNote type
+import { uploadFile as uploadFileToGCS } from '@/lib/gcs'; // Import GCS upload function
+import { v4 as uuidv4 } from 'uuid'; // For generating filenames
 
 // --- Interfaces for Prisma Subset ---
 export interface CardServicePrismaSubset {
@@ -33,19 +35,22 @@ export interface UpdateCardData {
   tags?: string[];
 }
 
-// Renamed to _linkImagesToCard and will be used by an exported function
-async function _linkImagesToCard(
+const GCS_ALLOWED_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+];
+const GCS_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+
+// Renamed to _processAndLinkImages and logic significantly updated
+async function _processAndLinkImages(
   prisma: PrismaClient,
-  content: Prisma.JsonValue | undefined | null,
+  blocks: Block[],
   cardId: string,
   userId: string,
-) {
-  if (!content || !Array.isArray(content)) {
-    return;
-  }
-
-  const imageRecordIdsToUpdate: string[] = [];
-  const blocks = content as Block[];
+): Promise<void> {
+  const imageRecordIdsToLink: string[] = [];
 
   for (const block of blocks) {
     if (
@@ -53,59 +58,160 @@ async function _linkImagesToCard(
       block.props &&
       typeof block.props.url === 'string'
     ) {
-      const url = block.props.url as string;
-      // console.log('[_linkImagesToCard] Processing image block with URL:', url); // Removed log
+      const originalUrl = block.props.url as string;
 
-      const urlParts = url.split('/');
-      if (urlParts.length > 0) {
+      if (originalUrl.startsWith('data:image')) {
+        // Scenario 5: Process data: URL
+        try {
+          console.log(`[cardService] Processing data: URL for card ${cardId}`);
+          const parts = originalUrl.split(',');
+          if (parts.length < 2) {
+            console.warn(
+              '[cardService] Invalid data: URL format (missing comma). Skipping.',
+              originalUrl.substring(0, 80) + '...',
+            );
+            continue; // Skip this block
+          }
+
+          const meta = parts[0];
+          const base64Data = parts[1];
+
+          const contentTypeMatch = meta.match(/data:(image\/[^;]+);base64/);
+          if (!contentTypeMatch || !contentTypeMatch[1]) {
+            console.warn(
+              '[cardService] Could not determine content type from data: URL. Skipping.',
+              meta,
+            );
+            continue; // Skip this block
+          }
+          const contentType = contentTypeMatch[1];
+
+          if (!GCS_ALLOWED_MIME_TYPES.includes(contentType.toLowerCase())) {
+            console.warn(
+              `[cardService] Unsupported content type from data: URL: ${contentType}. Skipping.`,
+            );
+            continue; // Skip this block
+          }
+
+          const buffer = Buffer.from(base64Data, 'base64');
+
+          if (buffer.length > GCS_MAX_SIZE_BYTES) {
+            console.warn(
+              `[cardService] Image from data: URL exceeds size limit. Size: ${buffer.length}bytes. Max: ${GCS_MAX_SIZE_BYTES}bytes. Skipping.`,
+            );
+            continue; // Skip this block
+          }
+
+          const fileExtension = contentType.split('/')[1] || 'png'; // Basic extension extraction
+          const originalFilename = `pasted-${uuidv4()}.${fileExtension}`;
+
+          // Upload to GCS
+          const gcsUploadResult = await uploadFileToGCS(
+            buffer,
+            originalFilename,
+            contentType,
+          );
+
+          // Create ImageRecord
+          const newImageRecord = await prisma.imageRecord.create({
+            data: {
+              userId: userId,
+              gcsPath: gcsUploadResult.filename,
+              contentType: contentType,
+              originalFilename: originalFilename,
+              size: buffer.length,
+              appServedUrl: '', // Placeholder, will be updated next
+              knowledgeCardId: cardId,
+            },
+          });
+
+          const appServedUrl = `/api/images/serve/${newImageRecord.id}`;
+          await prisma.imageRecord.update({
+            where: { id: newImageRecord.id },
+            data: { appServedUrl: appServedUrl },
+          });
+
+          // IMPORTANT: Modify the block's URL in place
+          block.props.url = appServedUrl;
+          console.log(
+            `[cardService] Successfully processed data: URL. New appServedUrl: ${appServedUrl}`,
+          );
+        } catch (error) {
+          console.error(
+            `[cardService] Failed to process data: URL for card ${cardId}:`,
+            error instanceof Error ? error.message : error,
+            originalUrl.substring(0, 80) + '...',
+          );
+          // block.props.url remains the original data: URL if processing fails
+          // Log error, but continue processing other blocks/images
+        }
+      } else if (originalUrl.startsWith('/api/images/serve/')) {
+        // Scenario: Existing appServedUrl, ensure it's linked if necessary
+        const urlParts = originalUrl.split('/');
         const potentialId = urlParts[urlParts.length - 1];
-        // console.log('[_linkImagesToCard] Extracted potentialId:', potentialId); // Removed log
-
+        // Basic CUID check (length 25, starts with 'c')
         const isCuidLike =
           potentialId &&
           potentialId.length === 25 &&
           potentialId.startsWith('c');
-        // console.log('[_linkImagesToCard] Is potentialId CUID-like?:', isCuidLike, '(ID:', potentialId, ')'); // Removed log
 
         if (isCuidLike) {
           const imageRecord = await prisma.imageRecord.findFirst({
-            where: { id: potentialId, userId: userId },
+            where: { id: potentialId, userId: userId }, // Ensure user owns the ImageRecord
             select: { id: true, knowledgeCardId: true },
           });
-          // console.log('[_linkImagesToCard] DB query result for ImageRecord:', imageRecord, '(for ID:', potentialId, ')'); // Removed log
-
+          // Link if record exists and is not already linked to *this* card.
           if (imageRecord && imageRecord.knowledgeCardId !== cardId) {
-            imageRecordIdsToUpdate.push(potentialId);
+            if (!imageRecordIdsToLink.includes(potentialId)) {
+              // Avoid duplicates if same image appears multiple times
+              imageRecordIdsToLink.push(potentialId);
+            }
           }
         }
       }
+      // http:// and https:// URLs are intentionally ignored here and left as hotlinks.
     }
-    if (block.children && block.children.length > 0) {
-      await _linkImagesToCard(
-        prisma,
-        block.children as unknown as Prisma.JsonValue,
-        cardId,
-        userId,
+
+    // Recursively process children if they exist and form an array of Blocks
+    if (
+      block.children &&
+      Array.isArray(block.children) &&
+      block.children.length > 0
+    ) {
+      // Ensure children are actually Block types before casting
+      // This check might need to be more robust depending on BlockNote's exact children structure
+      const childrenAreBlocks = block.children.every(
+        (child) =>
+          typeof child === 'object' && child !== null && 'type' in child,
       );
+      if (childrenAreBlocks) {
+        await _processAndLinkImages(
+          prisma,
+          block.children as Block[],
+          cardId,
+          userId,
+        );
+      }
     }
   }
 
-  if (imageRecordIdsToUpdate.length > 0) {
+  if (imageRecordIdsToLink.length > 0) {
     try {
       await prisma.imageRecord.updateMany({
         where: {
-          id: { in: imageRecordIdsToUpdate },
+          id: { in: imageRecordIdsToLink },
           userId: userId,
         },
         data: { knowledgeCardId: cardId },
       });
-      // console.log(`[cardService] Linked ${imageRecordIdsToUpdate.length} images to card ${cardId}`); // Optional: keep for info
+      console.log(
+        `[cardService] Linked ${imageRecordIdsToLink.length} existing appServed images to card ${cardId}`,
+      );
     } catch (dbError) {
       console.error(
-        `[cardService] Error linking images to card ${cardId} in DB:`,
+        `[cardService] Error linking existing appServed images to card ${cardId} in DB:`,
         dbError,
       );
-      // Decide if this error should be propagated or just logged
     }
   }
 }
@@ -116,8 +222,29 @@ export async function handleCardImageAssociations(
   content: Prisma.JsonValue | undefined | null,
   cardId: string,
   userId: string,
-) {
-  await _linkImagesToCard(prisma, content, cardId, userId);
+): Promise<Prisma.JsonValue | undefined | null> {
+  // Return the potentially modified content
+  if (!content || !Array.isArray(content) || content.length === 0) {
+    return content; // Return original content if no processing needed or if it's not an array (e.g. null)
+  }
+
+  // Deep clone the content to avoid modifying the original object that might be used elsewhere.
+  // JSON.parse(JSON.stringify()) is a common way for structured data like BlockNote content.
+  let mutableContent: Block[];
+  try {
+    mutableContent = JSON.parse(JSON.stringify(content)) as Block[];
+  } catch (cloneError) {
+    console.error(
+      '[cardService] Failed to clone content for image processing. Returning original content.',
+      cloneError,
+    );
+    return content; // Return original on clone failure
+  }
+
+  await _processAndLinkImages(prisma, mutableContent, cardId, userId);
+
+  // Return the (potentially) modified content
+  return mutableContent as unknown as Prisma.JsonValue;
 }
 
 // --- GET Card Logic ---
@@ -154,7 +281,7 @@ export async function getCardLogic(
 export async function updateCardLogic(
   cardId: string,
   userId: string,
-  data: UpdateCardData,
+  data: UpdateCardData, // This is validatedBody from the route
   prismaInstance: PrismaClient,
 ): Promise<
   ServiceResult<
@@ -162,10 +289,10 @@ export async function updateCardLogic(
   >
 > {
   try {
-    // 1. Verify card ownership (already done in route handler, but good for service to be independent if called elsewhere)
+    // 1. Verify card ownership
     const existingCard = await prismaInstance.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
-      select: { id: true }, // Only need to check existence
+      select: { id: true },
     });
     if (!existingCard) {
       return {
@@ -177,7 +304,6 @@ export async function updateCardLogic(
 
     // 2. Validate folderId ownership if provided and not null
     if (data.folderId) {
-      // if folderId is present and not null
       const targetFolder = await prismaInstance.folder.findUnique({
         where: { id: data.folderId, userId: userId },
         select: { id: true },
@@ -191,17 +317,37 @@ export async function updateCardLogic(
       }
     }
 
-    // 3. Construct Prisma update payload
+    // Process content for image associations *before* constructing the main update payload
+    let processedContent = data.content;
+    const contentWasActuallyInRequest = data.content !== undefined;
+
+    if (contentWasActuallyInRequest && data.content) {
+      const modifiedContent = await handleCardImageAssociations(
+        prismaInstance,
+        data.content,
+        cardId,
+        userId,
+      );
+      processedContent = modifiedContent;
+      console.log(
+        `[cardService] Content processed by handleCardImageAssociations for card update ${cardId}`,
+      );
+    }
+
+    // 3. Construct Prisma update payload using processedContent
     const updatePayload: Prisma.KnowledgeCardUpdateInput = {};
     if (data.title !== undefined) updatePayload.title = data.title;
 
-    let contentChanged = false; // Flag to see if content was part of the update
-    if (data.content !== undefined) {
-      contentChanged = true;
-      if (data.content === null) {
-        updatePayload.content = Prisma.JsonNull; // Use Prisma.JsonNull for explicit null
+    if (contentWasActuallyInRequest) {
+      if (processedContent === null || processedContent === undefined) {
+        // Check for undefined if content wasn't in request but processedContent might be undefined
+        // If original data.content was explicitly null, and it remained null/undefined after processing, treat as Prisma.JsonNull
+        // If content was not in request, processedContent would be undefined, so don't add to payload
+        if (data.content === null) {
+          updatePayload.content = Prisma.JsonNull;
+        }
       } else {
-        updatePayload.content = data.content; // For other JsonValue types
+        updatePayload.content = processedContent;
       }
     }
 
@@ -217,8 +363,11 @@ export async function updateCardLogic(
       const uniqueTrimmedTags = data.tags
         .map((tag) => tag.trim())
         .filter((tag) => tag.length > 0);
+      // To truly replace tags, we first disconnect all, then connect/create new ones.
+      // If you only want to add/remove specific tags, this logic would be different (e.g., using disconnect/connect arrays based on diffs)
+      // For simplicity of replacing all tags as per current structure:
       updatePayload.tags = {
-        set: [], // Disconnect all existing tags first
+        set: [], // This effectively disconnects all existing tags for the card
         connectOrCreate: uniqueTrimmedTags.map((tagName: string) => ({
           where: { name: tagName },
           create: { name: tagName },
@@ -227,11 +376,14 @@ export async function updateCardLogic(
     }
 
     if (Object.keys(updatePayload).length === 0) {
-      // This case should ideally be caught by Zod schema in route if .partial().refine was stricter
-      // but good to have a service level check if no actual update fields were processed.
-      // Re-fetch and return existing card to indicate no change but not an error.
-      const currentCard = await getCardLogic(cardId, userId, prismaInstance);
-      if (currentCard.success) return { ...currentCard, status: 200 }; // Or a 304 Not Modified like status
+      const currentCardData = await getCardLogic(
+        cardId,
+        userId,
+        prismaInstance,
+      );
+      if (currentCardData.success && currentCardData.data) {
+        return { ...currentCardData, status: 200, data: currentCardData.data };
+      }
       return {
         success: false,
         error:
@@ -240,30 +392,21 @@ export async function updateCardLogic(
       };
     }
 
-    const updatedCard = await prismaInstance.knowledgeCard.update({
-      where: { id: cardId }, // userId check was done via existingCard check
+    await prismaInstance.knowledgeCard.update({
+      where: { id: cardId, userId: userId },
       data: updatePayload,
       include: { tags: true, folder: true },
     });
 
-    // After successfully updating the card, if content was part of the update, link images
-    if (updatedCard && contentChanged && data.content) {
-      await handleCardImageAssociations(
-        prismaInstance,
-        data.content,
-        updatedCard.id,
-        userId,
-      ); // Use the new exported function
-    }
-
     // Re-fetch the card to ensure all associations and updates are reflected in the returned data
+    // This is important because `updatedCard` from the update operation might not reflect
+    // nested relation changes perfectly or all computed fields if any.
     const fullyUpdatedCard = await prismaInstance.knowledgeCard.findUnique({
-      where: { id: cardId },
+      where: { id: cardId }, // userId check not strictly needed again if update succeeded
       include: { tags: true, folder: true },
     });
 
     if (!fullyUpdatedCard) {
-      // This should not happen if the update succeeded, but as a safeguard
       return {
         success: false,
         error: 'Failed to retrieve card after update.',
@@ -275,7 +418,6 @@ export async function updateCardLogic(
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2003' || error.code === 'P2025') {
-        // Foreign key constraint or record not found for connect
         return {
           success: false,
           error: 'Invalid related data (e.g., folder ID or tag issue)',

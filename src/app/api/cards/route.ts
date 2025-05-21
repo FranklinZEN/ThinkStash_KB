@@ -173,7 +173,7 @@ export async function POST(req: NextRequest) {
 
     const createData: Prisma.KnowledgeCardCreateInput = {
       title: title.trim(),
-      content,
+      content, // Initial content from request
       user: {
         connect: { id: session.user.id },
       },
@@ -201,41 +201,63 @@ export async function POST(req: NextRequest) {
       createData.folder = { connect: { id: folderId } };
     }
 
+    let cardToReturn; // Variable to hold the card data that will be returned
+
+    // try { // Main card creation and image processing block
     const newCard = await prisma.knowledgeCard.create({
-      data: createData,
+      data: createData, // createData contains the *original* content from the request
       include: {
-        // Optionally include relations in the response
         tags: true,
         folder: true,
-        // No need to include images here as they are processed separately
       },
     });
 
-    // After creating the card, associate images from its content
+    cardToReturn = { ...newCard }; // Initialize with the initially created card data
+
+    // After creating the card, process its content for images (e.g., data: URLs)
     if (newCard && newCard.content) {
+      // newCard.content here is the original content
       try {
-        await handleCardImageAssociations(
+        const modifiedContent = await handleCardImageAssociations(
           prisma,
-          newCard.content,
+          newCard.content, // Pass the original content from the just-created card
           newCard.id,
           session.user.id,
         );
-        console.log(
-          `[POST /api/cards] Successfully processed image associations for new card ${newCard.id}`,
-        );
+
+        if (
+          modifiedContent &&
+          JSON.stringify(modifiedContent) !== JSON.stringify(newCard.content)
+        ) {
+          const updatedCardWithProcessedImages =
+            await prisma.knowledgeCard.update({
+              where: { id: newCard.id },
+              data: { content: modifiedContent }, // Save the content possibly modified by handleCardImageAssociations
+              include: {
+                // Re-include relations for the returned object
+                tags: true,
+                folder: true,
+              },
+            });
+          cardToReturn = { ...updatedCardWithProcessedImages }; // Update cardToReturn with the version that has modified content
+          console.log(
+            `[POST /api/cards] Updated card ${newCard.id} with processed image content (data: URLs).`,
+          );
+        } else {
+          console.log(
+            `[POST /api/cards] Image associations checked for new card ${newCard.id}. No data: URL content modifications were necessary.`,
+          );
+        }
       } catch (imageError) {
-        // Log the error but don't fail the card creation response itself.
-        // The card is created, image association is a secondary step.
         console.error(
-          `[POST /api/cards] Error associating images for new card ${newCard.id}:`,
+          `[POST /api/cards] Error processing images for new card ${newCard.id}:`,
           imageError,
         );
-        // Optionally, you could add a field to the response or a separate notification system
-        // if image association failures need to be surfaced to the user or admin.
+        // Card is already created. Image processing error is logged.
+        // cardToReturn remains the initially created card.
       }
     }
-
-    return NextResponse.json(newCard, { status: 201 });
+    return NextResponse.json(cardToReturn, { status: 201 });
   } catch (error) {
     console.error('Error creating card:', error);
     if (error instanceof SyntaxError) {

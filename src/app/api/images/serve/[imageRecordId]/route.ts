@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
+import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { getBucket } from '@/lib/gcs'; // Changed from 'storage' to 'getBucket'
+import { getBucket } from '@/lib/gcs';
 
 // Define an interface for the route parameters
 // interface RouteHandlerContext { // Keeping this commented out for clarity with the 'any' type below
@@ -14,9 +14,9 @@ import { getBucket } from '@/lib/gcs'; // Changed from 'storage' to 'getBucket'
 export async function GET(
   request: NextRequest,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  context: any, // Kept as any with eslint-disable due to known Next.js typing issues
+  context: any, // Revert to any to resolve build error
 ) {
-  // We still expect context.params.imageRecordId to exist and be a string based on runtime behavior.
+  // Access imageRecordId from context.params, assuming it exists at runtime
   const imageRecordId = context.params?.imageRecordId as string;
 
   console.log(
@@ -74,7 +74,7 @@ export async function GET(
     );
 
     // const storage = getStorage(); // No longer needed, storage is imported directly
-    const bucket = getBucket(); // NEW WAY
+    const bucket = getBucket(); // Use imported getBucket
     const file = bucket.file(imageRecord.gcsPath);
 
     // Check if file exists in GCS

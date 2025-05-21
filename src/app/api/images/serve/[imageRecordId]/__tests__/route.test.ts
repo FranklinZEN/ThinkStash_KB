@@ -1,83 +1,116 @@
-// Define mocks for GCS utility functions FIRST
-const mockGcsFileExistsFn = jest.fn();
-const mockGcsCreateReadStreamFn = jest.fn();
-const mockGcsFileFn = jest.fn(() => ({
-  exists: mockGcsFileExistsFn,
-  createReadStream: mockGcsCreateReadStreamFn,
-}));
-const mockActualGetBucketFn = jest.fn(() => ({
-  file: mockGcsFileFn,
-}));
+// Define GCS mock functions that will be used by the jest.mock implementation
+// Using var here to help with Jest hoisting and initialization order issues.
 
-// Imports that are NOT mocked directly by jest.mock
+// These will be assigned jest.fn() after the jest.mock call for @/lib/gcs
+// eslint-disable-next-line no-var
+var gcsFileExists_mock: jest.Mock;
+// eslint-disable-next-line no-var
+var gcsCreateReadStream_mock: jest.Mock;
+// eslint-disable-next-line no-var
+var gcsFile_mock: jest.Mock; // This will mock the function returned by bucket.file()
+// eslint-disable-next-line no-var
+var getBucket_actualMock: jest.Mock; // This will mock the getBucket export
+
 import 'next-test-api-route-handler'; // Must be first
 import { testApiHandler } from 'next-test-api-route-handler';
-import { NextRequest, NextResponse } from 'next/server'; // Import Next types for the interface
-// import * as appHandler from '../route'; // Delay import until after doMock
-import { getServerSession } from 'next-auth';
-import prisma from '@/lib/prisma';
+import * as appHandler from '../route'; // Use static import now
+import { prismaMock } from 'tests/__helpers__/prisma-mock'; // Import the actual mock
 import { Readable } from 'stream';
 
-// Mock next-auth and prisma as before (these are hoisted)
-jest.mock('next-auth', () => ({
-  getServerSession: jest.fn(),
+// --- MOCKS ---
+// Mock @/lib/auth to control authOptions
+jest.mock('@/lib/auth', () => ({
+  authOptions: {},
 }));
 
-jest.mock('@/lib/prisma', () => ({
-  imageRecord: {
-    findUnique: jest.fn(),
-  },
+// Mock next-auth (Revised Strategy)
+// eslint-disable-next-line no-var
+var mockGetServerSessionFn: jest.Mock; // Hoisted and initialized to undefined
+
+jest.mock('next-auth/next', () => {
+  const actualNextAuthNext = jest.requireActual('next-auth/next');
+  return {
+    __esModule: true,
+    ...actualNextAuthNext,
+    getServerSession: (...args: unknown[]) => mockGetServerSessionFn(...args), // Use unknown[] for args
+  };
+});
+
+// Initialize after jest.mock has been processed by Jest
+mockGetServerSessionFn = jest.fn();
+const mockGetServerSessionTyped = mockGetServerSessionFn;
+
+// Mock @/lib/gcs using a standard top-level jest.mock
+jest.mock('@/lib/gcs', () => ({
+  __esModule: true,
+  // The factory calls the getBucket_actualMock which will be defined later
+  getBucket: (...args: unknown[]) => getBucket_actualMock(...args), // Use unknown[] for args
 }));
 
-// Define an expected type for your route handler module
-interface AppRouteHandlerModule {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  GET?: (request: NextRequest, context: any) => Promise<NextResponse>;
-  // Add other HTTP methods like POST, PUT, DELETE if your handler exports them
-}
+// Initialize the GCS mock functions AFTER jest.mock has been declared
+gcsFileExists_mock = jest.fn();
+gcsCreateReadStream_mock = jest.fn();
+gcsFile_mock = jest.fn(() => ({
+  exists: gcsFileExists_mock,
+  createReadStream: gcsCreateReadStream_mock,
+}));
+getBucket_actualMock = jest.fn(() => ({
+  file: gcsFile_mock,
+}));
 
-let appHandler: AppRouteHandlerModule; // Use the defined type
-
+// --- Typed Mocks & Variables ---
 const MOCK_IMAGE_RECORD_ID = 'test-image-record-id';
 const MOCK_USER_ID = 'user-123';
 const MOCK_GCS_PATH = 'user-123/test-image.jpg';
 const MOCK_CONTENT_TYPE = 'image/jpeg';
 
-const mockGetServerSessionTyped = getServerSession as jest.Mock;
-const mockPrismaImageRecordFindUniqueTyped = prisma.imageRecord
-  .findUnique as jest.Mock;
+// Helper for a complete ImageRecord mock
+const createMockImageRecord = (
+  overrides: Partial<
+    NonNullable<Awaited<ReturnType<typeof prismaMock.imageRecord.findUnique>>>
+  > = {},
+) => {
+  const defaultRecord = {
+    id: MOCK_IMAGE_RECORD_ID,
+    userId: MOCK_USER_ID,
+    gcsPath: MOCK_GCS_PATH,
+    contentType: MOCK_CONTENT_TYPE,
+    originalFilename: 'test-image.jpg',
+    size: 12345,
+    appServedUrl: `/api/images/serve/${MOCK_IMAGE_RECORD_ID}`,
+    knowledgeCardId: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  return { ...defaultRecord, ...overrides };
+};
 
 describe('/api/images/serve/[imageRecordId] GET', () => {
   let originalEnv: NodeJS.ProcessEnv;
 
-  beforeAll(async () => {
-    // Apply the mock for @/lib/gcs here, it's not hoisted.
-    jest.doMock('@/lib/gcs', () => ({
-      ...jest.requireActual('@/lib/gcs'),
-      getBucket: mockActualGetBucketFn, // mockActualGetBucketFn is defined above and initialized
-    }));
-    // Now dynamically import the appHandler AFTER the mock is in place
-    appHandler = await import('../route');
-  });
-
-  afterAll(() => {
-    jest.unmock('@/lib/gcs'); // Clean up the mock
-  });
-
   beforeEach(() => {
+    // prismaMock is reset in tests/__helpers__/prisma-mock.ts
     mockGetServerSessionTyped.mockReset();
-    mockPrismaImageRecordFindUniqueTyped.mockReset();
+    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
 
-    mockActualGetBucketFn.mockClear();
-    mockGcsFileFn.mockClear();
-    mockGcsFileExistsFn.mockReset().mockResolvedValue([true]);
-    mockGcsCreateReadStreamFn.mockReset().mockImplementation(() => {
+    // Reset GCS mocks
+    getBucket_actualMock.mockClear(); // Clear calls to the main getBucket mock
+    gcsFile_mock.mockClear(); // Clear calls to the file() mock
+    gcsFileExists_mock.mockReset().mockResolvedValue([true]);
+    gcsCreateReadStream_mock.mockReset().mockImplementation(() => {
       const readable = new Readable();
       readable._read = () => {};
       process.nextTick(() => readable.push(null));
       return readable;
     });
-    mockActualGetBucketFn.mockImplementation(() => ({ file: mockGcsFileFn }));
+
+    // Ensure the getBucket_actualMock returns the structure that leads to other mocks
+    getBucket_actualMock.mockImplementation(() => ({
+      file: gcsFile_mock.mockImplementation(() => ({
+        exists: gcsFileExists_mock,
+        createReadStream: gcsCreateReadStream_mock,
+      })),
+    }));
 
     originalEnv = { ...process.env };
     process.env.GCS_BUCKET_NAME = 'test-bucket';
@@ -99,14 +132,12 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         expect(json.error).toBe('Unauthorized');
       },
     });
-    expect(mockActualGetBucketFn).not.toHaveBeenCalled();
+    expect(getBucket_actualMock).not.toHaveBeenCalled();
   });
 
   it('should return 500 if GCS_BUCKET_NAME is not configured in the route', async () => {
     const originalBucketEnv = process.env.GCS_BUCKET_NAME;
     delete process.env.GCS_BUCKET_NAME;
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-
     await testApiHandler({
       appHandler,
       params: { imageRecordId: MOCK_IMAGE_RECORD_ID },
@@ -121,8 +152,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 404 if ImageRecord is not found in Prisma', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockResolvedValue(null);
+    prismaMock.imageRecord.findUnique.mockResolvedValue(null);
     await testApiHandler({
       appHandler,
       params: { imageRecordId: 'non-existent-id' },
@@ -133,18 +163,14 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         expect(json.error).toBe('Image not found');
       },
     });
-    expect(mockActualGetBucketFn).not.toHaveBeenCalled();
+    expect(getBucket_actualMock).not.toHaveBeenCalled();
   });
 
   it('should return 404 if file does not exist in GCS', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockResolvedValue({
-      id: MOCK_IMAGE_RECORD_ID,
-      gcsPath: MOCK_GCS_PATH,
-      contentType: MOCK_CONTENT_TYPE,
-      userId: MOCK_USER_ID,
-    });
-    mockGcsFileExistsFn.mockResolvedValue([false]);
+    prismaMock.imageRecord.findUnique.mockResolvedValue(
+      createMockImageRecord(),
+    );
+    gcsFileExists_mock.mockResolvedValue([false]);
 
     await testApiHandler({
       appHandler,
@@ -156,21 +182,17 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         expect(json.error).toBe('Image file not found in storage');
       },
     });
-    expect(mockActualGetBucketFn).toHaveBeenCalled();
-    expect(mockGcsFileFn).toHaveBeenCalledWith(MOCK_GCS_PATH);
-    expect(mockGcsFileExistsFn).toHaveBeenCalled();
+    expect(getBucket_actualMock).toHaveBeenCalled();
+    expect(gcsFile_mock).toHaveBeenCalledWith(MOCK_GCS_PATH);
+    expect(gcsFileExists_mock).toHaveBeenCalled();
   });
 
   it('should stream the image successfully with correct headers if found', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockResolvedValue({
-      id: MOCK_IMAGE_RECORD_ID,
-      gcsPath: MOCK_GCS_PATH,
-      contentType: MOCK_CONTENT_TYPE,
-      userId: MOCK_USER_ID,
-    });
-    mockGcsFileExistsFn.mockResolvedValue([true]);
-    mockGcsCreateReadStreamFn.mockImplementation(() => {
+    prismaMock.imageRecord.findUnique.mockResolvedValue(
+      createMockImageRecord(),
+    );
+    gcsFileExists_mock.mockResolvedValue([true]);
+    gcsCreateReadStream_mock.mockImplementation(() => {
       const stream = new Readable();
       stream.push('image data chunk');
       stream.push(null);
@@ -191,15 +213,14 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         expect(receivedData).toBe('image data chunk');
       },
     });
-    expect(mockActualGetBucketFn).toHaveBeenCalled();
-    expect(mockGcsFileFn).toHaveBeenCalledWith(MOCK_GCS_PATH);
-    expect(mockGcsFileExistsFn).toHaveBeenCalled();
-    expect(mockGcsCreateReadStreamFn).toHaveBeenCalled();
+    expect(getBucket_actualMock).toHaveBeenCalled();
+    expect(gcsFile_mock).toHaveBeenCalledWith(MOCK_GCS_PATH);
+    expect(gcsFileExists_mock).toHaveBeenCalled();
+    expect(gcsCreateReadStream_mock).toHaveBeenCalled();
   });
 
   it('should return 500 if Prisma findUnique throws an error', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockRejectedValue(
+    prismaMock.imageRecord.findUnique.mockRejectedValue(
       new Error('Prisma DB Error'),
     );
     await testApiHandler({
@@ -213,18 +234,14 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         expect(json.details).toBe('Prisma DB Error');
       },
     });
-    expect(mockActualGetBucketFn).not.toHaveBeenCalled();
+    expect(getBucket_actualMock).not.toHaveBeenCalled();
   });
 
   it('should return 500 if GCS file.exists() throws an error', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockResolvedValue({
-      id: MOCK_IMAGE_RECORD_ID,
-      gcsPath: MOCK_GCS_PATH,
-      contentType: MOCK_CONTENT_TYPE,
-      userId: MOCK_USER_ID,
-    });
-    mockGcsFileExistsFn.mockRejectedValue(new Error('GCS exists error'));
+    prismaMock.imageRecord.findUnique.mockResolvedValue(
+      createMockImageRecord(),
+    );
+    gcsFileExists_mock.mockRejectedValue(new Error('GCS exists error'));
 
     await testApiHandler({
       appHandler,
@@ -240,15 +257,11 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 500 if GCS createReadStream throws an error', async () => {
-    mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
-    mockPrismaImageRecordFindUniqueTyped.mockResolvedValue({
-      id: MOCK_IMAGE_RECORD_ID,
-      gcsPath: MOCK_GCS_PATH,
-      contentType: MOCK_CONTENT_TYPE,
-      userId: MOCK_USER_ID,
-    });
-    mockGcsFileExistsFn.mockResolvedValue([true]);
-    mockGcsCreateReadStreamFn.mockImplementation(() => {
+    prismaMock.imageRecord.findUnique.mockResolvedValue(
+      createMockImageRecord(),
+    );
+    gcsFileExists_mock.mockResolvedValue([true]);
+    gcsCreateReadStream_mock.mockImplementation(() => {
       throw new Error('GCS stream error');
     });
 
