@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Use default import
 import { Prisma } from '@prisma/client'; // Import Prisma
 import { handleCardImageAssociations } from '@/lib/services/cardService'; // Corrected import path
+import { z } from 'zod';
+import { CardContentSchema } from '@/lib/validators/editorValidators';
 
 // --- GET Handler (List Cards) ---
 export async function GET(req: NextRequest) {
@@ -106,88 +108,42 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// --- Zod Schema for POST Request Body ---
+const CreateCardPayloadSchema = z.object({
+  title: z.string().trim().min(1, { message: 'Title is required.' }),
+  content: CardContentSchema.optional(), // Content is BlockNote JSON, can be empty array for new card
+  folderId: z
+    .string()
+    .cuid({ message: 'Invalid folder ID format.' })
+    .optional()
+    .nullable(),
+  tags: z.array(z.string().trim().min(1)).optional(),
+});
+
 // --- POST Handler (Create Card) ---
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions); // --- REVERTED: Session check enabled ---
-
+  const session = await getServerSession(authOptions);
   if (!session || !session.user?.id) {
-    // --- REVERTED: Session check enabled ---
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); // --- REVERTED: Session check enabled ---
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const body = await req.json();
-    const { title, tags, content, folderId } = body;
+    const validationResult = CreateCardPayloadSchema.safeParse(body);
 
-    // Basic validation for title and content
-    if (!title || typeof title !== 'string' || title.trim().length === 0) {
-      return NextResponse.json(
-        { error: 'Title is required and must be a non-empty string.' },
-        { status: 400 },
-      );
-    }
-    if (!content) {
-      // Assuming content can be an empty JSON object/array but must be present
-      return NextResponse.json(
-        { error: 'Content is required.' },
-        { status: 400 },
-      );
-    }
-    if (typeof content !== 'object') {
-      // Basic check for JSON structure
-      return NextResponse.json(
-        { error: 'Content must be a valid JSON object or array.' },
-        { status: 400 },
-      );
-    }
-
-    // Validate tags: must be an array of non-empty strings if provided
-    let validTags: string[] = [];
-    if (tags !== undefined) {
-      if (
-        !Array.isArray(tags) ||
-        !tags.every((tag) => typeof tag === 'string' && tag.trim().length > 0)
-      ) {
-        return NextResponse.json(
-          { error: 'Tags must be an array of non-empty strings.' },
-          { status: 400 },
-        );
-      }
-      validTags = tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0);
-    }
-
-    // Validate folderId if provided
-    if (
-      folderId !== undefined &&
-      folderId !== null &&
-      (typeof folderId !== 'string' || folderId.trim().length === 0)
-    ) {
+    if (!validationResult.success) {
       return NextResponse.json(
         {
-          error:
-            'folderId, if provided and not null, must be a non-empty string.',
+          error: 'Invalid request payload',
+          details: validationResult.error.flatten().fieldErrors,
         },
         { status: 400 },
       );
     }
 
-    const createData: Prisma.KnowledgeCardCreateInput = {
-      title: title.trim(),
-      content, // Initial content from request
-      user: {
-        connect: { id: session.user.id },
-      },
-    };
+    const { title, content, folderId, tags } = validationResult.data;
 
-    if (validTags.length > 0) {
-      createData.tags = {
-        connectOrCreate: validTags.map((tagName) => ({
-          where: { name: tagName },
-          create: { name: tagName },
-        })),
-      };
-    }
-
+    // Validate folderId ownership if provided (and not null)
     if (folderId) {
       const folder = await prisma.folder.findFirst({
         where: { id: folderId, userId: session.user.id },
@@ -195,36 +151,59 @@ export async function POST(req: NextRequest) {
       if (!folder) {
         return NextResponse.json(
           { error: 'Folder not found or access denied.' },
-          { status: 404 },
+          { status: 404 }, // Or 400 if considered a bad request due to invalid folderId
         );
       }
+    }
+
+    const createData: Prisma.KnowledgeCardCreateInput = {
+      title,
+      content: content || [], // Default to empty array if content is undefined/null after validation
+      user: {
+        connect: { id: session.user.id },
+      },
+    };
+
+    if (tags && tags.length > 0) {
+      createData.tags = {
+        connectOrCreate: tags.map((tagName) => ({
+          where: { name: tagName },
+          create: { name: tagName },
+        })),
+      };
+    }
+
+    if (folderId) {
       createData.folder = { connect: { id: folderId } };
     }
 
-    let cardToReturn; // Variable to hold the card data that will be returned
-
-    // try { // Main card creation and image processing block
+    let cardToReturn;
     const newCard = await prisma.knowledgeCard.create({
-      data: createData, // createData contains the *original* content from the request
+      data: createData,
       include: {
         tags: true,
         folder: true,
       },
     });
 
-    cardToReturn = { ...newCard }; // Initialize with the initially created card data
+    cardToReturn = { ...newCard };
 
-    // After creating the card, process its content for images (e.g., data: URLs)
-    if (newCard && newCard.content) {
-      // newCard.content here is the original content
+    // After creating the card, process its content for images
+    // newCard.content here is the validated (and potentially defaulted to []) content
+    if (
+      newCard.content &&
+      Array.isArray(newCard.content) &&
+      newCard.content.length > 0
+    ) {
       try {
         const modifiedContent = await handleCardImageAssociations(
           prisma,
-          newCard.content, // Pass the original content from the just-created card
+          newCard.content, // Pass the potentially empty but validated content
           newCard.id,
           session.user.id,
         );
 
+        // Only update if modifiedContent is different and not null/undefined
         if (
           modifiedContent &&
           JSON.stringify(modifiedContent) !== JSON.stringify(newCard.content)
@@ -232,20 +211,19 @@ export async function POST(req: NextRequest) {
           const updatedCardWithProcessedImages =
             await prisma.knowledgeCard.update({
               where: { id: newCard.id },
-              data: { content: modifiedContent }, // Save the content possibly modified by handleCardImageAssociations
+              data: { content: modifiedContent },
               include: {
-                // Re-include relations for the returned object
                 tags: true,
                 folder: true,
               },
             });
-          cardToReturn = { ...updatedCardWithProcessedImages }; // Update cardToReturn with the version that has modified content
+          cardToReturn = { ...updatedCardWithProcessedImages };
           console.log(
-            `[POST /api/cards] Updated card ${newCard.id} with processed image content (data: URLs).`,
+            `[POST /api/cards] Updated card ${newCard.id} with processed image content.`,
           );
         } else {
           console.log(
-            `[POST /api/cards] Image associations checked for new card ${newCard.id}. No data: URL content modifications were necessary.`,
+            `[POST /api/cards] Image associations checked for new card ${newCard.id}. No content modifications were necessary.`,
           );
         }
       } catch (imageError) {
@@ -253,8 +231,6 @@ export async function POST(req: NextRequest) {
           `[POST /api/cards] Error processing images for new card ${newCard.id}:`,
           imageError,
         );
-        // Card is already created. Image processing error is logged.
-        // cardToReturn remains the initially created card.
       }
     }
     return NextResponse.json(cardToReturn, { status: 201 });
@@ -266,8 +242,6 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    // Check if the error is an instance of Prisma's known request error
-    // This is a more robust way to check than error.code directly on an unknown type
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
         return NextResponse.json(
@@ -278,13 +252,10 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         );
       }
-      // You could add more specific Prisma error codes here if needed
     }
     return NextResponse.json(
       { error: 'Failed to create card' },
       { status: 500 },
     );
-  } finally {
-    // await prisma.$disconnect(); // Singleton pattern
   }
 }

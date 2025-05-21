@@ -6,6 +6,8 @@ import {
   ImageUploadInput,
 } from '@/lib/services/imageUploadService';
 import prisma from '@/lib/prisma'; // Import the actual prisma instance
+// import { z } from 'zod'; // Removed unused import
+import { UploadedFileMetadataSchema } from '@/lib/validators/editorValidators'; // Import the new schema
 
 // Define constants for validation - these are now primarily handled in the service, but good for reference or quick checks if needed.
 // const ALLOWED_MIME_TYPES = [ // Remove unused
@@ -44,6 +46,30 @@ export async function POST(request: NextRequest) {
     console.log(
       `[/api/upload/image] File received: ${file.name}, type: ${file.type}, size: ${file.size}`,
     );
+
+    // Validate file metadata using Zod
+    const fileMetadata = {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    };
+    const metadataValidation =
+      UploadedFileMetadataSchema.safeParse(fileMetadata);
+
+    if (!metadataValidation.success) {
+      console.error(
+        '[/api/upload/image] File metadata validation failed:',
+        metadataValidation.error.flatten().fieldErrors,
+      );
+      return NextResponse.json(
+        {
+          error: 'Invalid file metadata',
+          details: metadataValidation.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+    // metadataValidation.data now contains the validated and typed metadata, though we already have it in `file`.
 
     // Convert File to Buffer
     console.log('[/api/upload/image] Converting file to buffer...');

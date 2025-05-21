@@ -1,6 +1,10 @@
 import { Prisma, KnowledgeCard, PrismaClient } from '@prisma/client';
-import type { Block } from '@blocknote/core'; // Added for BlockNote type
-import { uploadFile as uploadFileToGCS } from '@/lib/gcs'; // Import GCS upload function
+import {
+  StandardDocument,
+  isImageBlock,
+  MyAppImageBlockProps,
+} from '@/types/editorTypes';
+import { uploadFile as uploadFileToGCS } from '@/lib/gcs';
 import { v4 as uuidv4 } from 'uuid'; // For generating filenames
 
 // --- Interfaces for Prisma Subset ---
@@ -46,22 +50,26 @@ const GCS_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 // Renamed to _processAndLinkImages and logic significantly updated
 async function _processAndLinkImages(
   prisma: PrismaClient,
-  blocks: Block[],
+  blocks: StandardDocument,
   cardId: string,
   userId: string,
 ): Promise<void> {
   const imageRecordIdsToLink: string[] = [];
 
-  for (const block of blocks) {
-    if (
-      block.type === 'image' &&
-      block.props &&
-      typeof block.props.url === 'string'
-    ) {
-      const originalUrl = block.props.url as string;
+  for (let i = 0; i < blocks.length; i++) {
+    const currentBlock = blocks[i];
 
-      if (originalUrl.startsWith('data:image')) {
-        // Scenario 5: Process data: URL
+    if (isImageBlock(currentBlock)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const defaultImageProps = currentBlock.props as any;
+      const originalUrl = defaultImageProps.url;
+      let appServedUrlToStore = originalUrl || '';
+      const captionToStore = defaultImageProps.caption;
+
+      if (
+        typeof originalUrl === 'string' &&
+        originalUrl.startsWith('data:image')
+      ) {
         try {
           console.log(`[cardService] Processing data: URL for card ${cardId}`);
           const parts = originalUrl.split(',');
@@ -70,71 +78,58 @@ async function _processAndLinkImages(
               '[cardService] Invalid data: URL format (missing comma). Skipping.',
               originalUrl.substring(0, 80) + '...',
             );
-            continue; // Skip this block
+            continue;
           }
-
           const meta = parts[0];
           const base64Data = parts[1];
-
           const contentTypeMatch = meta.match(/data:(image\/[^;]+);base64/);
           if (!contentTypeMatch || !contentTypeMatch[1]) {
             console.warn(
               '[cardService] Could not determine content type from data: URL. Skipping.',
               meta,
             );
-            continue; // Skip this block
+            continue;
           }
           const contentType = contentTypeMatch[1];
-
           if (!GCS_ALLOWED_MIME_TYPES.includes(contentType.toLowerCase())) {
             console.warn(
               `[cardService] Unsupported content type from data: URL: ${contentType}. Skipping.`,
             );
-            continue; // Skip this block
+            continue;
           }
-
           const buffer = Buffer.from(base64Data, 'base64');
-
           if (buffer.length > GCS_MAX_SIZE_BYTES) {
             console.warn(
               `[cardService] Image from data: URL exceeds size limit. Size: ${buffer.length}bytes. Max: ${GCS_MAX_SIZE_BYTES}bytes. Skipping.`,
             );
-            continue; // Skip this block
+            continue;
           }
-
-          const fileExtension = contentType.split('/')[1] || 'png'; // Basic extension extraction
-          const originalFilename = `pasted-${uuidv4()}.${fileExtension}`;
-
-          // Upload to GCS
+          const fileExtension = contentType.split('/')[1] || 'png';
+          const gcsOriginalFilename = `pasted-${uuidv4()}.${fileExtension}`;
           const gcsUploadResult = await uploadFileToGCS(
             buffer,
-            originalFilename,
+            gcsOriginalFilename,
             contentType,
           );
-
-          // Create ImageRecord
           const newImageRecord = await prisma.imageRecord.create({
             data: {
-              userId: userId,
+              userId,
               gcsPath: gcsUploadResult.filename,
-              contentType: contentType,
-              originalFilename: originalFilename,
+              contentType,
+              originalFilename: gcsOriginalFilename,
               size: buffer.length,
-              appServedUrl: '', // Placeholder, will be updated next
+              appServedUrl: '',
               knowledgeCardId: cardId,
             },
           });
-
-          const appServedUrl = `/api/images/serve/${newImageRecord.id}`;
+          const actualAppServedUrl = `/api/images/serve/${newImageRecord.id}`;
           await prisma.imageRecord.update({
             where: { id: newImageRecord.id },
-            data: { appServedUrl: appServedUrl },
+            data: { appServedUrl: actualAppServedUrl },
           });
-
-          // IMPORTANT: Modify the block's URL in place
-          block.props.url = appServedUrl;
+          appServedUrlToStore = actualAppServedUrl;
           console.log(
-            `[cardService] Successfully processed data: URL. New appServedUrl: ${appServedUrl}`,
+            `[cardService] Successfully processed data: URL. New appServedUrl: ${actualAppServedUrl}`,
           );
         } catch (error) {
           console.error(
@@ -142,52 +137,56 @@ async function _processAndLinkImages(
             error instanceof Error ? error.message : error,
             originalUrl.substring(0, 80) + '...',
           );
-          // block.props.url remains the original data: URL if processing fails
-          // Log error, but continue processing other blocks/images
         }
-      } else if (originalUrl.startsWith('/api/images/serve/')) {
-        // Scenario: Existing appServedUrl, ensure it's linked if necessary
+      } else if (
+        typeof originalUrl === 'string' &&
+        originalUrl.startsWith('/api/images/serve/')
+      ) {
         const urlParts = originalUrl.split('/');
         const potentialId = urlParts[urlParts.length - 1];
-        // Basic CUID check (length 25, starts with 'c')
         const isCuidLike =
           potentialId &&
           potentialId.length === 25 &&
           potentialId.startsWith('c');
-
         if (isCuidLike) {
           const imageRecord = await prisma.imageRecord.findFirst({
-            where: { id: potentialId, userId: userId }, // Ensure user owns the ImageRecord
+            where: { id: potentialId, userId: userId },
             select: { id: true, knowledgeCardId: true },
           });
-          // Link if record exists and is not already linked to *this* card.
           if (imageRecord && imageRecord.knowledgeCardId !== cardId) {
             if (!imageRecordIdsToLink.includes(potentialId)) {
-              // Avoid duplicates if same image appears multiple times
               imageRecordIdsToLink.push(potentialId);
             }
           }
         }
       }
-      // http:// and https:// URLs are intentionally ignored here and left as hotlinks.
+
+      const minimalProps: MyAppImageBlockProps = { url: appServedUrlToStore };
+      if (captionToStore) {
+        minimalProps.caption = captionToStore;
+      }
+
+      blocks[i] = {
+        ...currentBlock,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        props: minimalProps as any,
+      };
     }
 
-    // Recursively process children if they exist and form an array of Blocks
+    const blockToProcessForChildren = blocks[i];
     if (
-      block.children &&
-      Array.isArray(block.children) &&
-      block.children.length > 0
+      blockToProcessForChildren.children &&
+      Array.isArray(blockToProcessForChildren.children) &&
+      blockToProcessForChildren.children.length > 0
     ) {
-      // Ensure children are actually Block types before casting
-      // This check might need to be more robust depending on BlockNote's exact children structure
-      const childrenAreBlocks = block.children.every(
+      const childrenAreBlocks = blockToProcessForChildren.children.every(
         (child) =>
           typeof child === 'object' && child !== null && 'type' in child,
       );
       if (childrenAreBlocks) {
         await _processAndLinkImages(
           prisma,
-          block.children as Block[],
+          blockToProcessForChildren.children as StandardDocument,
           cardId,
           userId,
         );
@@ -198,10 +197,7 @@ async function _processAndLinkImages(
   if (imageRecordIdsToLink.length > 0) {
     try {
       await prisma.imageRecord.updateMany({
-        where: {
-          id: { in: imageRecordIdsToLink },
-          userId: userId,
-        },
+        where: { id: { in: imageRecordIdsToLink }, userId: userId },
         data: { knowledgeCardId: cardId },
       });
       console.log(
@@ -223,27 +219,23 @@ export async function handleCardImageAssociations(
   cardId: string,
   userId: string,
 ): Promise<Prisma.JsonValue | undefined | null> {
-  // Return the potentially modified content
   if (!content || !Array.isArray(content) || content.length === 0) {
-    return content; // Return original content if no processing needed or if it's not an array (e.g. null)
+    return content;
   }
 
-  // Deep clone the content to avoid modifying the original object that might be used elsewhere.
-  // JSON.parse(JSON.stringify()) is a common way for structured data like BlockNote content.
-  let mutableContent: Block[];
+  let mutableContent: StandardDocument;
   try {
-    mutableContent = JSON.parse(JSON.stringify(content)) as Block[];
+    mutableContent = JSON.parse(JSON.stringify(content)) as StandardDocument;
   } catch (cloneError) {
     console.error(
       '[cardService] Failed to clone content for image processing. Returning original content.',
       cloneError,
     );
-    return content; // Return original on clone failure
+    return content;
   }
 
   await _processAndLinkImages(prisma, mutableContent, cardId, userId);
 
-  // Return the (potentially) modified content
   return mutableContent as unknown as Prisma.JsonValue;
 }
 

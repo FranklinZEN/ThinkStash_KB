@@ -3,7 +3,7 @@
  */
 import 'next-test-api-route-handler'; // Must be first
 import { testApiHandler } from 'next-test-api-route-handler';
-// import * as folderApiHandler from '@/app/api/folders/route'; // Will be required in beforeEach
+import * as folderApiHandler from '@/app/api/folders/route'; // Import at top level
 import { prismaMock } from 'tests/__helpers__/prisma-mock'; 
 import { mockGetCurrentUserId } from 'tests/setup-tests'; 
 // Import singleton mock functions for folderService
@@ -19,16 +19,12 @@ const MOCK_USER_ID_FOLDERS = 'user-folders-test-123'; // Different user ID for c
 
 const createFolderPayload = (name: string, parentId?: string | null) => ({ name, parentId });
 
-let folderApiHandler: any; // To be set in beforeEach
-
 describe('Folder API Routes /api/folders', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     // Default to an authenticated user for most tests
     mockGetCurrentUserId.mockResolvedValue(MOCK_USER_ID_FOLDERS);
     // prismaMock is reset by its own beforeEach in tests/__helpers__/prisma-mock.ts
-    // Require the module here, after mocks are reset and configured for the test run
-    folderApiHandler = require('@/app/api/folders/route');
   });
 
   describe('GET /api/folders', () => {

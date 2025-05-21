@@ -12,6 +12,7 @@ import {
   UpdateCardData, // Assuming this DTO is defined in cardService.ts
   // ServiceResult, // Not needed directly in route if just passing through
 } from '@/lib/services/cardService';
+import { CardContentSchema } from '@/lib/validators/editorValidators'; // Import CardContentSchema
 
 // interface RouteParams { // This interface will be removed
 //   params: Promise<{ cardId: string }>;
@@ -31,13 +32,13 @@ const UpdateCardSchema = z
       .min(1, { message: 'Title cannot be empty' })
       .trim()
       .optional(),
-    content: z
-      .array(z.any())
-      .min(1, { message: 'Content cannot be empty' })
-      .optional(),
-    // folderId: z.string().cuid({ message: 'Invalid folder ID format' }).optional().nullable(),
-    folderId: z.string().min(1).optional().nullable(), // Temporarily simplify
-    tags: z.array(z.string().trim()).optional(),
+    content: CardContentSchema.optional(), // Use CardContentSchema for content validation
+    folderId: z
+      .string()
+      .cuid({ message: 'Invalid folder ID format.' })
+      .optional()
+      .nullable(), // Reverted to CUID check for folderId
+    tags: z.array(z.string().trim().min(1)).optional(), // Ensure tags are non-empty strings if array is provided
   })
   .partial()
   .refine((data) => Object.keys(data).length > 0, {
@@ -140,19 +141,18 @@ export async function PUT(
   let validatedBody: UpdateCardData;
   try {
     const body = await req.json();
-    const validation = UpdateCardSchema.safeParse(body);
-    if (!validation.success) {
+    const validationResult = UpdateCardSchema.safeParse(body);
+    if (!validationResult.success) {
       return NextResponse.json(
         {
           error: 'Validation failed',
-          details: validation.error.flatten().fieldErrors,
+          details: validationResult.error.flatten().fieldErrors,
         },
         { status: 400 },
       );
     }
-    validatedBody = validation.data as UpdateCardData; // Cast to ensure all optional fields are handled correctly by service
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (_error) {
+    validatedBody = validationResult.data as UpdateCardData;
+  } catch {
     return NextResponse.json(
       { error: 'Invalid request body' },
       { status: 400 },

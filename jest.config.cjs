@@ -17,11 +17,17 @@ const customJestConfig = {
     // The jest.mock in setup-tests.ts targets the alias '@/lib/prisma'.
     '^@/lib/prisma(\.js|\.ts)?$': '<rootDir>/src/lib/prisma.ts',
 
+    // Canonicalize sessionUtils path
+    '^@/lib/sessionUtils(\.js|\.ts)?$': '<rootDir>/src/lib/sessionUtils.ts',
+    // Add relative path mappers if sessionUtils might be imported relatively
+    '^\.\./\.\./\.\./lib/sessionUtils(\.js|\.ts)?$': '<rootDir>/src/lib/sessionUtils.ts',
+    '^\.\./lib/sessionUtils(\.js|\.ts)?$': '<rootDir>/src/lib/sessionUtils.ts',
+
     // Canonicalize paths for cardService to ensure jest.mock in setup-tests.ts hits it
     // This maps both the alias and potential relative paths to the same source file.
     // The jest.mock in setup-tests.ts targets '@/lib/services/cardService'.
     '^@/lib/services/cardService(\.js|\.ts)?$': '<rootDir>/src/lib/services/cardService.ts',
-    '^\.\./\.\./\.\./lib/services/cardService(\.js|\.ts)?$': '<rootDir>/src/lib/services/cardService.ts',
+    '^\.\./\.\./\.\./lib/services/cardService(\.ts)?$': '<rootDir>/src/lib/services/cardService.ts',
     // Add more relative path patterns if necessary, e.g., from different depths
     '^\.\./lib/services/cardService(\.js|\.ts)?$': '<rootDir>/src/lib/services/cardService.ts',
 

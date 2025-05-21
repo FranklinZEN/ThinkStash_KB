@@ -3,7 +3,7 @@
  */
 import 'next-test-api-route-handler'; // Must be first
 import { testApiHandler } from 'next-test-api-route-handler';
-import * as cardApiHandlerModule from '@/app/api/cards/[cardId]/route'; // Import API handler at top
+import * as cardApiHandlerModule from '@/app/api/cards/[cardId]/route'; // Import at top level
 import { UpdateCardData } from '@/lib/services/cardService'; // Types can be imported
 import { prismaMock } from 'tests/__helpers__/prisma-mock'; 
 // Import singleton mock functions (now globally wired up in setup-tests.ts)
@@ -29,10 +29,10 @@ const validUpdatePayload: UpdateCardData = {
 
 describe('/api/cards/[cardId] integration tests', () => {
   beforeEach(() => {
-    // jest.resetAllMocks(); // REMOVE THIS
+    jest.resetAllMocks();
+    mockGetCurrentUserId.mockResolvedValue(MOCK_USER_ID); 
     
     // Reset mocks imported for this test suite
-    mockGetCurrentUserId.mockReset().mockResolvedValue(MOCK_USER_ID); // Set default for auth tests
     mockGetCardLogic.mockReset();
     mockUpdateCardLogic.mockReset();
     mockDeleteCardLogic.mockReset();
