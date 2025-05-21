@@ -122,7 +122,87 @@ describe('/api/images/import-by-url POST', () => {
   });
 
   // TODO: Add tests for content type validation
+  it('should return 400 if external image content type is not supported', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: MOCK_USER_ID } });
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/bmp', // Unsupported type
+        'content-length': '100',
+      }),
+      arrayBuffer: async () => Buffer.from('data').buffer,
+    });
+
+    await testApiHandler({
+      appHandler,
+      test: async ({ fetch: appFetch }) => {
+        const res = await appFetch({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }),
+        });
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error).toBe(
+          'Invalid image type. Allowed types: image/jpeg, image/png, image/gif, image/webp',
+        );
+      },
+    });
+  });
+
   // TODO: Add tests for file size validation (from headers and from buffer)
+  it('should return 400 if external image content-length header exceeds max size', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: MOCK_USER_ID } });
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/jpeg',
+        'content-length': (6 * 1024 * 1024).toString(), // 6MB, assuming MAX_SIZE_IN_MB = 5
+      }),
+      arrayBuffer: async () => Buffer.from('data').buffer, // Buffer content doesn't matter here
+    });
+
+    await testApiHandler({
+      appHandler,
+      test: async ({ fetch: appFetch }) => {
+        const res = await appFetch({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }),
+        });
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error).toBe('Image is too large. Maximum size: 5MB');
+      },
+    });
+  });
+
+  it('should return 400 if external image buffer exceeds max size', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: MOCK_USER_ID } });
+    const largeBuffer = Buffer.alloc(6 * 1024 * 1024); // 6MB
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/jpeg',
+        // No content-length or a misleading one, actual buffer check should catch it
+      }),
+      arrayBuffer: async () => largeBuffer.buffer,
+    });
+
+    await testApiHandler({
+      appHandler,
+      test: async ({ fetch: appFetch }) => {
+        const res = await appFetch({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }),
+        });
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error).toBe('Image is too large. Maximum size: 5MB');
+      },
+    });
+  });
 
   it('should successfully import image, create record, and return appServedUrl', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: MOCK_USER_ID } });
@@ -266,4 +346,74 @@ describe('/api/images/import-by-url POST', () => {
   });
 
   // TODO: Add test for Prisma update failure
+  it('should return 500 if Prisma update for appServedUrl fails', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: MOCK_USER_ID } });
+
+    const mockImageBuffer = Buffer.from('mock image data');
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/jpeg',
+        'content-length': mockImageBuffer.length.toString(),
+      }),
+      arrayBuffer: async () => mockImageBuffer.buffer,
+    });
+
+    const mockGcsFile = {
+      filename: 'gcs-generated-filename.jpg',
+      contentType: 'image/jpeg',
+      size: mockImageBuffer.length,
+      url: 'http://fake-gcs-url.com/gcs-generated-filename.jpg',
+    };
+    mockUploadFile.mockResolvedValue(mockGcsFile);
+
+    const initialImageRecord = {
+      id: MOCK_VALID_IMAGE_RECORD_ID,
+      userId: MOCK_USER_ID,
+      gcsPath: mockGcsFile.filename,
+      contentType: mockGcsFile.contentType,
+      originalFilename: 'test-image.jpg',
+      size: mockGcsFile.size,
+      appServedUrl: '',
+      knowledgeCardId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    mockPrismaImageRecordCreate.mockResolvedValue(initialImageRecord);
+
+    // Mock Prisma update failure
+    mockPrismaImageRecordUpdate.mockRejectedValue(
+      new Error('Prisma Update Error'),
+    );
+
+    await testApiHandler({
+      appHandler,
+      test: async ({ fetch: appFetch }) => {
+        const res = await appFetch({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }),
+        });
+        expect(res.status).toBe(500);
+        const json = await res.json();
+        expect(json.error).toBe('Failed to import image by URL');
+        expect(json.details).toBe('Prisma Update Error');
+
+        // Verify that create was still called
+        expect(mockPrismaImageRecordCreate).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            userId: MOCK_USER_ID,
+            gcsPath: mockGcsFile.filename,
+          }),
+        });
+        // Verify that update was attempted
+        expect(mockPrismaImageRecordUpdate).toHaveBeenCalledWith({
+          where: { id: MOCK_VALID_IMAGE_RECORD_ID },
+          data: {
+            appServedUrl: `/api/images/serve/${MOCK_VALID_IMAGE_RECORD_ID}`,
+          },
+        });
+      },
+    });
+  });
 });
