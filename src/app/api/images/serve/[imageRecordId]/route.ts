@@ -14,11 +14,12 @@ import { getBucket } from '@/lib/gcs';
 export async function GET(
   request: NextRequest,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  context: any, // Revert to any to resolve build error
+  context: any, // Using 'any' as per the stable commit f075c84
 ) {
   // Access imageRecordId from context.params, assuming it exists at runtime
   const imageRecordId = context.params?.imageRecordId as string;
 
+  // All subsequent logic must be INSIDE this GET function
   console.log(
     `[/api/images/serve] GET request for imageRecordId: ${imageRecordId}`,
   );

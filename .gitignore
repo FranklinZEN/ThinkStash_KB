@@ -222,3 +222,11 @@ thinkstash-knowledge-base-94ace76cab03.json
 aiservice/.env
 migration.sql
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Playwright authentication state
+.auth/
