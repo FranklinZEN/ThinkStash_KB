@@ -1,10 +1,13 @@
+// console.log('[[CARDS ROUTE MODULE LOAD]] src/app/api/cards/[cardId]/route.ts loaded');
+
 import { NextRequest, NextResponse } from 'next/server';
 // import { getServerSession } from 'next-auth/next'; // Remove unused
 // import { authOptions } from '@/lib/auth'; // Remove unused
 import prisma from '@/lib/prisma'; // Ensure this is the default import
 import { z } from 'zod';
 // import { Prisma } from '@prisma/client'; // Remove unused
-import { getCurrentUserId } from '@/lib/sessionUtils';
+import { getServerSession } from 'next-auth/next'; // Keep for actual auth
+import { authOptions } from '@/lib/auth'; // Keep for actual auth
 import {
   getCardLogic,
   updateCardLogic,
@@ -13,6 +16,23 @@ import {
   // ServiceResult, // Not needed directly in route if just passing through
 } from '@/lib/services/cardService';
 import { CardContentSchema } from '@/lib/validators/editorValidators'; // Import CardContentSchema
+
+// Helper function for test authentication
+async function getRouteHandlerUserId(
+  request: NextRequest,
+): Promise<string | null> {
+  // console.log(`[getRouteHandlerUserId] APP_ENV: ${process.env.APP_ENV}`); // Keep for now if helpful
+  if (process.env.APP_ENV === 'test') {
+    const testUserId = request.headers.get('X-Test-User-Id');
+    // console.log(`[getRouteHandlerUserId] Test mode. X-Test-User-Id header: ${testUserId}`);
+    if (testUserId) {
+      if (testUserId === 'null') return null;
+      return testUserId;
+    }
+  }
+  const session = await getServerSession(authOptions);
+  return session?.user?.id ?? null;
+}
 
 // interface RouteParams { // This interface will be removed
 //   params: Promise<{ cardId: string }>;
@@ -51,22 +71,12 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ cardId: string }> },
 ) {
-  console.log(
-    '[GET /api/cards/[cardId]] Context received by handler (raw promise):\n',
-    context,
-  );
+  // console.log('[[CARDS ROUTE DEBUG]] GET /api/cards/[cardId] HANDLER ENTERED');
   const resolvedParams = await context.params;
-  console.log(
-    '[GET /api/cards/[cardId]] Validating resolved params:',
-    JSON.stringify(resolvedParams),
-  );
   const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
 
   if (!paramsValidation.success) {
-    console.error(
-      '[GET /api/cards/[cardId]] Params validation failed:',
-      paramsValidation.error.format(),
-    );
+    // console.error('[GET /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
     return NextResponse.json(
       {
         error: 'Invalid card ID format',
@@ -76,18 +86,11 @@ export async function GET(
     );
   }
   const { cardId } = paramsValidation.data;
-  console.log(
-    '[GET /api/cards/[cardId]] Params validation success, cardId:',
-    cardId,
-  );
-
-  const userId = await getCurrentUserId();
+  const userId = await getRouteHandlerUserId(request);
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
   const result = await getCardLogic(cardId, userId, prisma);
-
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status });
   } else {
@@ -103,22 +106,11 @@ export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ cardId: string }> },
 ) {
-  console.log(
-    '[PUT /api/cards/[cardId]] Context received by handler (raw promise):\n',
-    context,
-  );
   const resolvedParams = await context.params;
-  console.log(
-    '[PUT /api/cards/[cardId]] Validating resolved params:',
-    JSON.stringify(resolvedParams),
-  );
   const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
 
   if (!paramsValidation.success) {
-    console.error(
-      '[PUT /api/cards/[cardId]] Params validation failed:',
-      paramsValidation.error.format(),
-    );
+    // console.error('[PUT /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
     return NextResponse.json(
       {
         error: 'Invalid card ID format',
@@ -128,16 +120,10 @@ export async function PUT(
     );
   }
   const { cardId } = paramsValidation.data;
-  console.log(
-    '[PUT /api/cards/[cardId]] Params validation success, cardId:',
-    cardId,
-  );
-
-  const userId = await getCurrentUserId();
+  const userId = await getRouteHandlerUserId(req);
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
   let validatedBody: UpdateCardData;
   try {
     const body = await req.json();
@@ -158,9 +144,7 @@ export async function PUT(
       { status: 400 },
     );
   }
-
   const result = await updateCardLogic(cardId, userId, validatedBody, prisma);
-
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status });
   } else {
@@ -176,22 +160,11 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ cardId: string }> },
 ) {
-  console.log(
-    '[DELETE /api/cards/[cardId]] Context received by handler (raw promise):\n',
-    context,
-  );
   const resolvedParams = await context.params;
-  console.log(
-    '[DELETE /api/cards/[cardId]] Validating resolved params:',
-    JSON.stringify(resolvedParams),
-  );
   const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
 
   if (!paramsValidation.success) {
-    console.error(
-      '[DELETE /api/cards/[cardId]] Params validation failed:',
-      paramsValidation.error.format(),
-    );
+    // console.error('[DELETE /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
     return NextResponse.json(
       {
         error: 'Invalid card ID format',
@@ -201,21 +174,11 @@ export async function DELETE(
     );
   }
   const { cardId } = paramsValidation.data;
-  console.log(
-    '[DELETE /api/cards/[cardId]] Params validation success, cardId:',
-    cardId,
-  );
-
-  const userId = await getCurrentUserId();
+  const userId = await getRouteHandlerUserId(request);
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  // Note: The service deleteCardLogic does not currently handle GCS file cleanup.
-  // This should be added either to the service or orchestrated here if ImageRecords need to be fetched first.
-  // For now, just calling the service as is.
   const result = await deleteCardLogic(cardId, userId, prisma);
-
   if (result.success) {
     return NextResponse.json(
       { message: 'Card deleted successfully' },

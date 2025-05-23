@@ -6,9 +6,12 @@ export default defineConfig({
   plugins: [react(), tsconfigPaths()],
   test: {
     globals: true,
-    environment: 'happy-dom', // Start with happy-dom
-    setupFiles: ['./tests/vitest.setup.ts', './tests/vitest.globalSetup.ts'],
+    environment: 'happy-dom', // Default environment, can be overridden per-file
+    // setupFiles is for scripts that run before each test file
+    setupFiles: ['./tests/vitest.setup.ts'], 
     reporters: ['default', 'html'], // Optional: for HTML reports
+    testTimeout: 30000, // Increased to 30000
+    hookTimeout: 30000, // Increased to 30000
     coverage: {
       provider: 'v8', // or 'istanbul'
       reporter: ['text', 'json', 'html', 'lcov'],

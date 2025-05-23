@@ -1,13 +1,19 @@
-import { GET as appHandlerGET } from '../route'; // Import your route handler
+/**
+ * @vitest-environment node
+ */
+import { GET as appHandlerGET } from '../../../../../src/app/api/images/serve/[imageRecordId]/route'; // Corrected path to actual route handler
 import { getServerSession } from 'next-auth/next';
-import { getBucket } from '@/lib/gcs'; // Will be mocked, then imported as mock
-import { prismaMock } from 'tests/__helpers__/prisma-mock';
+import { getBucket } from '@/lib/gcs'; 
+import {
+    mockImageRecordFindUnique, 
+} from '../../../../../tests/helpers/apiTestSetup'; 
 import { Readable } from 'stream';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { createMocks, RequestMethod } from 'node-mocks-http';
 import { NextRequest } from 'next/server';
 
 // --- GCS Mocks (Vitest) ---
+// This specific GCS mock structure is kept local to this file due to its detailed control needs.
 vi.mock('@/lib/gcs', () => {
   const mockFileExists = vi.fn();
   const mockCreateReadStream = vi.fn();
@@ -20,13 +26,9 @@ vi.mock('@/lib/gcs', () => {
   }));
 
   // Attach nested mocks to the top-level mock for easier access in tests
-  // These are custom properties we add to the mock function object itself.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (mockGetBucket as any)._mockFile = mockFile; // Expose mockFile via mockGetBucket
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (mockFile as any)._mockExists = mockFileExists; // Expose mockFileExists via mockFile
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (mockFile as any)._mockCreateReadStream = mockCreateReadStream; // Expose mockCreateReadStream via mockFile
+  (mockGetBucket as any)._mockFile = mockFile; 
+  (mockFile as any)._mockExists = mockFileExists; 
+  (mockFile as any)._mockCreateReadStream = mockCreateReadStream; 
 
   return {
     __esModule: true,
@@ -39,7 +41,6 @@ vi.mock('@/lib/gcs', () => {
   };
 });
 
-// Import the mocked version of getBucket and cast it to access our custom properties
 const mockedGetBucket = getBucket as ReturnType<typeof vi.fn> & {
   _mockFile?: ReturnType<typeof vi.fn> & {
     _mockExists?: ReturnType<typeof vi.fn>;
@@ -57,13 +58,10 @@ vi.mock('next-auth/next', async (importOriginal) => {
 });
 const mockGetServerSessionTyped = getServerSession as ReturnType<typeof vi.fn>;
 
-// Mock @/lib/auth (if still needed, e.g. if route handler imports authOptions directly for some reason)
-// If not, this mock can be removed.
 vi.mock('@/lib/auth', () => ({
   authOptions: {},
 }));
 
-// --- Typed Mocks & Variables ---
 const MOCK_IMAGE_RECORD_ID = 'test-image-record-id';
 const MOCK_USER_ID = 'user-123';
 const MOCK_GCS_PATH = 'user-123/test-image.jpg';
@@ -83,9 +81,8 @@ const createMockImageRecord = (overrides = {}) => ({
   ...overrides,
 });
 
-// Helper to create a mock NextRequest and context for dynamic routes
 interface ImageRecordRouteContext {
-  params: { imageRecordId: string }; // Params are the resolved object directly
+  params: { imageRecordId: string }; 
 }
 
 function mockRequestAndContext(
@@ -96,13 +93,11 @@ function mockRequestAndContext(
   const { req } = createMocks({ method, url });
 
   const nextReq = req as unknown as NextRequest;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (nextReq as any).nextUrl = {
     searchParams: new URLSearchParams(),
     pathname: url,
   };
 
-  // Context params should be the direct routeParams object
   const context: ImageRecordRouteContext = { params: routeParams };
   return { req: nextReq, context };
 }
@@ -114,7 +109,8 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
     vi.resetAllMocks();
     mockGetServerSessionTyped.mockResolvedValue({ user: { id: MOCK_USER_ID } });
 
-    // Reset and configure GCS mocks using the exposed nested mock functions from mockedGetBucket
+    mockImageRecordFindUnique.mockReset();
+
     const mockFile = mockedGetBucket._mockFile;
     const mockFileExists = mockFile?._mockExists;
     const mockCreateReadStream = mockFile?._mockCreateReadStream;
@@ -127,13 +123,11 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
         process.nextTick(() => readable.push(null));
         return readable;
       });
-    // Ensure mockFile itself is reset and re-implemented if it was called/configured by a previous test
     if (mockFile)
       mockFile.mockReset().mockImplementation(() => ({
         exists: mockFileExists!,
         createReadStream: mockCreateReadStream!,
       }));
-    // Ensure mockedGetBucket is reset and re-implemented to return the (potentially re-configured) mockFile
     mockedGetBucket.mockReset().mockImplementation(() => ({
       file: mockFile!,
     }));
@@ -153,7 +147,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
     });
     const response = await appHandlerGET(req, context);
     expect(response.status).toBe(401);
-    expect(mockedGetBucket).not.toHaveBeenCalled(); // Assert on the top-level mockedGetBucket
+    expect(mockedGetBucket).not.toHaveBeenCalled(); 
   });
 
   it('should return 500 if GCS_BUCKET_NAME is not configured', async () => {
@@ -168,7 +162,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 404 if ImageRecord is not found', async () => {
-    prismaMock.imageRecord.findUnique.mockResolvedValue(null);
+    (mockImageRecordFindUnique as Mock).mockResolvedValue(null);
     const { req, context } = mockRequestAndContext('GET', {
       imageRecordId: 'non-existent-id',
     });
@@ -180,10 +174,9 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 404 if file does not exist in GCS', async () => {
-    prismaMock.imageRecord.findUnique.mockResolvedValue(
+    (mockImageRecordFindUnique as Mock).mockResolvedValue(
       createMockImageRecord(),
     );
-    // Specific mock for this test path
     mockedGetBucket
       ._mockFile!._mockExists!.mockReset()
       .mockResolvedValue([false]);
@@ -201,11 +194,9 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should stream the image successfully with correct headers', async () => {
-    prismaMock.imageRecord.findUnique.mockResolvedValue(
+    (mockImageRecordFindUnique as Mock).mockResolvedValue(
       createMockImageRecord(),
     );
-    // Default beforeEach setup should have exists as true and a basic stream
-    // Override createReadStream for specific data
     mockedGetBucket
       ._mockFile!._mockCreateReadStream!.mockReset()
       .mockImplementation(() => {
@@ -232,7 +223,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 500 if Prisma findUnique throws', async () => {
-    prismaMock.imageRecord.findUnique.mockRejectedValue(
+    (mockImageRecordFindUnique as Mock).mockRejectedValue(
       new Error('Prisma DB Error'),
     );
     const { req, context } = mockRequestAndContext('GET', {
@@ -246,7 +237,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 500 if GCS file.exists() throws', async () => {
-    prismaMock.imageRecord.findUnique.mockResolvedValue(
+    (mockImageRecordFindUnique as Mock).mockResolvedValue(
       createMockImageRecord(),
     );
     mockedGetBucket
@@ -263,7 +254,7 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
   });
 
   it('should return 500 if GCS createReadStream throws', async () => {
-    prismaMock.imageRecord.findUnique.mockResolvedValue(
+    (mockImageRecordFindUnique as Mock).mockResolvedValue(
       createMockImageRecord(),
     );
     mockedGetBucket
@@ -280,4 +271,4 @@ describe('/api/images/serve/[imageRecordId] GET', () => {
     expect(json.error).toBe('Internal Server Error');
     expect(json.details).toBe('GCS stream error');
   });
-});
+}); 

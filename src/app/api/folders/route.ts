@@ -38,12 +38,14 @@ async function getEffectiveUserId(req: NextRequest): Promise<string | null> {
       }
       // console.log(`[/api/folders] Test override: Returning User ID: "${testUserId}".`);
       return testUserId;
-    } else {
-      // console.log(`[/api/folders] testUserId "${testUserId}" is considered NOT present or is the string 'undefined'. Falling through in test env...`);
     }
+    // If in test mode and X-Test-User-Id is not present or is 'undefined',
+    // behavior for tests would be unauthenticated. Do not fall through to real session.
+    // console.log('[/api/folders] testUserId "${testUserId}" is NOT present or is 'undefined' IN TEST MODE. Returning null.');
+    return null;
   }
 
-  // console.log('[/api/folders] Not in test override path or fell through. Attempting real session.');
+  // console.log('[/api/folders] Not in test override path. Attempting real session.');
   const session = await getServerSession(authOptions);
   if (session && session.user && session.user.id) {
     // console.log(`[/api/folders] Real session found for user: ${session.user.id}`);
@@ -54,6 +56,7 @@ async function getEffectiveUserId(req: NextRequest): Promise<string | null> {
 }
 
 export async function GET(request: NextRequest) {
+  // console.log('[[FOLDER ROUTE DEBUG]] GET /api/folders HANDLER ENTERED');
   // console.time('[GET /api/folders] Total Handler');
   const userId = await getEffectiveUserId(request);
 

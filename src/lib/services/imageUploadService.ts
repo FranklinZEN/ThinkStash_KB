@@ -44,6 +44,14 @@ export async function handleImageUploadLogic(
     '[imageUploadService] Processing image upload for user:',
     input.userId,
   );
+  // --- DEBUG LOG REMOVED ---
+  // console.log('[imageUploadService DEBUG] Received prismaInstance.imageRecord.create is function:', typeof prismaInstance?.imageRecord?.create === 'function');
+  // if (prismaInstance?.imageRecord?.create && (prismaInstance.imageRecord.create as any).mockImplementation) {
+  //   console.log('[imageUploadService DEBUG] prismaInstance.imageRecord.create IS a vi.fn mock.');
+  // } else {
+  //   console.log('[imageUploadService DEBUG] prismaInstance.imageRecord.create IS NOT a vi.fn mock or undefined.');
+  // }
+  // --- END DEBUG LOG REMOVED ---
   try {
     // Validate MIME type
     if (!ALLOWED_MIME_TYPES.includes(input.contentType)) {
@@ -104,6 +112,9 @@ export async function handleImageUploadLogic(
         updatedAt: true,
       },
     });
+    // --- DEBUG LOG REMOVED ---
+    // console.log('[imageUploadService DEBUG] newImageRecord result from create:', newImageRecord);
+    // --- END DEBUG LOG REMOVED ---
 
     const appServedUrl = `/api/images/serve/${newImageRecord.id}`;
 

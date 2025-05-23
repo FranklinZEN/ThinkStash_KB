@@ -78,7 +78,7 @@ declare global {
   // eslint-disable-next-line no-var
   var prisma: PrismaClient | undefined;
   // eslint-disable-next-line no-var
-  var __PRISMA__: PrismaClient | undefined; // For test injection
+  var __PRISMA_INSTANCE__: PrismaClient | undefined; // Changed from __PRISMA__
 }
 
 const createRealPrismaInstance = () =>
@@ -93,9 +93,9 @@ const createRealPrismaInstance = () =>
 const prismaSingleton = global.prisma ?? createRealPrismaInstance();
 
 // For testing purposes, allow a global override.
-// This specific global variable __PRISMA__ should only be set in test setup.
+// This specific global variable __PRISMA_INSTANCE__ should only be set in test setup.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const testInjectedPrisma = (globalThis as any).__PRISMA__ as
+const testInjectedPrisma = (globalThis as any).__PRISMA_INSTANCE__ as
   | PrismaClient
   | undefined;
 
