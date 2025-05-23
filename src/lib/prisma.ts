@@ -73,20 +73,39 @@ process.env.DATABASE_URL = finalDatabaseURL;
 //   '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Initializing Prisma Client NOW...',
 // );
 
+// Standard HMR global declaration for prisma
 declare global {
-  /* eslint-disable no-var */
+  // eslint-disable-next-line no-var
   var prisma: PrismaClient | undefined;
-  /* eslint-enable no-var */
+  // eslint-disable-next-line no-var
+  var __PRISMA__: PrismaClient | undefined; // For test injection
 }
 
-const prisma =
-  global.prisma ||
+const createRealPrismaInstance = () =>
   new PrismaClient({
-    log: ['warn', 'error'], // Adjusted logging for production, was: ['query', 'info', 'warn', 'error']
+    log:
+      process.env.NODE_ENV === 'development'
+        ? ['query', 'info', 'warn', 'error']
+        : ['warn', 'error'],
   });
 
-if (process.env.NODE_ENV !== 'production') {
-  global.prisma = prisma;
+// This is the instance that will be used by default and for HMR
+const prismaSingleton = global.prisma ?? createRealPrismaInstance();
+
+// For testing purposes, allow a global override.
+// This specific global variable __PRISMA__ should only be set in test setup.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const testInjectedPrisma = (globalThis as any).__PRISMA__ as
+  | PrismaClient
+  | undefined;
+
+// Export the instance: in tests, it's the mock; otherwise, it's the singleton.
+// The type exported should always be PrismaClient for build-time analysis.
+const prismaExport: PrismaClient = testInjectedPrisma || prismaSingleton;
+
+if (process.env.NODE_ENV !== 'production' && !testInjectedPrisma) {
+  // Only set global.prisma for HMR if not in production AND if a test instance isn't already injected
+  global.prisma = prismaSingleton; // Ensure the HMR global gets the singleton if no test mock
 }
 
 // !!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Prisma Client Initialized (or attempted).
@@ -94,4 +113,4 @@ if (process.env.NODE_ENV !== 'production') {
 //   '!!!!!!!!!!!!!!!!! LIB/PRISMA.TS - Prisma Client Initialized (or attempted).',
 // );
 
-export default prisma;
+export default prismaExport;

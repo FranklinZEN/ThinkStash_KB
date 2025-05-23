@@ -5,7 +5,7 @@ import {
   CreateFolderInput,
   FolderBasicDetails,
 } from '../folderService';
-import { Prisma } from '@prisma/client'; // For Prisma types if needed for errors
+import { Prisma, PrismaClient } from '@prisma/client'; // For Prisma types if needed for errors
 import { vi } from 'vitest'; // Import vi
 
 // Mock Prisma operations using vi.fn()
@@ -13,13 +13,16 @@ const mockFolderFindMany = vi.fn();
 const mockFolderFindUnique = vi.fn();
 const mockFolderCreate = vi.fn();
 
-const mockPrismaInstance: FolderPrismaSubset = {
+const mockPrismaInstanceSubset: FolderPrismaSubset = {
   folder: {
     findMany: mockFolderFindMany,
     findUnique: mockFolderFindUnique,
     create: mockFolderCreate,
   },
 };
+
+// Cast the subset to unknown, then to PrismaClient for use in service calls
+const mockPrismaInstance = mockPrismaInstanceSubset as unknown as PrismaClient;
 
 const MOCK_USER_ID = 'user-folder-test-123';
 

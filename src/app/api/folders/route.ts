@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { getCurrentUserId } from '@/lib/sessionUtils';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { z } from 'zod';
 import {
   getFoldersLogic,
   createFolderLogic,
   CreateFolderInput,
 } from '@/lib/services/folderService';
+
+export const runtime = 'nodejs'; // Force Node.js runtime
+
+// console.log(`[/api/folders/route.ts MODULE LOAD] Current NODE_ENV: ${process.env.NODE_ENV}`);
 
 // Schema for validating the request body
 const CreateFolderSchema = z.object({
@@ -18,18 +23,47 @@ const CreateFolderSchema = z.object({
     .nullable(),
 });
 
-// --- GET Handler (List Folders) ---
-export async function GET(_request: NextRequest) {
-  console.time('[GET /api/folders] Total Handler');
-  const userId = await getCurrentUserId();
+async function getEffectiveUserId(req: NextRequest): Promise<string | null> {
+  // console.log('[/api/folders] getEffectiveUserId called.');
+  if (process.env.APP_ENV === 'test') {
+    // console.log('[/api/folders] In test mode (APP_ENV=test).');
+    const testUserId = req.headers.get('X-Test-User-Id');
+    // console.log(`[/api/folders] X-Test-User-Id header raw value: "${testUserId}" (type: ${typeof testUserId})`);
+
+    if (testUserId && testUserId !== 'undefined') {
+      // console.log(`[/api/folders] testUserId is considered present: "${testUserId}"`);
+      if (testUserId === 'null') {
+        // console.log('[/api/folders] Test override: Returning NULL for user (unauthenticated).');
+        return null;
+      }
+      // console.log(`[/api/folders] Test override: Returning User ID: "${testUserId}".`);
+      return testUserId;
+    } else {
+      // console.log(`[/api/folders] testUserId "${testUserId}" is considered NOT present or is the string 'undefined'. Falling through in test env...`);
+    }
+  }
+
+  // console.log('[/api/folders] Not in test override path or fell through. Attempting real session.');
+  const session = await getServerSession(authOptions);
+  if (session && session.user && session.user.id) {
+    // console.log(`[/api/folders] Real session found for user: ${session.user.id}`);
+    return session.user.id;
+  }
+  // console.log('[/api/folders] No real session found or no user ID in session.');
+  return null;
+}
+
+export async function GET(request: NextRequest) {
+  // console.time('[GET /api/folders] Total Handler');
+  const userId = await getEffectiveUserId(request);
 
   if (!userId) {
-    console.timeEnd('[GET /api/folders] Total Handler');
+    // console.timeEnd('[GET /api/folders] Total Handler');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const result = await getFoldersLogic(userId, prisma);
-  console.timeEnd('[GET /api/folders] Total Handler');
+  // console.timeEnd('[GET /api/folders] Total Handler');
 
   if (result.success) {
     return NextResponse.json(result.data);
@@ -41,32 +75,44 @@ export async function GET(_request: NextRequest) {
   }
 }
 
-// --- POST Handler (Create Folder) ---
 export async function POST(request: NextRequest) {
-  const userId = await getCurrentUserId();
+  const userId = await getEffectiveUserId(request);
 
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   let validatedData;
+  // let bodyForLogging: any = '[Not Parsed Yet]'; // Keep for debugging if needed, but remove from default
   try {
     const body = await request.json();
+    // bodyForLogging = body;
+    // console.log('[/api/folders POST] Parsed request body:', bodyForLogging);
+
     const validation = CreateFolderSchema.safeParse(body);
 
     if (!validation.success) {
+      const validationErrors = validation.error.flatten().fieldErrors;
+      // console.error('[/api/folders POST] Zod validation failed. Body:', body, 'Errors:', validationErrors);
       return NextResponse.json(
         {
           error: 'Validation failed',
-          details: validation.error.flatten().fieldErrors,
+          details: validationErrors,
         },
         { status: 400 },
       );
     }
     validatedData = validation.data;
-  } catch {
+    // console.log('[/api/folders POST] Zod validation successful. Validated data:', validatedData);
+  } catch (e: unknown) {
+    const errorTimestamp = new Date().toISOString();
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(
+      '[/api/folders POST] Failed to parse body or validation error:',
+      message,
+    );
     return NextResponse.json(
-      { error: 'Invalid request body' },
+      { error: 'Invalid request body', message, caughtAt: errorTimestamp },
       { status: 400 },
     );
   }
@@ -82,8 +128,10 @@ export async function POST(request: NextRequest) {
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status || 201 });
   } else {
+    // Log service layer errors for visibility in production if they are not caught and logged deeper
+    // console.error(`[/api/folders POST] Service logic error: ${result.error}`, result.details);
     return NextResponse.json(
-      { error: result.error, details: result.details },
+      { error: result.error, details: result.details }, // Ensure details are passed if present
       { status: result.status || 500 },
     );
   }

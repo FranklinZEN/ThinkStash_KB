@@ -1,49 +1,28 @@
 // tests/vitest.setup.ts
-import '@testing-library/jest-dom/vitest'; 
-import { server } from '../src/mocks/server'; 
-import { vi } from 'vitest'; 
-import { prismaMock, resetPrismaMock } from './__helpers__/prisma-mock'; 
+import '@testing-library/jest-dom/vitest';
+import prisma from '@/lib/prisma'; // Import actual prisma client
+import { vi } from 'vitest';       // Keep for vi object if needed
 
-// Import singleton mock functions from helpers
-import { mockGetCardLogic, mockUpdateCardLogic, mockDeleteCardLogic, mockHandleCardImageAssociations } from './__helpers__/card-service-mock';
-import { mockGetFoldersLogic, mockCreateFolderLogic } from './__helpers__/folder-service-mock';
+// ADD PRISMA MIDDLEWARE FOR LOGGING (TEMPORARY)
+if (process.env.NODE_ENV === 'test') {
+  prisma.$use(async (params, next) => {
+    if (params.model === 'ImageRecord' && params.action === 'create') {
+      console.log('[PRISMA_MIDDLEWARE_SETUP_CREATE_ARGS] model:', params.model, 'action:', params.action, 'args:', JSON.stringify(params.args));
+    }
+    const result = await next(params);
+    if (params.model === 'ImageRecord' && params.action === 'create' && result) {
+      const resultId = (result as any)?.id;
+      console.log('[PRISMA_MIDDLEWARE_SETUP_CREATE_RESULT] ID:', resultId);
+    }
+    return result;
+  });
+  console.log('[VITEST_SETUP] Prisma middleware for ImageRecord.create logging attached globally.');
+} else {
+  // Added more detailed log for when NODE_ENV is not 'test'
+  console.log(`[VITEST_SETUP] NODE_ENV is '${process.env.NODE_ENV}', not 'test'. Prisma middleware not attached.`);
+}
 
-// --- Global Prisma Mock ---
-vi.mock('@/lib/prisma', () => ({
-  __esModule: true,
-  default: prismaMock,
-  prisma: prismaMock, 
-}));
-
-// --- Global Session Utils Mock ---
-export const mockGetCurrentUserId = vi.fn(); 
-vi.mock('@/lib/sessionUtils', () => ({
-  __esModule: true,
-  getCurrentUserId: mockGetCurrentUserId,
-}));
-
-// --- Global Card Service Mock ---
-vi.mock('@/lib/services/cardService', () => ({
-  __esModule: true,
-  getCardLogic: mockGetCardLogic,
-  updateCardLogic: mockUpdateCardLogic,
-  deleteCardLogic: mockDeleteCardLogic,
-  handleCardImageAssociations: mockHandleCardImageAssociations,
-}));
-
-// --- Global Folder Service Mock ---
-vi.mock('@/lib/services/folderService', () => ({
-  __esModule: true,
-  getFoldersLogic: mockGetFoldersLogic,
-  createFolderLogic: mockCreateFolderLogic,
-}));
-
-// MSW server lifecycle
-beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
-
-afterEach(() => {
-  server.resetHandlers();
-  resetPrismaMock(); 
-});
-
-afterAll(() => server.close()); 
+// All other global mocks (sessionUtils, services, MSW setup) are effectively removed or 
+// should be commented out if they were causing issues.
+// For instance, ensure the vi.mock for sessionUtils is also removed if it was problematic.
+// vi.mock('@/lib/sessionUtils', () => ({ /* ... */ })); // Example of ensuring it's out

@@ -6,8 +6,7 @@ import {
   UpdateCardData,
 } from '../cardService';
 import { vi } from 'vitest'; // Import vi
-// import { ServiceResult } from '@/lib/services/serviceUtils'; // Unused
-// import { Prisma } from '@prisma/client'; // Unused
+import { PrismaClient } from '@prisma/client'; // Unused
 
 // Mock Prisma operations using vi.fn()
 const mockKnowledgeCardFindUnique = vi.fn();
@@ -15,7 +14,7 @@ const mockKnowledgeCardUpdate = vi.fn();
 const mockKnowledgeCardDelete = vi.fn();
 const mockFolderFindUnique = vi.fn();
 
-const mockPrismaInstance: CardServicePrismaSubset = {
+const mockPrismaInstanceSubset: CardServicePrismaSubset = {
   knowledgeCard: {
     findUnique: mockKnowledgeCardFindUnique,
     update: mockKnowledgeCardUpdate,
@@ -25,6 +24,9 @@ const mockPrismaInstance: CardServicePrismaSubset = {
     findUnique: mockFolderFindUnique,
   },
 };
+
+// Cast the subset to unknown, then to PrismaClient for use in service calls
+const mockPrismaInstance = mockPrismaInstanceSubset as unknown as PrismaClient;
 
 const MOCK_USER_ID = 'user-card-test-123';
 const MOCK_CARD_ID = 'card-cuid-123';

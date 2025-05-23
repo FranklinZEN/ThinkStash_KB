@@ -112,8 +112,17 @@ export async function createFolderLogic(
 
     return { success: true, data: newFolder, status: 201 };
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
+    // Use duck-typing for P2002 check to be more resilient to mocked errors
+    if (
+      error &&
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error
+    ) {
+      // Now that we've checked for 'code', we can cast more safely if needed,
+      // or directly use (error as { code: unknown }).code
+      const errorCode = (error as { code: unknown }).code;
+      if (errorCode === 'P2002') {
         return {
           success: false,
           error: 'A folder with this name already exists at this level.',
@@ -121,11 +130,12 @@ export async function createFolderLogic(
         };
       }
     }
+
     console.error('[folderService] Failed to create folder:', error);
     return {
       success: false,
       error: 'Failed to create folder.',
-      details: (error as Error).message,
+      details: error instanceof Error ? error.message : String(error), // Safer message access
       status: 500,
     };
   }
