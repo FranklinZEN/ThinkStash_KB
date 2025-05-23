@@ -24,8 +24,14 @@ export const mockUserFindUnique: Mock = vi.fn();
 // Note: mockUserFindUnique was not a vi.fn() in the original local mock, actual was used.
 
 // todo: Add other common mocks as per refactoring plan (e.g., ImageRecord, GCS)
-// export const mockImageRecordCreate: Mock = vi.fn();
-// export const mockImageRecordFindUnique: Mock = vi.fn();
+export const mockImageRecordCreate: Mock = vi.fn();
+export const mockImageRecordFindUnique: Mock = vi.fn();
+export const mockImageRecordUpdate: Mock = vi.fn();
+export const mockImageRecordDeleteMany: Mock = vi.fn();
+
+// Add GCS mock functions
+export const mockGCSUploadFile: Mock = vi.fn();
+export const mockGetSignedUrlForImageGCS: Mock = vi.fn();
 
 // Add for knowledgeCard model
 export const mockKnowledgeCardUpdateMany: Mock = vi.fn();
@@ -60,21 +66,12 @@ export function createMockedPrismaClient(): PrismaClient {
     $queryRawUnsafe: vi.fn(),
     $transaction: vi.fn().mockImplementation(async (arg: any) => {
       if (typeof arg === 'function') {
-        // If it's a function, invoke it with the mock client itself (or a specific mock transaction API)
         return await arg(mockedClient); 
       }
-      // If it's an array of operations (batch transaction)
-      // This is a simplified mock; real batch transactions might need more detailed handling
-      // For many tests, ensuring it doesn't break and operations are called is enough.
-      // Here, we'll assume individual operations are mocked and will be called.
-      const results = [];
-      for (const op of arg) {
-        // This part is tricky without knowing what 'op' is. 
-        // Prisma operations aren't directly executable like this.
-        // For robust $transaction mocking with arrays, specific test setup for inner operations is better.
-        // results.push(await op); // This line is problematic
-      }
-      return results; 
+      // Simplified mock for array of operations. Assumes individual operations are mocked.
+      // For many tests, this might be sufficient if the transaction is a wrapper.
+      // Actual results from batched operations usually require more specific per-test setup.
+      return []; 
     }),
 
     // --- Mocked Models ---
@@ -109,6 +106,21 @@ export function createMockedPrismaClient(): PrismaClient {
       update: vi.fn(),
       upsert: vi.fn(),
       delete: vi.fn(),
+      count: vi.fn(),
+      aggregate: vi.fn(),
+      groupBy: vi.fn(),
+      findFirst: vi.fn(),
+      findFirstOrThrow: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+    },
+    imageRecord: {
+      create: mockImageRecordCreate,
+      findUnique: mockImageRecordFindUnique,
+      findMany: vi.fn(),
+      update: mockImageRecordUpdate,
+      deleteMany: mockImageRecordDeleteMany,
+      delete: vi.fn(),
+      upsert: vi.fn(),
       count: vi.fn(),
       aggregate: vi.fn(),
       groupBy: vi.fn(),

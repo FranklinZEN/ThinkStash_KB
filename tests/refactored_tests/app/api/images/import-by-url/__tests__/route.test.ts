@@ -1,41 +1,35 @@
 /**
- * @jest-environment node
+ * @vitest-environment node
  */
 import request from 'supertest';
-// import { http, HttpResponse } from 'msw'; // MSW no longer used in this file for fetch mocking
-// import { server } from '@/mocks/server';   // MSW server no longer used in this file for fetch mocking
-// import nock from 'nock'; // ADD: Import nock
+// Path adjusted for the new location under tests/refactored_tests/
+import { makeTestServer, TestServer } from '../../../../../../helpers/testServer'; 
+import {
+  MOCK_USER_ID,
+  mockUserCreate,
+  mockUserDeleteMany,
+  mockImageRecordCreate,
+  mockImageRecordUpdate,
+  mockImageRecordDeleteMany,
+  // mockGCSUploadFile, // No longer directly used in this test if route uses headers for GCS
+  // Assuming apiTestSetup.ts also exports Prisma mock functions if needed for direct use
+  // For example: mockImageRecordFindUnique, mockUserFindUnique etc.
+} from '../../../../../../helpers/apiTestSetup'; 
 
-// import * as _appHandler from '../route'; // Commented out as unused
-import prisma from '@/lib/prisma';
-// import { uploadFile } from '@/lib/gcs'; // Linter says unused, assuming tests use the mock via vi.mock
 import {
   vi,
-  /* Mock, */ beforeEach as vitestBeforeEach,
+  beforeEach as vitestBeforeEach,
   afterEach as vitestAfterEach,
   describe as vitestDescribe,
   it as vitestIt,
   expect as vitestExpect,
-} from 'vitest'; // Mock import commented
-// REMOVE: import cuid from 'cuid';
+  beforeAll as vitestBeforeAll,
+  afterAll as vitestAfterAll,
+  Mock,
+} from 'vitest';
 
-// Global Prisma mock is removed from vitest.setup.ts
-// We will spyOn specific prisma methods in tests that need to simulate prisma errors.
+// Removed: vi.mock('@/lib/gcs', ...) as the route seems to use header-based GCS mocking for tests
 
-vi.mock('@/lib/gcs', () => ({
-  ...vi.importActual('@/lib/gcs'),
-  uploadFile: vi.fn(), // This is the mock for the imported uploadFile
-}));
-
-// const mockUploadFile = uploadFile as Mock; // This assignment itself is okay if mockUploadFile is used,
-// but the linter flagged it as unused. If uploadFile (the import)
-// is what tests use to interact with the mock, then this const is indeed unused.
-// Let's remove it based on the linter error for mockUploadFile.
-
-// const _MOCK_USER_ID = 'user-123'; // Old value
-const MOCK_USER_ID = 'cmazq680i0000u5z0dm3orlss'; // UPDATED with actual ID from test DB
-
-// Define URLs for nock
 const MOCK_EXTERNAL_IMAGE_URL_BASE = 'http://example.com';
 const MOCK_EXTERNAL_IMAGE_URL_PATH = '/test-image.jpg';
 const MOCK_EXTERNAL_IMAGE_URL = `${MOCK_EXTERNAL_IMAGE_URL_BASE}${MOCK_EXTERNAL_IMAGE_URL_PATH}`;
@@ -49,35 +43,50 @@ const MOCK_URL_NO_FILENAME_BASE = 'http://example.com';
 const MOCK_URL_NO_FILENAME_PATH = '/getimage';
 const MOCK_URL_NO_FILENAME = `${MOCK_URL_NO_FILENAME_BASE}${MOCK_URL_NO_FILENAME_PATH}`;
 
-// const _MOCK_VALID_IMAGE_RECORD_ID = 'new-image-record-id'; // Commented out as unused by linter
-// const MOCK_VALID_IMAGE_RECORD_ID = 'new-image-record-id';
-const API_URL = process.env.TEST_API_URL || 'http://localhost:3000';
+let testApp: TestServer;
 
-// MODIFIED: Use .sequential to run tests in this describe block serially
+vitestBeforeAll(async () => {
+  testApp = await makeTestServer();
+});
+
+vitestAfterAll(async () => {
+  if (testApp) {
+    await testApp.close();
+  }
+});
+
 vitestDescribe.sequential('/api/images/import-by-url POST', () => {
   vitestBeforeEach(async () => {
-    console.log(
-      '[TEST_CASE_SETUP] Clearing tables and creating MOCK_USER_ID (beforeEach)...',
-    );
-    try {
-      // Delete ImageRecords first to avoid FK issues if User deletion doesn't cascade reliably in test env
-      await prisma.imageRecord.deleteMany({});
-      await prisma.user.deleteMany({});
+    mockUserCreate.mockReset();
+    mockUserDeleteMany.mockReset();
+    mockImageRecordCreate.mockReset();
+    mockImageRecordUpdate.mockReset();
+    mockImageRecordDeleteMany.mockReset();
+    // mockGCSUploadFile.mockReset(); // Not used directly anymore
 
-      // Create the specific mock user needed for these tests
-      await prisma.user.create({
+    (mockImageRecordDeleteMany as Mock).mockResolvedValue({ count: 0 });
+    (mockUserDeleteMany as Mock).mockResolvedValue({ count: 0 });
+    (mockUserCreate as Mock).mockImplementation(async (args: any) => args.data);
+
+    // console.log(
+    //   '[TEST_CASE_SETUP] Clearing tables and creating MOCK_USER_ID (beforeEach)...',
+    // );
+    try {
+      await (globalThis as any).__PRISMA__.imageRecord.deleteMany({});
+      await (globalThis as any).__PRISMA__.user.deleteMany({});
+      await (globalThis as any).__PRISMA__.user.create({
         data: {
           id: MOCK_USER_ID,
-          email: `${MOCK_USER_ID}@example.com`, // Ensure email is unique for the user model
-          password: 'testpassword', // Add required fields for User model
+          email: `${MOCK_USER_ID}@example.com`,
+          password: 'testpassword',
           name: 'Mock Test User',
         },
       });
-      console.log(
-        `[TEST_CASE_SETUP] Tables cleared and MOCK_USER_ID ${MOCK_USER_ID} created.`,
-      );
+      // console.log(
+      //   `[TEST_CASE_SETUP] Tables cleared and MOCK_USER_ID ${MOCK_USER_ID} created.`,
+      // );
     } catch (error) {
-      console.error('[TEST_CASE_SETUP] Error in beforeEach setup:', error);
+      // console.error('[TEST_CASE_SETUP] Error in beforeEach setup:', error);
       throw error;
     }
   });
@@ -87,16 +96,16 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
   });
 
   vitestIt('should return 401 if user is not authenticated', async () => {
-    const response = await request(API_URL)
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', 'null')
-      .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+      .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
     vitestExpect(response.status).toBe(401);
     vitestExpect(response.body.error).toBe('Unauthorized');
   });
 
   vitestIt('should return 400 if request body is invalid JSON', async () => {
-    const response = await request(API_URL)
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', MOCK_USER_ID)
       .set('Content-Type', 'application/json')
@@ -108,24 +117,24 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
   vitestIt(
     'should return 400 if externalImageUrl is missing or invalid',
     async () => {
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
-        .send({ externalImageUrl: 'not-a-url' });
+        .send(JSON.stringify({ externalImageUrl: 'not-a-url' }));
       vitestExpect(response.status).toBe(400);
       vitestExpect(response.body.error).toBe('Invalid request body');
     },
   );
 
   vitestIt(
-    'should return 400 if fetching the external image fails (e.g. 404)',
+    'should return 500 if fetching the external image fails (e.g. 404)',
     async () => {
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
-        .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
-        .set('X-Test-Mock-Fetch-Status', '404')
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL) 
+        .set('X-Test-Mock-Fetch-Status', '404') 
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
       vitestExpect(response.status).toBe(500);
       vitestExpect(response.body.error).toBe('Failed to import image by URL');
       vitestExpect(response.body.details).toBe(
@@ -138,31 +147,31 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
     'should return 400 if external image content type is not supported',
     async () => {
       const mockBody = Buffer.from('data');
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
-        .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
-        .set('X-Test-Mock-Fetch-Status', '200')
-        .set('X-Test-Mock-Fetch-Body-Base64', mockBody.toString('base64'))
+        .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL) 
+        .set('X-Test-Mock-Fetch-Status', '200') 
+        .set('X-Test-Mock-Fetch-Body-Base64', mockBody.toString('base64')) 
         .set(
-          'X-Test-Mock-Fetch-Headers',
+          'X-Test-Mock-Fetch-Headers', 
           JSON.stringify({
             'Content-Type': 'image/bmp',
             'Content-Length': mockBody.length.toString(),
           }),
         )
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
       vitestExpect(response.status).toBe(400);
       vitestExpect(response.body.error).toBe(
         'Invalid image type. Allowed types: image/jpeg, image/png, image/gif, image/webp',
       );
     },
   );
-
+  
   vitestIt(
     'should return 400 if external image content-length header exceeds max size',
     async () => {
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -174,7 +183,7 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
             'Content-Length': (6 * 1024 * 1024).toString(),
           }),
         )
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
       vitestExpect(response.status).toBe(400);
       vitestExpect(response.body.error).toBe(
         'Image is too large. Maximum size: 5MB',
@@ -185,7 +194,7 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
   vitestIt(
     'should return 400 if external image buffer exceeds max size',
     async () => {
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -194,7 +203,7 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
           'X-Test-Mock-Fetch-Headers',
           JSON.stringify({ 'Content-Type': 'image/jpeg' }),
         )
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
       vitestExpect(response.status).toBe(400);
       vitestExpect(response.body.error).toBe(
@@ -215,8 +224,24 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
         size: mockImageBuffer.length,
         url: `http://fake-gcs-url.com/${uniqueGcsFilename}`,
       };
+      const mockImageRecordData = {
+        id: 'mock-image-record-id',
+        userId: MOCK_USER_ID,
+        originalUrl: MOCK_EXTERNAL_IMAGE_URL,
+        gcsObjectName: uniqueGcsFilename,
+        gcsBucketName: 'test-bucket',
+        filename: uniqueGcsFilename,
+        contentType: 'image/jpeg',
+        size: mockImageBuffer.length,
+        appServedUrl: `/api/images/serve/mock-image-record-id`,
+        gcsUrl: mockGcsFileData.url,
+      };
 
-      const response = await request(API_URL)
+      // Configure Prisma mocks for success (the route will still interact with these)
+      (mockImageRecordCreate as Mock).mockResolvedValue(mockImageRecordData);
+      (mockImageRecordUpdate as Mock).mockResolvedValue(mockImageRecordData);
+
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -232,29 +257,39 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
             'Content-Length': mockImageBuffer.length.toString(),
           }),
         )
-        .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData))
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        // Add back GCS success header for the route to use
+        .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData)) 
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
-      if (response.status !== 200) {
-        console.log(
-          '[SUCCESS_TEST_FAIL_DETAIL] API Status:',
-          response.status,
-          'Body:',
-          response.body,
-        );
-      }
+      // if (response.status !== 200) {
+      //   console.log(
+      //     '[SUCCESS_TEST_FAIL_DETAIL] API Status:',
+      //     response.status,
+      //     'Body:',
+      //     response.body,
+      //   );
+      // }
       vitestExpect(response.status).toBe(200);
       const jsonBody = response.body;
       vitestExpect(jsonBody.success).toBe(true);
-      vitestExpect(jsonBody.imageRecordId).toBeDefined();
-      vitestExpect(jsonBody.appServedUrl).toContain(jsonBody.imageRecordId);
+      vitestExpect(jsonBody.imageRecordId).toBe(mockImageRecordData.id);
+      vitestExpect(jsonBody.appServedUrl).toContain(mockImageRecordData.id);
       vitestExpect(jsonBody.gcsUrl).toBe(mockGcsFileData.url);
+
+      // We can still assert that Prisma mocks were called as expected
+      vitestExpect(mockImageRecordCreate).toHaveBeenCalled(); 
     },
   );
 
   vitestIt('should return 500 if GCS upload fails', async () => {
     const mockImageBuffer = Buffer.from('mock image data for gcs fail');
-    const response = await request(API_URL)
+    const gcsErrorMessage = 'Simulated GCS Upload Error From Header';
+
+    // Prisma mocks might still be called if GCS fails early, or not. Depends on route logic.
+    // For safety, ensure they are set up to not cause unexpected issues.
+    (mockImageRecordCreate as Mock).mockResolvedValue({ id: 'any-id' }); // Or other suitable resolved value
+
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', MOCK_USER_ID)
       .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -267,30 +302,30 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
           'Content-Length': mockImageBuffer.length.toString(),
         }),
       )
-      .set('X-Test-GCS-Upload-Error', 'Simulated GCS Upload Error From Header')
-      .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+      // Add back GCS error header for the route to use
+      .set('X-Test-GCS-Upload-Error', gcsErrorMessage) 
+      .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
     vitestExpect(response.status).toBe(500);
     vitestExpect(response.body.error).toBe('Failed to import image by URL');
-    vitestExpect(response.body.details).toBe(
-      'Simulated GCS Upload Error From Header',
-    );
+    vitestExpect(response.body.details).toBe(gcsErrorMessage);
   });
 
   vitestIt('should return 500 if Prisma create fails', async () => {
-    const mockImageBuffer = Buffer.from(
-      'mock image data for prisma create fail',
-    );
+    const mockImageBuffer = Buffer.from('mock image data for prisma create fail');
     const randomSuffix = Math.random().toString(36).substring(2, 7);
     const uniqueGcsFilename = `test-prisma-create-fail-${Date.now()}-${randomSuffix}.gif`;
-    const mockGcsFileData = {
+    const mockGcsFileData = { 
       filename: uniqueGcsFilename,
       contentType: 'image/gif',
       size: mockImageBuffer.length,
       url: `some-gcs-url/${uniqueGcsFilename}`,
     };
 
-    const response = await request(API_URL)
+    const prismaCreateError = new Error('Simulated Prisma Create Failed From Mock');
+    (mockImageRecordCreate as Mock).mockRejectedValue(prismaCreateError);
+
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', MOCK_USER_ID)
       .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -303,34 +338,32 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
           'Content-Length': mockImageBuffer.length.toString(),
         }),
       )
-      .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData))
-      .set(
-        'X-Test-Prisma-Create-Error',
-        'Simulated Prisma Create Failed From Header',
-      )
-      .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+      // GCS part should succeed for this test to focus on Prisma failure
+      .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData)) 
+      .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
     vitestExpect(response.status).toBe(500);
     vitestExpect(response.body.error).toBe('Failed to import image by URL');
-    vitestExpect(response.body.details).toBe(
-      'Simulated Prisma Create Failed From Header',
-    );
+    vitestExpect(response.body.details).toBe(prismaCreateError.message);
   });
 
-  vitestIt('should return 500 if Prisma update fails', async () => {
-    const mockImageBuffer = Buffer.from(
-      'mock image data for prisma update fail',
-    );
+  vitestIt('should return 500 if Prisma update fails (if applicable to route logic)', async () => {
+    const mockImageBuffer = Buffer.from('mock image data for prisma update fail');
     const randomSuffix = Math.random().toString(36).substring(2, 7);
     const uniqueGcsFilename = `test-prisma-update-fail-${Date.now()}-${randomSuffix}.webp`;
-    const mockGcsFileData = {
+    const mockGcsFileData = { 
       filename: uniqueGcsFilename,
       contentType: 'image/webp',
       size: mockImageBuffer.length,
       url: `some-gcs-url/${uniqueGcsFilename}`,
     };
+    const mockCreatedImageRecord = { id: 'temp-id', userId: MOCK_USER_ID, originalUrl: MOCK_EXTERNAL_IMAGE_URL, gcsObjectName: 'obj', gcsBucketName: 'bkt', filename:'fn', contentType:'type', size:100 };
 
-    const response = await request(API_URL)
+    (mockImageRecordCreate as Mock).mockResolvedValue(mockCreatedImageRecord); 
+    const prismaUpdateError = new Error('Simulated Prisma Update Failed From Mock');
+    (mockImageRecordUpdate as Mock).mockRejectedValue(prismaUpdateError);
+
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', MOCK_USER_ID)
       .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
@@ -344,17 +377,11 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
         }),
       )
       .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData))
-      .set(
-        'X-Test-Prisma-Update-Error',
-        'Simulated Prisma Update Failed From Header',
-      )
-      .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+      .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
     vitestExpect(response.status).toBe(500);
     vitestExpect(response.body.error).toBe('Failed to import image by URL');
-    vitestExpect(response.body.details).toBe(
-      'Simulated Prisma Update Failed From Header',
-    );
+    vitestExpect(response.body.details).toBe(prismaUpdateError.message); 
   });
 
   vitestIt('should extract filename correctly from complex URL', async () => {
@@ -367,8 +394,12 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
       contentType: 'image/jpeg',
       size: mockBody.length,
     };
+    const mockImageRecordData = { id: 'img-complex', gcsUrl: mockGcsFileData.url, userId: MOCK_USER_ID, originalUrl: MOCK_COMPLEX_IMAGE_URL, gcsObjectName: 'obj', gcsBucketName: 'bkt', filename:'fn', contentType:'type', size:100, appServedUrl: 'url' };
+    
+    (mockImageRecordCreate as Mock).mockResolvedValue(mockImageRecordData);
+    (mockImageRecordUpdate as Mock).mockResolvedValue(mockImageRecordData);
 
-    const response = await request(API_URL)
+    const response = await request(testApp.url)
       .post('/api/images/import-by-url')
       .set('X-Test-User-Id', MOCK_USER_ID)
       .set('X-Test-Mock-Fetch-Url', MOCK_COMPLEX_IMAGE_URL)
@@ -382,10 +413,8 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
         }),
       )
       .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData))
-      .send({ externalImageUrl: MOCK_COMPLEX_IMAGE_URL });
-    if (response.status !== 200) {
-      console.log('[COMPLEX_URL_TEST_FAIL_DETAIL]', response.body);
-    }
+      .send(JSON.stringify({ externalImageUrl: MOCK_COMPLEX_IMAGE_URL }));
+    
     vitestExpect(response.status).toBe(200);
     const jsonBody = response.body;
     vitestExpect(jsonBody.success).toBe(true);
@@ -404,8 +433,12 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
         contentType: 'image/png',
         size: mockBody.length,
       };
+      const mockImageRecordData = { id: 'img-content-disp', gcsUrl: mockGcsFileData.url, userId: MOCK_USER_ID, originalUrl: MOCK_URL_NO_FILENAME, gcsObjectName: 'obj', gcsBucketName: 'bkt', filename:'fn', contentType:'type', size:100, appServedUrl: 'url' };
+      
+      (mockImageRecordCreate as Mock).mockResolvedValue(mockImageRecordData);
+      (mockImageRecordUpdate as Mock).mockResolvedValue(mockImageRecordData);
 
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('X-Test-Mock-Fetch-Url', MOCK_URL_NO_FILENAME)
@@ -420,32 +453,30 @@ vitestDescribe.sequential('/api/images/import-by-url POST', () => {
           }),
         )
         .set('X-Test-GCS-Upload-Success-Data', JSON.stringify(mockGcsFileData))
-        .send({ externalImageUrl: MOCK_URL_NO_FILENAME });
-      if (response.status !== 200) {
-        console.log('[CONTENT_DISP_TEST_FAIL_DETAIL]', response.body);
-      }
+        .send(JSON.stringify({ externalImageUrl: MOCK_URL_NO_FILENAME }));
+      
       vitestExpect(response.status).toBe(200);
       const jsonBody = response.body;
       vitestExpect(jsonBody.success).toBe(true);
       vitestExpect(jsonBody.imageRecordId).toBeDefined();
     },
   );
-
+  
   vitestIt(
     'should return 500 if fetching external image causes a network error (simulated by header)',
     async () => {
-      const response = await request(API_URL)
+      const response = await request(testApp.url)
         .post('/api/images/import-by-url')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('X-Test-Mock-Fetch-Url', MOCK_EXTERNAL_IMAGE_URL)
-        .set('X-Test-Mock-Fetch-Status', '503')
-        .send({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL });
+        .set('X-Test-Mock-Fetch-Status', '503') 
+        .send(JSON.stringify({ externalImageUrl: MOCK_EXTERNAL_IMAGE_URL }));
 
       vitestExpect(response.status).toBe(500);
       vitestExpect(response.body.error).toBe('Failed to import image by URL');
-      vitestExpect(response.body.details).toBe(
+      vitestExpect(response.body.details).toBe( 
         'Failed to fetch image. Status: 503',
       );
     },
   );
-});
+}); 

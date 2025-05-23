@@ -11,10 +11,10 @@ import {
   mockUserCreate,
   mockFolderUpdate, // Ensure this is imported if used
   mockUserFindUnique // Ensure this is imported if used
-} from '../../../helpers/apiTestSetup'; // Import centralized mocks and MOCK_USER_ID
+} from '../../../../helpers/apiTestSetup'; // Adjusted path for new location
 import request from 'supertest';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, Mock } from 'vitest'; // Mock type might not be needed here anymore if not casting
-import { makeTestServer, TestServer } from '../../../helpers/testServer';
+import { makeTestServer, TestServer } from '../../../../helpers/testServer'; // Adjusted path for new location
 
 // Local vi.fn() declarations and vi.mock for @/lib/prisma are now removed, 
 // as they are handled by apiTestSetup.ts
@@ -232,4 +232,4 @@ describe('Folder API Route Handlers /api/folders', () => {
       expect(response.body.error).toBe('Failed to create folder.'); 
     });
   });
-});
+}); 
