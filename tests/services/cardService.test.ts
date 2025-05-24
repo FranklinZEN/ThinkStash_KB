@@ -100,8 +100,7 @@ describe('cardService', () => {
       expect(mockKnowledgeCardFindUnique).toHaveBeenCalledTimes(2);
       expect(mockKnowledgeCardUpdate).toHaveBeenCalledWith({
         where: { id: MOCK_CARD_ID, userId: MOCK_USER_ID },
-        data: { title: 'Updated Title' }, 
-        include: { tags: true, folder: true },
+        data: { title: 'Updated Title' },
       });
       expect(result.success).toBe(true);
       expect(result.data).toEqual(expectedCardAfterUpdateAndRefetch);
@@ -150,7 +149,6 @@ describe('cardService', () => {
             ],
           },
         },
-        include: { tags: true, folder: true },
       });
       expect(result.success).toBe(true);
       expect(result.data).toEqual(expectedCardAfterUpdate);

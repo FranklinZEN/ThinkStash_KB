@@ -16,6 +16,12 @@ import '@blocknote/mantine/style.css';
 
 // --- Helper functions ---
 const handleFileUpload = async (file: File): Promise<string> => {
+  console.log(
+    '%c[BlockNoteEditorComponent] DRAG-AND-DROP TEST: handleFileUpload CALLED with file:',
+    'color: red; font-weight: bold;',
+    file.name,
+    file.type,
+  );
   const formData = new FormData();
   formData.append('file', file);
   try {
@@ -89,6 +95,10 @@ async function handlePastedImageURL(
     typeof appSchema.styleSchema
   >,
 ): Promise<void> {
+  console.log(
+    '[BlockNoteEditorComponent] handlePastedImageURL triggered with text:',
+    pastedText.substring(0, 100) + '...',
+  );
   try {
     const response = await fetch('/api/images/import-by-url', {
       method: 'POST',
@@ -184,7 +194,8 @@ export default function BlockNoteEditorComponent({
 }: BlockNoteEditorComponentProps) {
   const editorOptions = {
     schema: appSchema,
-    initialContent: initialContent,
+    initialContent:
+      initialContent && initialContent.length > 0 ? initialContent : undefined,
     uploadFile: handleFileUpload,
     pasteHandler: ({
       event,

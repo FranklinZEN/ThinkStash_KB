@@ -27,6 +27,90 @@ import {
   PartialBlock,
 } from '@blocknote/core';
 
+// Helper function to check if editor content is effectively empty
+const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
+  if (!blocks || blocks.length === 0) return true;
+  if (blocks.length === 1) {
+    const block = blocks[0];
+    if (block.type === 'paragraph') {
+      if (
+        !block.content ||
+        (Array.isArray(block.content) && block.content.length === 0)
+      )
+        return true;
+      if (typeof block.content === 'string' && block.content.trim() === '')
+        return true;
+
+      if (Array.isArray(block.content)) {
+        return block.content.every((inlineItem) => {
+          if (typeof inlineItem === 'string') {
+            return inlineItem.trim() === '';
+          }
+
+          if (
+            typeof inlineItem === 'object' &&
+            inlineItem !== null &&
+            'type' in inlineItem
+          ) {
+            const itemWithType = inlineItem as {
+              type: string;
+              [key: string]: unknown;
+            };
+
+            if (itemWithType.type === 'text') {
+              const text =
+                typeof itemWithType.text === 'string' ? itemWithType.text : '';
+              const styles =
+                typeof itemWithType.styles === 'object' &&
+                itemWithType.styles !== null
+                  ? itemWithType.styles
+                  : {};
+              return text.trim() === '' && Object.keys(styles).length === 0;
+            }
+            if (itemWithType.type === 'link') {
+              const linkContent = Array.isArray(itemWithType.content)
+                ? itemWithType.content
+                : [];
+              return linkContent.every((linkChild) => {
+                if (typeof linkChild === 'string')
+                  return linkChild.trim() === '';
+                if (
+                  typeof linkChild === 'object' &&
+                  linkChild !== null &&
+                  'type' in linkChild
+                ) {
+                  const childWithType = linkChild as {
+                    type: string;
+                    [key: string]: unknown;
+                  };
+                  if (childWithType.type === 'text') {
+                    const text =
+                      typeof childWithType.text === 'string'
+                        ? childWithType.text
+                        : '';
+                    const styles =
+                      typeof childWithType.styles === 'object' &&
+                      childWithType.styles !== null
+                        ? childWithType.styles
+                        : {};
+                    return (
+                      text.trim() === '' && Object.keys(styles).length === 0
+                    );
+                  }
+                }
+                return false;
+              });
+            }
+            return false;
+          }
+          return false;
+        });
+      }
+    }
+  }
+  return false;
+};
+
 const BlockNoteEditorComponent = dynamic(
   () => import('@/components/BlockNoteEditorComponent'),
   {
@@ -100,6 +184,9 @@ export default function NewCardPage() {
     event.preventDefault();
     setIsSubmitting(true);
 
+    // Get current content directly from editor instance if available
+    const currentBlocks = _editor ? _editor.document : editorContent;
+
     if (!title.trim()) {
       toast({
         title: 'Title is required',
@@ -111,14 +198,30 @@ export default function NewCardPage() {
       return;
     }
 
+    // Check for empty content using currentBlocks from editor instance
+    if (isEditorEmpty(currentBlocks)) {
+      toast({
+        title: 'Content cannot be empty',
+        description: 'Please add some content to your card.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      setIsSubmitting(false);
+      return;
+    }
+
     const cardData = {
       title: title.trim(),
-      content: editorContent || [],
+      content: currentBlocks || [], // Use currentBlocks from editor instance
       tags: keywords.map((kw) => (kw.startsWith('#') ? kw.substring(1) : kw)),
       folderId: null,
     };
 
-    console.log('Creating card with data:', cardData);
+    console.log('Creating card with data (content stringified):', {
+      ...cardData,
+      content: JSON.stringify(cardData.content),
+    });
 
     try {
       const response = await fetch('/api/cards', {

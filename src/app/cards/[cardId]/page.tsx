@@ -41,6 +41,92 @@ import {
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
 
+// Helper function to check if editor content is effectively empty
+const isEditorEmpty = (blocks: PartialBlock[] | undefined | null): boolean => {
+  if (!blocks || blocks.length === 0) return true;
+  if (blocks.length === 1) {
+    const block = blocks[0];
+    if (block.type === 'paragraph') {
+      if (
+        !block.content ||
+        (Array.isArray(block.content) && block.content.length === 0)
+      )
+        return true;
+      if (typeof block.content === 'string' && block.content.trim() === '')
+        return true;
+
+      if (Array.isArray(block.content)) {
+        return block.content.every((inlineItem) => {
+          if (typeof inlineItem === 'string') {
+            return inlineItem.trim() === '';
+          }
+
+          if (
+            typeof inlineItem === 'object' &&
+            inlineItem !== null &&
+            'type' in inlineItem
+          ) {
+            const itemWithType = inlineItem as {
+              type: string;
+              [key: string]: unknown;
+            };
+
+            if (itemWithType.type === 'text') {
+              const text =
+                typeof itemWithType.text === 'string' ? itemWithType.text : '';
+              const styles =
+                typeof itemWithType.styles === 'object' &&
+                itemWithType.styles !== null
+                  ? itemWithType.styles
+                  : {};
+              return text.trim() === '' && Object.keys(styles).length === 0;
+            }
+            if (itemWithType.type === 'link') {
+              const linkContent = Array.isArray(itemWithType.content)
+                ? itemWithType.content
+                : [];
+              return linkContent.every((linkChild) => {
+                if (typeof linkChild === 'string')
+                  return linkChild.trim() === '';
+                if (
+                  typeof linkChild === 'object' &&
+                  linkChild !== null &&
+                  'type' in linkChild
+                ) {
+                  const childWithType = linkChild as {
+                    type: string;
+                    [key: string]: unknown;
+                  };
+                  if (childWithType.type === 'text') {
+                    const text =
+                      typeof childWithType.text === 'string'
+                        ? childWithType.text
+                        : '';
+                    const styles =
+                      typeof childWithType.styles === 'object' &&
+                      childWithType.styles !== null
+                        ? childWithType.styles
+                        : {};
+                    return (
+                      text.trim() === '' && Object.keys(styles).length === 0
+                    );
+                  }
+                }
+                return false;
+              });
+            }
+            return false; // Other object types (mentions, custom inline) mean not empty
+          }
+          // If inlineItem is not a string and not an object with a 'type' property,
+          // it's an unknown structure. Treat as non-empty to be safe, or log/error.
+          return false;
+        });
+      }
+    }
+  }
+  return false;
+};
+
 // Dynamically import the editor component with SSR disabled (similar to NewCardPage)
 const BlockNoteEditorComponent = dynamic(
   () => import('@/components/BlockNoteEditorComponent'),
@@ -242,7 +328,10 @@ export default function CardDetailPage() {
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
 
-    const currentContent = editor.document;
+    // Use editorContent which is updated by onContentUpdate callback for the most current state.
+    // Fallback to editor.document if editorContent is somehow not set, though it should be.
+    const currentContentToValidate = editorContent || editor.document;
+
     const originalContent = card.content;
 
     // Basic check for changes (more robust checks might compare JSON deeply)
@@ -275,7 +364,7 @@ export default function CardDetailPage() {
       }
     }
     const hasContentChanged =
-      JSON.stringify(currentContent) !==
+      JSON.stringify(currentContentToValidate) !==
       JSON.stringify(originalContentForComparison || []);
 
     // Check if keywords have changed
@@ -297,13 +386,24 @@ export default function CardDetailPage() {
       return;
     }
 
+    // Check for empty content before proceeding with save
+    if (isEditorEmpty(currentContentToValidate)) {
+      toast({
+        title: 'Content cannot be empty',
+        description: 'Please add some content to your card.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return; // Do not proceed with saving
+    }
+
     const updatePayload: CardUpdatePayload = {};
     if (hasTitleChanged) updatePayload.title = title.trim();
 
-    // Correctly use contentToSave and the original hasContentChanged
-    const contentToSave = editorContent || (editor ? editor.document : null);
-    if (hasContentChanged && contentToSave) {
-      updatePayload.content = contentToSave as BlockNoteDocument;
+    // Use currentContentToValidate for the payload if content has changed
+    if (hasContentChanged && currentContentToValidate) {
+      updatePayload.content = currentContentToValidate as BlockNoteDocument;
     }
 
     if (hasKeywordsChanged) updatePayload.tags = keywords;

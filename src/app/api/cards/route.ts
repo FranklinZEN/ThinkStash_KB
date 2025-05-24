@@ -151,14 +151,17 @@ export async function POST(req: NextRequest) {
       if (!folder) {
         return NextResponse.json(
           { error: 'Folder not found or access denied.' },
-          { status: 404 }, // Or 400 if considered a bad request due to invalid folderId
+          { status: 404 },
         );
       }
     }
 
+    // Initial content for creation (will be processed for images shortly)
+    const initialContentForDb = content || [];
+
     const createData: Prisma.KnowledgeCardCreateInput = {
       title,
-      content: content || [], // Default to empty array if content is undefined/null after validation
+      content: initialContentForDb, // Store the initial valid content (e.g., BlockNote JSON)
       user: {
         connect: { id: session.user.id },
       },
@@ -177,7 +180,7 @@ export async function POST(req: NextRequest) {
       createData.folder = { connect: { id: folderId } };
     }
 
-    let cardToReturn;
+    // 1. Create the card with initial content
     const newCard = await prisma.knowledgeCard.create({
       data: createData,
       include: {
@@ -186,43 +189,69 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    cardToReturn = { ...newCard };
+    let finalContentForDb = newCard.content; // Default to what was just created
+    let cardDataForResponse = { ...newCard };
 
-    // After creating the card, process its content for images
-    // newCard.content here is the validated (and potentially defaulted to []) content
+    // 2. Process content for image associations (if content exists)
     if (
-      newCard.content &&
-      Array.isArray(newCard.content) &&
-      newCard.content.length > 0
+      initialContentForDb && // Use the content that was intended for the DB
+      Array.isArray(initialContentForDb) &&
+      initialContentForDb.length > 0
     ) {
       try {
-        const modifiedContent = await handleCardImageAssociations(
-          newCard.content, // Pass the potentially empty but validated content
+        const imageAssociationResult = await handleCardImageAssociations(
+          initialContentForDb,
           newCard.id,
           session.user.id,
         );
 
-        // Only update if modifiedContent is different and not null/undefined
-        if (
-          modifiedContent &&
-          JSON.stringify(modifiedContent) !== JSON.stringify(newCard.content)
-        ) {
-          const updatedCardWithProcessedImages =
+        // If processedContent is null or undefined, default to an empty array,
+        // which is a valid Prisma.JsonValue for BlockNote content.
+        finalContentForDb = imageAssociationResult.processedContent ?? [];
+
+        // Update the card with the processed content (which might have new appServedUrls)
+        // and link active images
+        if (finalContentForDb) {
+          // Ensure finalContentForDb is not null/undefined
+          const updatedCardWithProcessedContent =
             await prisma.knowledgeCard.update({
               where: { id: newCard.id },
-              data: { content: modifiedContent },
+              data: { content: finalContentForDb }, // Save the actual BlockNoteDocument
               include: {
                 tags: true,
                 folder: true,
               },
             });
-          cardToReturn = { ...updatedCardWithProcessedImages };
+          cardDataForResponse = { ...updatedCardWithProcessedContent }; // Update response data
           console.log(
-            `[POST /api/cards] Updated card ${newCard.id} with processed image content.`,
+            `[POST /api/cards] Updated card ${newCard.id} with processed image content in DB.`,
           );
         } else {
+          // This case implies image processing resulted in empty/null content, which should be handled.
+          // For now, we assume processedContent would be at least an empty array if input was valid.
+          console.warn(
+            `[POST /api/cards] Image processing for ${newCard.id} resulted in null/undefined content. Original content (or empty array) remains in DB.`,
+          );
+          // Ensure cardDataForResponse.content is consistent if it became null
+          if (
+            finalContentForDb === null &&
+            cardDataForResponse.content !== null
+          ) {
+            cardDataForResponse.content = null;
+          }
+        }
+
+        // Link active images found during processing
+        if (imageAssociationResult.activeImageRecordIds.length > 0) {
+          await prisma.imageRecord.updateMany({
+            where: {
+              id: { in: imageAssociationResult.activeImageRecordIds },
+              userId: session.user.id,
+            },
+            data: { knowledgeCardId: newCard.id },
+          });
           console.log(
-            `[POST /api/cards] Image associations checked for new card ${newCard.id}. No content modifications were necessary.`,
+            `[POST /api/cards] Linked ${imageAssociationResult.activeImageRecordIds.length} images to new card ${newCard.id}.`,
           );
         }
       } catch (imageError) {
@@ -230,9 +259,26 @@ export async function POST(req: NextRequest) {
           `[POST /api/cards] Error processing images for new card ${newCard.id}:`,
           imageError,
         );
+        // Card is already created, but image processing failed.
+        // The cardDataForResponse will contain the initially created card.
       }
+    } else {
+      console.log(
+        `[POST /api/cards] No initial content provided for card ${newCard.id}, skipping image processing.`,
+      );
     }
-    return NextResponse.json(cardToReturn, { status: 201 });
+    // Ensure the content in the response is the final processed content
+    // This step is crucial if cardDataForResponse was not updated due to image processing failing or content being null
+    if (cardDataForResponse.content !== finalContentForDb) {
+      // This check is a bit tricky because newCard.content is Prisma.JsonValue
+      // and finalContentForDb can also be Prisma.JsonValue. An explicit update might be safer.
+      cardDataForResponse = {
+        ...cardDataForResponse,
+        content: finalContentForDb, // Set the correct content for the response
+      };
+    }
+
+    return NextResponse.json(cardDataForResponse, { status: 201 });
   } catch (error) {
     console.error('Error creating card:', error);
     if (error instanceof SyntaxError) {
