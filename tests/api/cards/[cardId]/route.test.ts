@@ -8,47 +8,15 @@ import {
   mockKnowledgeCardFindUnique,
   mockKnowledgeCardUpdate,
   mockKnowledgeCardDelete,
-  mockUserFindUnique,      // For user validation if any in service
-  mockFolderFindUnique,    // For folder validation during card update
-  // Potentially image record mocks if card content processing involves them
+  mockUserFindUnique,      
+  mockFolderFindUnique,    
   mockImageRecordCreate,
   mockImageRecordUpdate,
   mockImageRecordDeleteMany,
-  // mockTransaction // If transactions are used in cardService, though not immediately obvious
 } from '../../../../tests/helpers/apiTestSetup';
 import { describe, it, expect, vi, beforeEach, afterAll, beforeAll, Mock } from 'vitest';
-import { UpdateCardData } from '@/lib/services/cardService'; // Assuming this type is still relevant
+import { UpdateCardData } from '@/lib/services/cardService'; 
 // import { getServerSession } from 'next-auth/next'; // No longer needed for direct mocking here
-
-// ADD THIS LOG 
-console.log('[Card Test File DEBUG] mockKnowledgeCardFindUnique upon import:', typeof mockKnowledgeCardFindUnique, mockKnowledgeCardFindUnique);
-console.log('[Card Test File DEBUG] mockKnowledgeCardUpdate upon import:', typeof mockKnowledgeCardUpdate, mockKnowledgeCardUpdate);
-console.log('[Card Test File DEBUG] mockKnowledgeCardDelete upon import:', typeof mockKnowledgeCardDelete, mockKnowledgeCardDelete);
-
-// REMOVE vi.mock for next-auth/next
-// vi.mock('next-auth/next', async (importOriginal) => {
-//   const actual = await importOriginal<typeof import('next-auth/next')>();
-//   return {
-//     ...actual,
-//     getServerSession: vi.fn(), 
-//   };
-// });
-
-// const mockGetServerSessionTyped = getServerSession as ReturnType<typeof vi.fn>; // Removed
-
-const MOCK_CARD_ID = 'clxkz1g5g000008l4g3z3h2j9'; 
-const MOCK_INVALID_CARD_ID = 'invalid-cuid-format'; 
-
-const validUpdatePayload: UpdateCardData = {
-  title: 'Updated Test Card Title',
-  content: [{
-    id: 'block-id-for-test',
-    type: 'paragraph', 
-    content: [{ type: 'text', text: 'Updated content.' }] 
-  }],
-  folderId: null, 
-  tags: ['updated', 'vitest'],
-};
 
 let testServer: TestServer;
 let currentTestServerUrl: string;
@@ -56,7 +24,6 @@ let currentTestServerUrl: string;
 beforeAll(async () => {
   testServer = await makeTestServer();
   currentTestServerUrl = testServer.url;
-  // Ensure the Next.js app within makeTestServer uses the __PRISMA_INSTANCE__ set by vitest.setup.ts
 });
 
 afterAll(async () => {
@@ -64,6 +31,21 @@ afterAll(async () => {
     await testServer.close();
   }
 });
+
+// ADD THIS LOG 
+// console.log('[Card Test File DEBUG] mockKnowledgeCardFindUnique upon import:', typeof mockKnowledgeCardFindUnique, mockKnowledgeCardFindUnique);
+// console.log('[Card Test File DEBUG] mockKnowledgeCardUpdate upon import:', typeof mockKnowledgeCardUpdate, mockKnowledgeCardUpdate);
+// console.log('[Card Test File DEBUG] mockKnowledgeCardDelete upon import:', typeof mockKnowledgeCardDelete, mockKnowledgeCardDelete);
+
+const MOCK_CARD_ID = 'clxkz1g5g000008l4g3z3h2j9'; 
+const MOCK_INVALID_CARD_ID = 'invalid-cuid-format'; 
+
+const validUpdatePayload: UpdateCardData = {
+  title: 'Updated Test Card Title',
+  content: [{ id: 'block-id-for-test', type: 'paragraph', content: [{ type: 'text', text: 'Updated content.' }] }],
+  folderId: null, 
+  tags: ['updated', 'vitest'],
+};
 
 describe('/api/cards/[cardId] API Route Handlers', () => {
   beforeEach(() => {
@@ -79,6 +61,7 @@ describe('/api/cards/[cardId] API Route Handlers', () => {
     // (getServerSession as Mock).mockClear(); // No longer needed if not mocking directly in test
   });
 
+  // All tests below will use currentTestServerUrl derived from process.env.TEST_SERVER_URL
   describe('GET handler', () => {
     it('should return 401 if user is not authenticated', async () => {
       // (getServerSession as Mock).mockResolvedValue(null); // No longer needed

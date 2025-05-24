@@ -197,7 +197,6 @@ export async function POST(req: NextRequest) {
     ) {
       try {
         const modifiedContent = await handleCardImageAssociations(
-          prisma,
           newCard.content, // Pass the potentially empty but validated content
           newCard.id,
           session.user.id,

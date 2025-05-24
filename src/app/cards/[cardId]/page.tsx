@@ -342,10 +342,16 @@ export default function CardDetailPage() {
         });
         // router.refresh(); // Keep this commented out for now
       } else {
+        // Log the detailed validation errors if available
+        if (updatedCardData?.details) {
+          console.error('Validation Details:', updatedCardData.details);
+        }
         const errorMsg =
           updatedCardData?.message ||
           updatedCardData?.error ||
-          'Failed to update card';
+          (updatedCardData?.details
+            ? JSON.stringify(updatedCardData.details)
+            : 'Failed to update card');
         throw new Error(errorMsg);
       }
     } catch (err: unknown) {

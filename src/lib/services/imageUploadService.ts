@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'; // Remove Prisma
+import prisma from '@/lib/prisma'; // <<< ADDED IMPORT
 import { uploadFile, UploadedFile as GCSUploadedFile } from '@/lib/gcs';
 
 // Define constants for validation - can be shared or kept here
@@ -28,17 +28,12 @@ export interface ImageUploadResult {
   status?: number; // HTTP status code for the route to use
 }
 
-// Updated to use indexed access types from PrismaClient
-export interface ImageRecordPrismaSubset {
-  imageRecord: {
-    create: PrismaClient['imageRecord']['create'];
-    update: PrismaClient['imageRecord']['update'];
-  };
-}
+// Updated to use indexed access types from PrismaClient (NO LONGER NEEDED if service uses imported prisma)
+// export interface ImageRecordPrismaSubset { ... }
 
 export async function handleImageUploadLogic(
   input: ImageUploadInput,
-  prismaInstance: PrismaClient, // Changed to PrismaClient
+  // prismaInstance: PrismaClient, // <<< REMOVED PARAM
 ): Promise<ImageUploadResult> {
   console.log(
     '[imageUploadService] Processing image upload for user:',
@@ -90,7 +85,8 @@ export async function handleImageUploadLogic(
 
     // Create ImageRecord in the database
     console.log('[imageUploadService] Creating ImageRecord...');
-    const newImageRecord = await prismaInstance.imageRecord.create({
+    const newImageRecord = await prisma.imageRecord.create({
+      // Use imported prisma
       data: {
         userId: input.userId,
         gcsPath: gcsUploadResult.filename, // filename from GCS upload result
@@ -119,7 +115,8 @@ export async function handleImageUploadLogic(
     const appServedUrl = `/api/images/serve/${newImageRecord.id}`;
 
     // Update ImageRecord with the correct appServedUrl
-    const updatedImageRecord = await prismaInstance.imageRecord.update({
+    const updatedImageRecord = await prisma.imageRecord.update({
+      // Use imported prisma
       where: { id: newImageRecord.id },
       data: { appServedUrl: appServedUrl },
       select: { id: true, appServedUrl: true },

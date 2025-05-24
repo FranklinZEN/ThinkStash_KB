@@ -64,7 +64,10 @@ export const HeadingBlockSchema = BaseBlockSchema.extend({
   type: z.literal('heading'),
   props: z
     .object({
-      level: z.enum(['1', '2', '3', '4', '5', '6']).optional(), // BlockNote uses strings for levels
+      level: z
+        .union([z.number().min(1).max(6), z.string().regex(/^[1-6]$/)])
+        .transform((val) => String(val))
+        .optional(), // Accept number or string '1'-'6', transform to string, keep optional
       textAlignment: z.string().optional(),
       backgroundColor: z.string().optional(),
     })
@@ -200,11 +203,9 @@ export const CardContentSchema = z.array(BlockSchema);
 // Zod schema for validating metadata of an uploaded file
 export const UploadedFileMetadataSchema = z.object({
   name: z.string().min(1, { message: 'File name cannot be empty.' }),
-  type: z
-    .string()
-    .regex(/^image\/(jpeg|png|gif|webp)$/, {
-      message: 'Invalid image type. Only JPEG, PNG, GIF, WEBP are allowed.',
-    }),
+  type: z.string().regex(/^image\/(jpeg|png|gif|webp)$/, {
+    message: 'Invalid image type. Only JPEG, PNG, GIF, WEBP are allowed.',
+  }),
   size: z
     .number()
     .max(5 * 1024 * 1024, { message: 'File size cannot exceed 5MB.' }),

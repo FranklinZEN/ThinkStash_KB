@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { z } from 'zod';
@@ -65,7 +64,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const result = await getFoldersLogic(userId, prisma);
+  const result = await getFoldersLogic(userId);
   // console.timeEnd('[GET /api/folders] Total Handler');
 
   if (result.success) {
@@ -126,7 +125,7 @@ export async function POST(request: NextRequest) {
     parentId: validatedData.parentId,
   };
 
-  const result = await createFolderLogic(serviceInput, prisma);
+  const result = await createFolderLogic(serviceInput);
 
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status || 201 });

@@ -1,9 +1,10 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
-import tsconfigPaths from 'vite-tsconfig-paths';
+import tsconfigPaths from 'vite-tsconfig-paths'; // <<< UNCOMMENTED
+import path from 'path'; // Import path module
 
 export default defineConfig({
-  plugins: [react(), tsconfigPaths()],
+  plugins: [react(), tsconfigPaths()], // <<< RE-ADDED tsconfigPaths()
   test: {
     globals: true,
     environment: 'happy-dom', // Default environment, can be overridden per-file
@@ -57,6 +58,16 @@ export default defineConfig({
         // 'src/app/page.tsx',     // Example: if page is simple
       ],
     },
+    // alias: { // <<< TEMPORARILY COMMENT OUT THIS BLOCK
+    //   '@/': path.resolve(__dirname, './src'),
+    //   '@/components/': path.resolve(__dirname, './src/components'),
+    //   '@/app/': path.resolve(__dirname, './src/app'),
+    //   '@/lib/': path.resolve(__dirname, './src/lib'),
+    //   '@/styles/': path.resolve(__dirname, './src/styles'),
+    //   '@/public/': path.resolve(__dirname, './public'),
+    //   '@/tests/': path.resolve(__dirname, './tests'), 
+    //   '@/mocks/': path.resolve(__dirname, './src/mocks'),
+    // },
     // Optional: environment options for happy-dom or jsdom
     // environmentOptions: {
     //   happyDOM: { /* happy-dom specific options */ }

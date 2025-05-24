@@ -5,7 +5,6 @@ import {
   handleImageUploadLogic,
   ImageUploadInput,
 } from '@/lib/services/imageUploadService';
-import prisma from '@/lib/prisma'; // Import the actual prisma instance
 // import { z } from 'zod'; // Removed unused import
 import { UploadedFileMetadataSchema } from '@/lib/validators/editorValidators'; // Import the new schema
 
@@ -90,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     // Call the service function
     console.log('[/api/upload/image] Calling imageUploadService...');
-    const result = await handleImageUploadLogic(serviceInput, prisma);
+    const result = await handleImageUploadLogic(serviceInput);
     console.log('[/api/upload/image] imageUploadService result:', result);
 
     if (result.success) {

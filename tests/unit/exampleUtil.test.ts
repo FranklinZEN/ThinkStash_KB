@@ -1,4 +1,4 @@
-import { add } from './exampleUtil';
+import { add } from '@/src/lib/exampleUtil'; // ALIAS
 
 describe('exampleUtil', () => {
   it('should add two numbers correctly', () => {

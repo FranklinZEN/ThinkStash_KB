@@ -1,8 +1,10 @@
 /**
  * @vitest-environment node
  */
+import request from 'supertest';
+import { makeTestServer, TestServer } from '@/tests/helpers/testServer';
 import {
-  MOCK_USER_ID, // Using the shared MOCK_USER_ID
+  MOCK_USER_ID,
   mockFolderFindMany,
   mockFolderCreate,
   mockFolderFindUnique,
@@ -11,19 +13,45 @@ import {
   mockUserCreate,
   mockFolderUpdate, // Ensure this is imported if used
   mockUserFindUnique // Ensure this is imported if used
-} from '../../../tests/helpers/apiTestSetup'; // Corrected path
-import request from 'supertest';
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll, Mock } from 'vitest'; // Mock type might not be needed here anymore if not casting
-import { makeTestServer, TestServer } from '../../../tests/helpers/testServer'; // Corrected path
+} from '@/tests/helpers/apiTestSetup'; // USE ALIAS
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll, Mock } from 'vitest';
 
 let currentTestServerUrl: string;
-let testServerInstance: TestServer; // To hold the server instance for closing
+let testServerInstance: TestServer;
 
 beforeAll(async () => {
   console.log('[folders/route.test.ts beforeAll] Starting test server...');
   testServerInstance = await makeTestServer(); 
   currentTestServerUrl = testServerInstance.url;
   console.log(`[folders/route.test.ts beforeAll] Test server started on ${currentTestServerUrl}`);
+
+  // Initial mock setup from before, can be consolidated if this beforeEach is too crowded
+  mockFolderFindMany.mockReset();
+  mockFolderCreate.mockReset();
+  mockFolderFindUnique.mockReset();
+  mockFolderDeleteMany.mockReset(); 
+  mockFolderUpdate.mockReset();
+  mockUserDeleteMany.mockReset();   
+  mockUserCreate.mockReset();       
+  mockUserFindUnique.mockReset();
+
+  (mockFolderDeleteMany as Mock).mockResolvedValue({ count: 0 });
+  (mockUserDeleteMany as Mock).mockResolvedValue({ count: 0 });
+  (mockUserCreate as Mock).mockImplementation(async (args: any) => args.data );
+  (mockFolderFindUnique as Mock).mockResolvedValue(null); // Default for parent check
+
+  const prismaMock = (globalThis as any).__PRISMA_INSTANCE__;
+  if (!prismaMock) throw new Error('__PRISMA_INSTANCE__ not found on globalThis in beforeAll for folder tests');
+  await prismaMock.folder.deleteMany({}); 
+  await prismaMock.user.deleteMany({});   
+  await prismaMock.user.create({        
+    data: {
+      id: MOCK_USER_ID,
+      email: `${MOCK_USER_ID}@example.com`, 
+      password: 'testpassword', 
+      name: 'Mock Folders Test User',
+    },
+  });
 });
 
 afterAll(async () => {
@@ -34,47 +62,15 @@ afterAll(async () => {
   }
 });
 
-// Local vi.fn() declarations and vi.mock for @/lib/prisma are now removed, 
-// as they are handled by apiTestSetup.ts
-
-// ----- 3. Import the MOCKED prisma client AFTER vi.mock (handled by apiTestSetup) -----
-// import prisma from '@/lib/prisma'; // No longer needed here due to global injection
-
-// const MOCK_USER_ID_FOLDERS = 'cmazq680i0000u5z0dm3orlss'; // Replaced by MOCK_USER_ID from apiTestSetup
-
 describe('Folder API Route Handlers /api/folders', () => {
-  beforeEach(async () => {
-    // Reset all top-level mock functions
-    mockFolderFindMany.mockReset();
-    mockFolderCreate.mockReset();
-    mockFolderFindUnique.mockReset();
-    mockFolderDeleteMany.mockReset(); 
-    mockFolderUpdate.mockReset();
-    mockUserDeleteMany.mockReset();   
-    mockUserCreate.mockReset();       
-    mockUserFindUnique.mockReset();
-
-    (mockFolderDeleteMany as Mock).mockResolvedValue({ count: 0 });
-    (mockUserDeleteMany as Mock).mockResolvedValue({ count: 0 });
-    (mockUserCreate as Mock).mockImplementation(async (args: any) => args.data );
-    
-    // Default behavior for findUnique (called by createFolderLogic service)
-    // Simplified default behavior
-    (mockFolderFindUnique as Mock).mockResolvedValue(null); 
-
-    const prismaMock = (globalThis as any).__PRISMA_INSTANCE__;
-    if (!prismaMock) throw new Error('__PRISMA_INSTANCE__ not found on globalThis in beforeEach');
-
-    await prismaMock.folder.deleteMany({}); 
-    await prismaMock.user.deleteMany({});   
-    await prismaMock.user.create({        
-      data: {
-        id: MOCK_USER_ID,
-        email: `${MOCK_USER_ID}@example.com`, 
-        password: 'testpassword', 
-        name: 'Mock Folders Test User',
-      },
-    });
+  beforeEach(() => {
+    // Only mock resets that are specific to individual tests IF NOT COVERED by beforeAll resets
+    // For instance, if a test changes mockFolderFindUnique, reset it here.
+    // For now, vi.restoreAllMocks() in afterEach should handle most Vitest mock resets.
+    // The explicit .mockReset() in beforeAll handles our shared mocks initial state.
+    mockFolderFindMany.mockReset(); // Ensure it's clean for each GET test
+    mockFolderCreate.mockReset();   // Ensure it's clean for each POST test
+    mockFolderFindUnique.mockReset(); // Reset for tests that rely on its default or change it
   });
 
   afterEach(() => {
@@ -83,16 +79,13 @@ describe('Folder API Route Handlers /api/folders', () => {
 
   describe('GET /api/folders', () => {
     it('should return 401 if user is not authenticated', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const response = await request(currentTestServerUrl).get('/api/folders').set('X-Test-User-Id', 'null'); 
       expect(response.status).toBe(401);
-      // Ensure we are using the imported mock
       expect(mockFolderFindMany).not.toHaveBeenCalled();
     });
 
     it('should call prisma.folder.findMany and return its success response', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
-      console.log(`[[FOLDERS TEST DEBUG]] About to call GET /api/folders for findMany success. URL: ${currentTestServerUrl}`);
+      // console.log(`[[FOLDERS TEST DEBUG]] About to call GET /api/folders for findMany success. URL: ${currentTestServerUrl}`);
       const serviceResponseData = [
         { id: 'f1', name: 'Folder1', parentId: null, userId: MOCK_USER_ID, updatedAt: new Date(), _count: { cards: 0 } },
         { id: 'f2', name: 'Folder2', parentId: null, userId: MOCK_USER_ID, updatedAt: new Date(), _count: { cards: 3 } },
@@ -109,10 +102,8 @@ describe('Folder API Route Handlers /api/folders', () => {
     });
 
     it('should return 500 if prisma.folder.findMany throws an error', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
-      // Ensure we are using the imported mock
       (mockFolderFindMany as Mock).mockRejectedValue(new Error('Prisma DB error on findMany'));
-      const response = await request(currentTestServerUrl).get('/api/folders').set('X-Test-User-Id', MOCK_USER_ID); // Use MOCK_USER_ID
+      const response = await request(currentTestServerUrl).get('/api/folders').set('X-Test-User-Id', MOCK_USER_ID);
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to retrieve folders.');
     });
@@ -120,33 +111,28 @@ describe('Folder API Route Handlers /api/folders', () => {
 
   describe('POST /api/folders', () => {
     it('should return 401 if user is not authenticated', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const payload = { name: 'Test Folder' };
       const response = await request(currentTestServerUrl)
         .post('/api/folders')
         .set('X-Test-User-Id', 'null')
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
-        .send(JSON.stringify(payload));
+        .send(JSON.stringify(payload)); // No need for .set('Accept', 'application/json') with supertest
       expect(response.status).toBe(401);
       expect(mockFolderCreate).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid request body (e.g. missing name)', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
-      const payload = { parentId: 'abc' }; // Name is missing, parentId is invalid CUID
+      const payload = { parentId: 'abc' }; 
       const response = await request(currentTestServerUrl)
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(400);
       expect(mockFolderCreate).not.toHaveBeenCalled();
     });
 
     it('should call prisma.folder.create and return success (no parentId)', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const folderName = 'New Unique Folder';
       const payload = { name: folderName, parentId: null };
       const mockDbResponse = { id: 'new-folder-id-123', name: folderName, parentId: null, userId: MOCK_USER_ID }; 
@@ -155,7 +141,6 @@ describe('Folder API Route Handlers /api/folders', () => {
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(201);
       expect(response.body).toEqual(mockDbResponse);
@@ -167,7 +152,6 @@ describe('Folder API Route Handlers /api/folders', () => {
     });
 
     it('should call prisma.folder.create and return success (with valid parentId)', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const folderName = 'New Sub Folder';
       const parentFolderId = 'clxkjm7k9000008l7c356f0a1'; 
       const payload = { name: folderName, parentId: parentFolderId };
@@ -178,7 +162,6 @@ describe('Folder API Route Handlers /api/folders', () => {
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(201);
       expect(response.body).toEqual(mockDbResponse);
@@ -190,7 +173,6 @@ describe('Folder API Route Handlers /api/folders', () => {
     });
 
     it('should return 400 if parentId is provided but parent folder not found/owned', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const folderName = 'New Sub Folder Fail';
       const parentFolderId = 'clxkjm7k9000008l7c356f0a2'; 
       const payload = { name: folderName, parentId: parentFolderId };
@@ -199,7 +181,6 @@ describe('Folder API Route Handlers /api/folders', () => {
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('Parent folder not found or not owned by user.');
@@ -208,31 +189,22 @@ describe('Folder API Route Handlers /api/folders', () => {
     });
 
     it('should return 409 if prisma.folder.create throws a P2002 error', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const folderName = 'Existing Folder Name';
       const payload = { name: folderName, parentId: null };
-      
-      // Create an error object that more closely resembles PrismaClientKnownRequestError
-      const errorInstance = new Error('Unique constraint failed on fields: (`name`, `parentId`, `userId`)'); // More specific message
+      const errorInstance = new Error('Unique constraint failed on fields: (`name`, `parentId`, `userId`)');
       (errorInstance as any).code = 'P2002';
-      (errorInstance as any).name = 'PrismaClientKnownRequestError'; // Crucial for some instanceof-like checks or type guards
-      // (errorInstance as any).clientVersion = '5.0.0'; // Example, if needed
-      // (errorInstance as any).meta = { target: ['name', 'parentId', 'userId'] }; // Example, if needed
-
+      (errorInstance as any).name = 'PrismaClientKnownRequestError';
       (mockFolderCreate as Mock).mockRejectedValue(errorInstance);
-      
       const response = await request(currentTestServerUrl)
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(409);
       expect(response.body.error).toBe('A folder with this name already exists at this level.');
     });
 
     it('should return 500 if prisma.folder.create throws an unexpected error', async () => {
-      if (!currentTestServerUrl) throw new Error('Test server URL not set');
       const folderName = 'Another Folder';
       const payload = { name: folderName, parentId: null };
       (mockFolderCreate as Mock).mockRejectedValue(new Error('Unexpected DB error on create'));
@@ -240,7 +212,6 @@ describe('Folder API Route Handlers /api/folders', () => {
         .post('/api/folders')
         .set('X-Test-User-Id', MOCK_USER_ID)
         .set('Content-Type', 'application/json')
-        .set('Accept', 'application/json')
         .send(JSON.stringify(payload));
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Failed to create folder.'); 

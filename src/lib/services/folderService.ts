@@ -1,13 +1,8 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import prisma from '@/lib/prisma';
 
 // Define the shape of the Prisma subset needed by this service
-export interface FolderPrismaSubset {
-  folder: {
-    findMany: PrismaClient['folder']['findMany'];
-    findUnique: PrismaClient['folder']['findUnique'];
-    create: PrismaClient['folder']['create'];
-  };
-}
+// export interface FolderPrismaSubset { ... }
 
 export interface FolderBasicDetails {
   id: string;
@@ -36,10 +31,9 @@ export interface ServiceResult<T> {
 // --- GET Folders Logic ---
 export async function getFoldersLogic(
   userId: string,
-  prismaInstance: PrismaClient,
 ): Promise<ServiceResult<FolderBasicDetails[]>> {
   try {
-    const folders = await prismaInstance.folder.findMany({
+    const folders = await prisma.folder.findMany({
       where: { userId: userId },
       select: {
         id: true,
@@ -68,10 +62,7 @@ export async function getFoldersLogic(
 }
 
 // --- POST (Create) Folder Logic ---
-export async function createFolderLogic(
-  input: CreateFolderInput,
-  prismaInstance: PrismaClient,
-): Promise<
+export async function createFolderLogic(input: CreateFolderInput): Promise<
   ServiceResult<
     Prisma.FolderGetPayload<{
       select: { id: true; name: true; parentId: true; userId: true };
@@ -82,7 +73,7 @@ export async function createFolderLogic(
   try {
     // Validate parentId ownership if provided
     if (parentId) {
-      const parentFolder = await prismaInstance.folder.findUnique({
+      const parentFolder = await prisma.folder.findUnique({
         where: { id: parentId, userId: userId }, // Ensure user owns the parent
         select: { id: true },
       });
@@ -95,7 +86,7 @@ export async function createFolderLogic(
       }
     }
 
-    const newFolder = await prismaInstance.folder.create({
+    const newFolder = await prisma.folder.create({
       data: {
         name,
         parentId,

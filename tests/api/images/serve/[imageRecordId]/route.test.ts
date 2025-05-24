@@ -1,12 +1,17 @@
 /**
  * @vitest-environment node
  */
-import { GET as appHandlerGET } from '../../../../../src/app/api/images/serve/[imageRecordId]/route'; // Corrected path to actual route handler
+// Removed: import { makeTestServer, TestServer } from '../../../../tests/helpers/testServer';
+// No, this one doesn't use makeTestServer, it calls the handler directly.
+// This file will need a different approach if we want to test it via HTTP requests to a global server.
+// For now, leaving it as direct handler calls but noting it for potential future refactor.
+
+import { GET as appHandlerGET } from '@/app/api/images/serve/[imageRecordId]/route'; // USE ALIAS
 import { getServerSession } from 'next-auth/next';
 import { getBucket } from '@/lib/gcs'; 
 import {
     mockImageRecordFindUnique, 
-} from '../../../../../tests/helpers/apiTestSetup'; 
+} from '@/tests/helpers/apiTestSetup'; // ALIAS
 import { Readable } from 'stream';
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { createMocks, RequestMethod } from 'node-mocks-http';
@@ -103,6 +108,11 @@ function mockRequestAndContext(
 }
 
 describe('/api/images/serve/[imageRecordId] GET', () => {
+  // This test file calls the handler directly, it does not use a test server.
+  // So, the global server strategy does not directly apply here in the same way.
+  // If we wanted to change it to use supertest, that would be a larger refactor for this specific file.
+  // For now, its existing structure of direct handler invocation will remain.
+
   let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(() => {

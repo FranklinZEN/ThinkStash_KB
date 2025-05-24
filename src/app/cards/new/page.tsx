@@ -47,7 +47,7 @@ interface CreateCardSuccessResponse {
 interface CreateCardErrorResponse {
   error?: string;
   message?: string;
-  errors?: { [key: string]: string[] };
+  details?: { [key: string]: string[] };
 }
 
 export default function NewCardPage() {
@@ -142,11 +142,14 @@ export default function NewCardPage() {
         router.push(`/cards/${(responseData as CreateCardSuccessResponse).id}`);
       } else {
         const errorResponse = responseData as CreateCardErrorResponse;
+        if (errorResponse.details) {
+          console.error('Validation Details:', errorResponse.details);
+        }
         const errorMsg =
           errorResponse.error ||
           errorResponse.message ||
-          (errorResponse.errors
-            ? JSON.stringify(errorResponse.errors)
+          (errorResponse.details
+            ? JSON.stringify(errorResponse.details)
             : 'Failed to create card');
         throw new Error(errorMsg);
       }

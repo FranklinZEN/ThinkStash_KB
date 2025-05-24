@@ -3,7 +3,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 // import { getServerSession } from 'next-auth/next'; // Remove unused
 // import { authOptions } from '@/lib/auth'; // Remove unused
-import prisma from '@/lib/prisma'; // Ensure this is the default import
 import { z } from 'zod';
 // import { Prisma } from '@prisma/client'; // Remove unused
 import { getServerSession } from 'next-auth/next'; // Keep for actual auth
@@ -90,7 +89,7 @@ export async function GET(
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const result = await getCardLogic(cardId, userId, prisma);
+  const result = await getCardLogic(cardId, userId);
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status });
   } else {
@@ -144,7 +143,7 @@ export async function PUT(
       { status: 400 },
     );
   }
-  const result = await updateCardLogic(cardId, userId, validatedBody, prisma);
+  const result = await updateCardLogic(cardId, userId, validatedBody);
   if (result.success) {
     return NextResponse.json(result.data, { status: result.status });
   } else {
@@ -178,7 +177,7 @@ export async function DELETE(
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const result = await deleteCardLogic(cardId, userId, prisma);
+  const result = await deleteCardLogic(cardId, userId);
   if (result.success) {
     return NextResponse.json(
       { message: 'Card deleted successfully' },

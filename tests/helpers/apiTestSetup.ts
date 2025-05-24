@@ -24,6 +24,7 @@ export const mockImageRecordCreate: Mock = vi.fn();
 export const mockImageRecordFindUnique: Mock = vi.fn();
 export const mockImageRecordUpdate: Mock = vi.fn();
 export const mockImageRecordDeleteMany: Mock = vi.fn();
+export const mockImageRecordUpdateMany: Mock = vi.fn();
 
 // KnowledgeCard (Ensured all relevant operations have specific mocks)
 export const mockKnowledgeCardFindUnique: Mock = vi.fn();
@@ -61,7 +62,7 @@ export function createMockedPrismaClient(): PrismaClient {
     ...baseModelOps, findFirst: mockUserFindUnique,
   };
   const imageRecordDelegateMethods = {
-    create: mockImageRecordCreate, findUnique: mockImageRecordFindUnique, update: mockImageRecordUpdate, deleteMany: mockImageRecordDeleteMany, findMany: vi.fn(), delete: vi.fn(),
+    create: mockImageRecordCreate, findUnique: mockImageRecordFindUnique, update: mockImageRecordUpdate, deleteMany: mockImageRecordDeleteMany, updateMany: mockImageRecordUpdateMany, findMany: vi.fn(), delete: vi.fn(),
     ...baseModelOps, findFirst: mockImageRecordFindUnique,
   };
   const knowledgeCardDelegateMethods = {

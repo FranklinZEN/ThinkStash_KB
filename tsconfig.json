@@ -2,9 +2,9 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "src/*"
-      ]
+      "@/tests/*": ["tests/*"],
+      "@/mocks/*": ["src/mocks/*"], 
+      "@/*": ["src/*"]
     },
     "target": "ES2017",
     "lib": [

@@ -2,7 +2,7 @@
  * @vitest-environment node
  */
 import request from 'supertest';
-import { makeTestServer, TestServer } from '../../../../tests/helpers/testServer'; // Adjusted path to root tests/helpers
+import { makeTestServer, TestServer } from '@/tests/helpers/testServer';
 import {
   MOCK_USER_ID,
   mockUserCreate,
@@ -10,7 +10,7 @@ import {
   mockImageRecordCreate,
   mockImageRecordUpdate,
   mockImageRecordDeleteMany,
-} from '../../../../tests/helpers/apiTestSetup'; 
+} from '@/tests/helpers/apiTestSetup';
 
 import {
   vi,
@@ -19,75 +19,80 @@ import {
   describe as vitestDescribe,
   it as vitestIt,
   expect as vitestExpect,
-  beforeAll as vitestBeforeAll, // Keep for per-file server setup
-  afterAll as vitestAfterAll,   // Keep for per-file server teardown
   Mock,
+  beforeAll as vitestBeforeAll,
+  afterAll as vitestAfterAll,
 } from 'vitest';
 
-const MOCK_EXTERNAL_IMAGE_URL_BASE = 'http://example.com';
-const MOCK_EXTERNAL_IMAGE_URL_PATH = '/test-image.jpg';
-const MOCK_EXTERNAL_IMAGE_URL = `${MOCK_EXTERNAL_IMAGE_URL_BASE}${MOCK_EXTERNAL_IMAGE_URL_PATH}`;
-
-const MOCK_COMPLEX_IMAGE_URL_BASE = 'https://images.unsplash.com';
-const MOCK_COMPLEX_IMAGE_URL_PATH =
-  '/photo-12345?ixid=SOMEID&auto=format&fit=crop&w=1000&q=80#anchor';
-const MOCK_COMPLEX_IMAGE_URL = `${MOCK_COMPLEX_IMAGE_URL_BASE}${MOCK_COMPLEX_IMAGE_URL_PATH}`;
-
-const MOCK_URL_NO_FILENAME_BASE = 'http://example.com';
-const MOCK_URL_NO_FILENAME_PATH = '/getimage';
-const MOCK_URL_NO_FILENAME = `${MOCK_URL_NO_FILENAME_BASE}${MOCK_URL_NO_FILENAME_PATH}`;
-
-let testServer: TestServer; // To hold the server instance
+let testServer: TestServer;
 let currentTestServerUrl: string;
 
 vitestBeforeAll(async () => {
-  console.log('[Test File beforeAll] Starting test server...');
+  console.log('[import-by-url test beforeAll] Starting test server...');
   testServer = await makeTestServer(); 
   currentTestServerUrl = testServer.url;
-  console.log(`[Test File beforeAll] Test server started on ${currentTestServerUrl}`);
+  console.log(`[import-by-url test beforeAll] Test server started on ${currentTestServerUrl}`);
+
+  mockUserCreate.mockReset();
+  mockUserDeleteMany.mockReset();
+  mockImageRecordCreate.mockReset();
+  mockImageRecordUpdate.mockReset();
+  mockImageRecordDeleteMany.mockReset();
+
+  (mockImageRecordDeleteMany as Mock).mockResolvedValue({ count: 0 });
+  (mockUserDeleteMany as Mock).mockResolvedValue({ count: 0 });
+  (mockUserCreate as Mock).mockImplementation(async (args: any) => args.data);
+
+  const prismaMock = (globalThis as any).__PRISMA_INSTANCE__;
+  if (!prismaMock) throw new Error('__PRISMA_INSTANCE__ not found on globalThis in beforeEach');
+
+  try {
+    // Removed debug logs for __PRISMA_INSTANCE__ as it should be set by vitest.setup.ts
+    await prismaMock.imageRecord.deleteMany({});
+    await prismaMock.user.deleteMany({});
+    await prismaMock.user.create({
+      data: {
+        id: MOCK_USER_ID,
+        email: `${MOCK_USER_ID}@example.com`,
+        password: 'testpassword',
+        name: 'Mock Test User',
+      },
+    });
+  } catch (error) {
+    throw error;
+  }
 });
 
 vitestAfterAll(async () => {
   if (testServer && testServer.close) {
-    console.log('[Test File afterAll] Closing test server...');
+    console.log('[import-by-url test afterAll] Closing test server...');
     await testServer.close();
-    console.log('[Test File afterAll] Test server closed.');
+    console.log('[import-by-url test afterAll] Test server closed.');
   }
 });
 
 vitestDescribe.sequential('/api/images/import-by-url POST', () => {
-  vitestBeforeEach(async () => {
-    mockUserCreate.mockReset();
-    mockUserDeleteMany.mockReset();
-    mockImageRecordCreate.mockReset();
-    mockImageRecordUpdate.mockReset();
-    mockImageRecordDeleteMany.mockReset();
+  // Define constants INSIDE the describe block
+  const MOCK_EXTERNAL_IMAGE_URL_BASE = 'http://example.com';
+  const MOCK_EXTERNAL_IMAGE_URL_PATH = '/test-image.jpg';
+  const MOCK_EXTERNAL_IMAGE_URL = `${MOCK_EXTERNAL_IMAGE_URL_BASE}${MOCK_EXTERNAL_IMAGE_URL_PATH}`;
 
-    (mockImageRecordDeleteMany as Mock).mockResolvedValue({ count: 0 });
-    (mockUserDeleteMany as Mock).mockResolvedValue({ count: 0 });
-    (mockUserCreate as Mock).mockImplementation(async (args: any) => args.data);
+  const MOCK_COMPLEX_IMAGE_URL_BASE = 'https://images.unsplash.com';
+  const MOCK_COMPLEX_IMAGE_URL_PATH =
+    '/photo-12345?ixid=SOMEID&auto=format&fit=crop&w=1000&q=80#anchor';
+  const MOCK_COMPLEX_IMAGE_URL = `${MOCK_COMPLEX_IMAGE_URL_BASE}${MOCK_COMPLEX_IMAGE_URL_PATH}`;
 
-    const prismaMock = (globalThis as any).__PRISMA_INSTANCE__;
-    if (!prismaMock) throw new Error('__PRISMA_INSTANCE__ not found on globalThis in beforeEach');
+  const MOCK_URL_NO_FILENAME_BASE = 'http://example.com';
+  const MOCK_URL_NO_FILENAME_PATH = '/getimage';
+  const MOCK_URL_NO_FILENAME = `${MOCK_URL_NO_FILENAME_BASE}${MOCK_URL_NO_FILENAME_PATH}`;
 
-    try {
-      // Removed debug logs for __PRISMA_INSTANCE__ as it should be set by vitest.setup.ts
-      await prismaMock.imageRecord.deleteMany({});
-      await prismaMock.user.deleteMany({});
-      await prismaMock.user.create({
-        data: {
-          id: MOCK_USER_ID,
-          email: `${MOCK_USER_ID}@example.com`,
-          password: 'testpassword',
-          name: 'Mock Test User',
-        },
-      });
-    } catch (error) {
-      throw error;
-    }
-  });
+  if (!currentTestServerUrl) { // Check if server URL was set from beforeAll
+      // This check is a bit tricky because currentTestServerUrl is set in vitestBeforeAll
+      // which should run before this describe block body. If it's not set, something is wrong.
+      // Consider throwing or logging an error if process.env.TEST_SERVER_URL (if global) or currentTestServerUrl (if local) is not set.
+  }
 
-  vitestAfterEach(() => {
+  vitestBeforeEach(() => {
     vi.restoreAllMocks();
   });
 

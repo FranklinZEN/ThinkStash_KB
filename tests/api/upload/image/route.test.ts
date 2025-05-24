@@ -1,8 +1,10 @@
 /**
  * @vitest-environment node
  */
-// import 'next-test-api-route-handler'; // Evaluate if still needed, removed for now
-import { POST as appHandlerPOST } from '../../../../src/app/api/upload/image/route'; // Corrected path
+// import 'next-test-api-route-handler'; // Not used with direct handler testing if that's the case.
+// This file also calls the handler directly. See comments for serve/[imageRecordId].
+
+import { POST as appHandlerPOST } from '../../../../src/app/api/upload/image/route'; // Relative from new location
 import { getServerSession } from 'next-auth';
 // Service is no longer mocked: import { handleImageUploadLogic } from '@/lib/services/imageUploadService'; 
 import {
@@ -11,7 +13,7 @@ import {
     mockGCSUploadFile,    // For GCS interactions in the service
     mockImageRecordUpdate, // Added import
     // Import other Prisma/GCS mocks if imageUploadService uses them
-} from '../../../../tests/helpers/apiTestSetup'; // Corrected path
+} from '@/tests/helpers/apiTestSetup'; // ALIAS
 import { describe, it, expect, vi, beforeEach } from 'vitest'; 
 import { createMocks } from 'node-mocks-http';
 import { NextRequest } from 'next/server';
@@ -74,6 +76,9 @@ async function mockFormDataRequest(formDataInstance: FormData) {
 }
 
 describe('/api/upload/image POST', () => {
+  // This test file calls the handler directly.
+  // Global server strategy not directly applicable here in the same way as supertest-based tests.
+
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset new mocks

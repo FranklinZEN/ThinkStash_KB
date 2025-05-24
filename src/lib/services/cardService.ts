@@ -1,4 +1,5 @@
-import { Prisma, KnowledgeCard, PrismaClient } from '@prisma/client';
+import { Prisma, KnowledgeCard } from '@prisma/client';
+import prisma from '@/lib/prisma';
 import {
   StandardDocument,
   isImageBlock,
@@ -8,17 +9,7 @@ import { uploadFile as uploadFileToGCS } from '@/lib/gcs';
 import { v4 as uuidv4 } from 'uuid'; // For generating filenames
 
 // --- Interfaces for Prisma Subset ---
-export interface CardServicePrismaSubset {
-  knowledgeCard: {
-    findUnique: PrismaClient['knowledgeCard']['findUnique'];
-    update: PrismaClient['knowledgeCard']['update'];
-    delete: PrismaClient['knowledgeCard']['delete'];
-  };
-  folder: {
-    findUnique: PrismaClient['folder']['findUnique'];
-  };
-  // Tag model might be needed if create/connect logic for tags is complex, but connectOrCreate handles it.
-}
+// export interface CardServicePrismaSubset { ... }
 
 // --- Service Result Interface (can be shared) ---
 export interface ServiceResult<T> {
@@ -49,7 +40,6 @@ const GCS_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
 // Renamed to _processAndLinkImages and logic significantly updated
 async function _processAndLinkImages(
-  prisma: PrismaClient,
   blocks: StandardDocument,
   cardId: string,
   userId: string,
@@ -185,7 +175,6 @@ async function _processAndLinkImages(
       );
       if (childrenAreBlocks) {
         await _processAndLinkImages(
-          prisma,
           blockToProcessForChildren.children as StandardDocument,
           cardId,
           userId,
@@ -214,7 +203,6 @@ async function _processAndLinkImages(
 
 // New exported function to handle image associations
 export async function handleCardImageAssociations(
-  prisma: PrismaClient,
   content: Prisma.JsonValue | undefined | null,
   cardId: string,
   userId: string,
@@ -234,7 +222,7 @@ export async function handleCardImageAssociations(
     return content;
   }
 
-  await _processAndLinkImages(prisma, mutableContent, cardId, userId);
+  await _processAndLinkImages(mutableContent, cardId, userId);
 
   return mutableContent as unknown as Prisma.JsonValue;
 }
@@ -243,14 +231,13 @@ export async function handleCardImageAssociations(
 export async function getCardLogic(
   cardId: string,
   userId: string,
-  prismaInstance: PrismaClient,
 ): Promise<
   ServiceResult<
     Prisma.KnowledgeCardGetPayload<{ include: { folder: true; tags: true } }>
   >
 > {
   try {
-    const card = await prismaInstance.knowledgeCard.findUnique({
+    const card = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       include: { folder: true, tags: true },
     });
@@ -274,7 +261,6 @@ export async function updateCardLogic(
   cardId: string,
   userId: string,
   data: UpdateCardData, // This is validatedBody from the route
-  prismaInstance: PrismaClient,
 ): Promise<
   ServiceResult<
     Prisma.KnowledgeCardGetPayload<{ include: { folder: true; tags: true } }>
@@ -282,7 +268,7 @@ export async function updateCardLogic(
 > {
   try {
     // 1. Verify card ownership
-    const existingCard = await prismaInstance.knowledgeCard.findUnique({
+    const existingCard = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       select: { id: true },
     });
@@ -296,7 +282,7 @@ export async function updateCardLogic(
 
     // 2. Validate folderId ownership if provided and not null
     if (data.folderId) {
-      const targetFolder = await prismaInstance.folder.findUnique({
+      const targetFolder = await prisma.folder.findUnique({
         where: { id: data.folderId, userId: userId },
         select: { id: true },
       });
@@ -315,7 +301,6 @@ export async function updateCardLogic(
 
     if (contentWasActuallyInRequest && data.content) {
       const modifiedContent = await handleCardImageAssociations(
-        prismaInstance,
         data.content,
         cardId,
         userId,
@@ -368,11 +353,7 @@ export async function updateCardLogic(
     }
 
     if (Object.keys(updatePayload).length === 0) {
-      const currentCardData = await getCardLogic(
-        cardId,
-        userId,
-        prismaInstance,
-      );
+      const currentCardData = await getCardLogic(cardId, userId);
       if (currentCardData.success && currentCardData.data) {
         return { ...currentCardData, status: 200, data: currentCardData.data };
       }
@@ -384,7 +365,7 @@ export async function updateCardLogic(
       };
     }
 
-    await prismaInstance.knowledgeCard.update({
+    await prisma.knowledgeCard.update({
       where: { id: cardId, userId: userId },
       data: updatePayload,
       include: { tags: true, folder: true },
@@ -393,7 +374,7 @@ export async function updateCardLogic(
     // Re-fetch the card to ensure all associations and updates are reflected in the returned data
     // This is important because `updatedCard` from the update operation might not reflect
     // nested relation changes perfectly or all computed fields if any.
-    const fullyUpdatedCard = await prismaInstance.knowledgeCard.findUnique({
+    const fullyUpdatedCard = await prisma.knowledgeCard.findUnique({
       where: { id: cardId }, // userId check not strictly needed again if update succeeded
       include: { tags: true, folder: true },
     });
@@ -431,11 +412,10 @@ export async function updateCardLogic(
 export async function deleteCardLogic(
   cardId: string,
   userId: string,
-  prismaInstance: PrismaClient,
 ): Promise<ServiceResult<KnowledgeCard>> {
   try {
     // 1. Verify card ownership before deleting
-    const existingCard = await prismaInstance.knowledgeCard.findUnique({
+    const existingCard = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       select: { id: true }, // Only need to check existence
     });
@@ -449,7 +429,7 @@ export async function deleteCardLogic(
     }
 
     // 2. Delete the card (onDelete: Cascade for ImageRecord is handled by Prisma schema)
-    const deletedCard = await prismaInstance.knowledgeCard.delete({
+    const deletedCard = await prisma.knowledgeCard.delete({
       where: { id: cardId },
     });
 
