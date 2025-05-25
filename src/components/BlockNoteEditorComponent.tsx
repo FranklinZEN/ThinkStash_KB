@@ -210,15 +210,78 @@ export default function BlockNoteEditorComponent({
       >;
       defaultPasteHandler: () => boolean;
     }) => {
-      const pastedFiles = event.clipboardData?.files;
-      if (pastedFiles && pastedFiles.length > 0) {
-        const imageFile = Array.from(pastedFiles).find((file) =>
-          file.type.startsWith('image/'),
-        );
-        if (imageFile) {
-          processPastedOrDroppedFile(imageFile, currentEditor);
-          return true;
+      console.log(
+        '%c[BlockNoteEditorComponent] PASTE EVENT DETECTED',
+        'color: blue; font-weight: bold;',
+      );
+      if (event.clipboardData) {
+        const types = event.clipboardData.types;
+        console.log('[BlockNoteEditorComponent] Clipboard types:', types);
+        types.forEach((type) => {
+          try {
+            const data = event.clipboardData!.getData(type);
+            console.log(
+              `[BlockNoteEditorComponent] Data for type "${type}":`,
+              type === 'text/html' ||
+                type === 'text/plain' ||
+                type.startsWith('image/')
+                ? data.length > 300
+                  ? data.substring(0, 300) + '... (truncated)'
+                  : data
+                : `[Non-text or too long: ${data.length} chars/bytes]`,
+            );
+            if (type === 'text/html') {
+              const tempDiv = document.createElement('div');
+              tempDiv.innerHTML = data;
+              const imagesInHtml = Array.from(tempDiv.querySelectorAll('img'));
+              console.log(
+                '[BlockNoteEditorComponent] Images found in pasted HTML (src attributes):',
+                imagesInHtml.map((img) => img.src),
+              );
+            }
+          } catch (e) {
+            console.warn(
+              `[BlockNoteEditorComponent] Could not getData for type "${type}"`,
+              e,
+            );
+          }
+        });
+
+        const pastedFiles = event.clipboardData.files;
+        if (pastedFiles && pastedFiles.length > 0) {
+          console.log(
+            '[BlockNoteEditorComponent] Files found on clipboard (event.clipboardData.files) - count:',
+            pastedFiles.length,
+          );
+          let imageFileProcessed = false;
+          Array.from(pastedFiles).forEach((file) => {
+            console.log('[BlockNoteEditorComponent] Pasted file details:', {
+              name: file.name,
+              size: file.size,
+              type: file.type,
+            });
+            if (file.type.startsWith('image/')) {
+              console.log(
+                '[BlockNoteEditorComponent] Processing pasted image FILE via processPastedOrDroppedFile:',
+                file.name,
+              );
+              processPastedOrDroppedFile(file, currentEditor);
+              imageFileProcessed = true;
+            }
+          });
+          if (imageFileProcessed) {
+            console.log(
+              '[BlockNoteEditorComponent] Image file from clipboard processed, returning true from pasteHandler.',
+            );
+            return true; // Indicate paste was handled if an image file was processed
+          }
+        } else {
+          console.log(
+            '[BlockNoteEditorComponent] No files found on clipboard via event.clipboardData.files.',
+          );
         }
+      } else {
+        console.log('[BlockNoteEditorComponent] event.clipboardData is null.');
       }
 
       const pastedText = event.clipboardData?.getData('text/plain');

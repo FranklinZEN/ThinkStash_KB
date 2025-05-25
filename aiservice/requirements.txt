@@ -10,6 +10,14 @@ beautifulsoup4
 crewai-tools
 newspaper3k
 lxml[html_clean]
+trafilatura
+python-docx
+PyMuPDF
+mistune
+python-magic-bin
+requests-mock
+pytest
+ftfy
 # Add other core libraries as identified, e.g.:
 # readability-lxml
 # sentence-transformers
