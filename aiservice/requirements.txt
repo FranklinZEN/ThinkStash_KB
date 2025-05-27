@@ -1,25 +1,44 @@
+# Core AI/Agent Libraries (let pip find latest compatible)
+crewai
+crewai-tools
+langchain
+langchain_core # underscore used by pip, though import is often langchain.core
+langchain_community # underscore used by pip, though import is often langchain.community
+langchain_openai # underscore used by pip, though import is often langchain.openai
+
+# FastAPI and Pydantic (pinned as they are generally stable)
 fastapi
 uvicorn[standard]
-pydantic
-python-dotenv
-crewai
-langchain
-langchain-openai
-requests
-beautifulsoup4
-crewai-tools
-newspaper3k
-lxml[html_clean]
-trafilatura
-python-docx
-PyMuPDF
-mistune
-python-magic-bin
-requests-mock
-pytest
-ftfy
-# Add other core libraries as identified, e.g.:
-# readability-lxml
-# sentence-transformers
-# psycopg2-binary (if direct DB access is needed later, though initially we are returning to Next.js backend)
-google-cloud-storage 
+pydantic==2.11.4
+python-dotenv==1.1.0
+
+# Utility and Parsing Libraries (pinned where specific versions are known good or important)
+requests==2.32.3
+beautifulsoup4==4.13.4
+newspaper3k==0.2.8
+lxml[html_clean]==5.4.0
+trafilatura==2.0.0
+python-docx==1.1.2
+PyMuPDF==1.26.0 # Fitz
+mistune==3.1.3
+python-magic==0.4.27
+pdf2image==1.17.0
+Pillow==11.2.1
+pdfminer.six # Was 20250327, likely a date-based versioning, let pip pick latest if possible
+Markdown # Let pip pick latest
+
+# OpenAI SDK (pinned as it's generally stable)
+openai==1.75.0 
+
+# Google Cloud Storage (pinned as it's generally stable)
+google-cloud-storage==3.1.0
+
+# Testing (pinned as they are generally stable)
+requests-mock==1.12.1
+pytest==8.3.5
+
+# Optional, for a specific tool implementation detail if needed
+ftfy==6.3.1
+
+# Removed crewai sub-dependencies like appdirs, click, embedchain, instructor etc.
+# Pip will resolve these based on the requirements of the latest crewai/langchain. 
