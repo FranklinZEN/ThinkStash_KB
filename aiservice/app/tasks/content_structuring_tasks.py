@@ -1,6 +1,7 @@
 # Placeholder for tasks related to TS-AI-Reconstruct-5: Content Consolidation & Structuring Agent 
 
 from crewai import Task, Agent # Assuming Agent for type hinting
+from typing import List, Dict, Any, Optional
 
 class ContentStructuringTasks:
     """Defines tasks for the ContentConsolidationStructuringAgent.
@@ -11,45 +12,38 @@ class ContentStructuringTasks:
     detecting if the content is long and formatting the final output.
     """
 
-    def llm_driven_structuring_task(self, agent: Agent, source_document_text: str, image_details_list: list[dict], source_content_type_hint: str) -> Task:
-        """Creates a Task for LLM-driven reconstruction of document content into structured blocks.
-
-        The LLM is provided with the main text (potentially containing image markers,
-        LaTeX math, or pre-formatted code), a list of image objects with their metadata
-        (including GCS URLs and any LLM-generated descriptions/captions from earlier stages),
-        and a hint about the original content type to guide image placement strategy.
-
-        Args:
-            agent: The CrewAI agent assigned to execute this task.
-            source_document_text: The primary textual content, possibly with markers/LaTeX/code.
-            image_details_list: A list of dictionaries, where each dict contains metadata for an image
-                                (e.g., original_source_identifier, gcs_url, alt_text, caption,
-                                 llm_description, context_before_text, context_after_text).
-            source_content_type_hint: A string indicating the origin to help LLM with image placement
-                                      (e.g., "pdf_with_markers", "docx_with_placeholders",
-                                      "html_with_context", "docx_raw_no_placeholders").
-
-        Returns:
-            Task: A CrewAI Task configured for LLM-driven content structuring.
-        """
-        # The prompt for this task is crucial and detailed in the design document.
-        # It instructs the LLM on how to handle markers, context for images without markers,
-        # identify math/code, and the exact JSON output format for blocks.
+    def llm_driven_structuring_task(
+        self, 
+        agent: Agent, 
+        source_document_text_ref: Optional[str],
+        image_details_list_ref: Optional[str],
+        source_content_type_hint: str,
+        page_title: Optional[str] = None
+    ) -> Task:
+        """Creates a Task for LLM-driven reconstruction using data references."""
+        
+        description = (
+            f"Precisely structure the content retrieved from the data store into a coherent, logically ordered document using the AdvancedLLMStructuringTool. "
+            f"Explicitly prioritize key introductory information, main topic details, and critical insights, arranging them sequentially for optimal readability and comprehension. "
+            f"Clearly distinguish between primary content and secondary details, and exclude redundant, promotional, or irrelevant material unless explicitly relevant. "
+            f"Leverage provided hints (source_content_type_hint: '{source_content_type_hint}', page_title: '{page_title}') meticulously to guide accurate structuring. "
+            f"Deliver structured output promptly with high accuracy and minimal iterations.\n"
+            f"The main text content is in the shared data_store. Use the 'Data Store Access Tool' with action 'get' and the key '{source_document_text_ref}' to retrieve it. If '{source_document_text_ref}' is null, empty, or the key is not found, consider the text content as None or empty.\n"
+            f"The list of image details is in the shared data_store. Use the 'Data Store Access Tool' with action 'get' and the key '{image_details_list_ref}' to retrieve it. If '{image_details_list_ref}' is null, empty, or the key is not found, consider the image details list as empty.\n"
+            "After retrieving the data (or defaults if retrieval fails), use the 'AdvancedLLMStructuringTool'. "
+            "Pass the retrieved text content as 'source_document_text' (can be None or empty string). "
+            "Pass the retrieved list of image details as 'image_details_list' (can be an empty list). "
+            f"Also, pass the original 'source_content_type_hint' (which is '{source_content_type_hint}') and 'page_title' (which is '{page_title}') to the AdvancedLLMStructuringTool. "
+            "The direct output from this single call to AdvancedLLMStructuringTool will be your final answer for this task. Do not attempt to call it multiple times."
+        )
+        expected_output=(
+            "A single JSON string representing a list of ordered content blocks (text, image, math, code) "
+            "as produced by the AdvancedLLMStructuringTool."
+        )
         return Task(
-            description=f"Reconstruct the document (text length: {len(source_document_text)} chars, images: {len(image_details_list)}, hint: {source_content_type_hint}) "
-                        "into an ordered sequence of 'text', 'image', 'math', and 'code' blocks using advanced LLM reasoning. "
-                        "Iterate through the source_document_text. Segment text into logical blocks. "
-                        "When an image marker is encountered, use the corresponding image from image_details_list to create an 'image' block (gcs_url, alt, caption). "
-                        "If source_content_type_hint is 'html_with_context' and no markers are present, use 'context_before_text' and 'context_after_text' from image_details_list to semantically determine image insertion points. "
-                        "If source_content_type_hint is 'docx_raw_no_placeholders', semantically analyze text and image descriptions to infer logical image placements. "
-                        "Identify text segments that are LaTeX mathematical formulas and create 'math' blocks. "
-                        "Identify text segments that are code snippets and create 'code' blocks, inferring language if possible (else 'plaintext').",
-            expected_output="A single JSON string representing a list of ordered content blocks. Each block is an object with a 'type' "
-                            "(text, image, math, code) and relevant content fields (e.g., 'content' for text/math/code, 'gcs_url', 'alt_text', 'caption' for image). "
-                            "Example: '[ { \"type\": \"text\", \"content\": \"...\" }, { \"type\": \"image\", \"gcs_url\": \"...\" }, ... ]'",
+            description=description,
+            expected_output=expected_output,
             agent=agent
-            # This task will use the agent's configured LLM (e.g., OpenAI GPT-4.1 Turbo or equivalent).
-            # The LLM prompt should strictly enforce the JSON output format.
         )
 
     def long_article_detection_task(self, agent: Agent, content_blocks_json_list_str: str) -> Task:

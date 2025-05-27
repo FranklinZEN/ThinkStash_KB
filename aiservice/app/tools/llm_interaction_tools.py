@@ -4,109 +4,128 @@ import requests # For illustration if calling a separate LLM service, or use Ope
 import os
 import json # For constructing and parsing LLM I/O
 from aiservice.app.config import get_openai_api_key # Import the accessor
-from typing import Any, Optional # Added Optional
+from typing import Any, Optional, List, Dict, Type # Added Optional, List, Dict, Type
 from openai import OpenAI # Keep the import for type hinting and potential direct use
+from pydantic import BaseModel, Field
 
 # Global client is removed from here.
 # It will be initialized in CrewFactory and passed to tools.
 
+class MultimodalLLMImageMarkerToolInput(BaseModel):
+    image_path_or_base64: str = Field(description="File path to the image or a base64 encoded image string.")
+    page_number: int = Field(description="The page number from which the image was extracted.")
+    text_context: Optional[str] = Field(default=None, description="Optional text surrounding the image for context.")
+
 class MultimodalLLMImageMarkerTool(BaseTool):
-    """Analyzes PDF page images using a multimodal LLM for image understanding.
-
-    This tool takes an image of a PDF page, sends it to a multimodal LLM
-    (like GPT-4 Vision/GPT-4o), and processes the LLM's response to extract
-    structured information about visual elements (images/figures) on the page.
-    This includes generating unique markers, descriptions, captions, and contextual
-    information for each identified visual element.
-
-    Attributes:
-        name (str): The name of the tool.
-        description (str): A detailed description of what the tool does, its inputs, and outputs.
-        client: An instance of an LLM client (e.g., OpenAI client) if direct API calls are made.
-                    Alternatively, this tool might rely on the agent's default LLM if configured for vision.
-    """
-    name: str = "Multimodal LLM Image Analyzer for PDF Pages"
-    description: str = (
-        "Analyzes an image of a PDF page using a powerful multimodal LLM (like GPT-4 Turbo or GPT-4o). "
-        "Identifies distinct images/figures (excluding rendered math if handled separately). "
-        "For each identified visual element, it extracts/generates: a unique marker ID, a visual description, "
-        "any associated caption text, text snippets immediately preceding and succeeding the image, and its ordinal position. "
-        "Input: 'image_base64_data' (string: base64 encoded image), 'page_number' (int), 'text_context' (string: text from the page or around potential images)."
-        "Returns a JSON string with a list of identified image details or an error message."
-    )
+    name: str = "Multimodal LLM Image Analyzer"
+    description: str = "Analyzes an image (from path or base64) to identify markers, descriptions, captions, etc., for a given page number and text context."
+    args_schema: Type[BaseModel] = MultimodalLLMImageMarkerToolInput
     client: Optional[OpenAI] = None
 
     def __init__(self, client: Optional[OpenAI] = None, **kwargs):
         """Initializes the tool, optionally with a pre-configured LLM client."""
         super().__init__(**kwargs)
-        self.client = client
+        self.client = client if client else openai_client_instance
         if self.client:
-            print(f"MultimodalLLMImageMarkerTool: Initialized with provided OpenAI client.")
+            print(f"{self.name}: Initialized with OpenAI client.")
         else:
-            print(f"MultimodalLLMImageMarkerTool: Initialized WITHOUT an OpenAI client. Placeholder logic will be used.")
+            print(f"{self.name}: Initialized WITHOUT OpenAI client. Placeholder logic will be used.")
 
-    def _run(self, image_base64_data: str, page_number: int, text_context: str = "") -> str:
-        print(f"MultimodalLLMImageMarkerTool: Running for page {page_number}. Context length: {len(text_context)}")
+    def _run(self, image_path_or_base64: str, page_number: int, text_context: Optional[str] = None) -> str:
+        print(f"{self.name}: Called with image (len: {len(image_path_or_base64)}), page: {page_number}, context: {bool(text_context)}")
         if not self.client:
-            print("MultimodalLLMImageMarkerTool: No OpenAI client available. Returning placeholder error.")
-            return json.dumps({"error": "OpenAI client not configured for MultimodalLLMImageMarkerTool"})
-        if not image_base64_data:
-            return json.dumps({"error": "No image data provided to MultimodalLLMImageMarkerTool"})
+            return json.dumps({"error": f"{self.name}: OpenAI client not configured."})
+        if not image_path_or_base64:
+            return json.dumps({"error": f"{self.name}: No image data provided."})
 
         # Placeholder for actual LLM call
         print("MultimodalLLMImageMarkerTool: Placeholder - LLM call would happen here.")
-        # In a real scenario, image_base64_data would be used to send to the LLM.
+        # In a real scenario, image_path_or_base64 would be used to send to the LLM.
         # For the GCS upload task, we need to pass the original path.
-        # Assuming image_base64_data IS the path for now, as per test logs.
-        page_image_path = image_base64_data 
+        # Assuming image_path_or_base64 IS the path for now, as per test logs.
+        page_image_path = image_path_or_base64 
 
-        simulated_output = [
-            {
-                "marker_id": f"[IMAGE_MARKER_PAGE{page_number}_INDEX1]",
-                "description": "A simulated description of an image.",
-                "caption": "Simulated caption.",
-                "context_before": text_context[:50],
-                "context_after": text_context[-50:],
-                "ordinal_position": 1,
-                "local_path": page_image_path # Changed key to local_path
-            }
-        ]
+        simulated_output = [{
+            "marker_id": f"[IMAGE_MARKER_PAGE{page_number}_INDEX1]", 
+            "description": "Simulated image desc.", 
+            "local_path": image_path_or_base64 if len(image_path_or_base64) < 300 else "ref_to_image_data_too_long_for_log"
+        }]
         return json.dumps(simulated_output)
+
+class AdvancedLLMStructuringToolInput(BaseModel):
+    source_document_text: Optional[str] = Field(description="The primary textual content.")
+    image_details_list: List[Dict[str, Any]] = Field(default_factory=list, description="List of image objects with metadata.")
+    source_content_type_hint: str = Field(description="Hint about the original content type.")
+    page_title: Optional[str] = Field(default=None, description="Optional page title to help structure.")
 
 class AdvancedLLMStructuringTool(BaseTool):
     name: str = "Advanced LLM Document Structurer"
     description: str = (
-        "Uses a powerful LLM (like GPT-4 Turbo or GPT-4o) to reconstruct a document into a clean, ordered sequence of blocks: 'text', 'image', 'math', and 'code'. "
-        "Input requires: 'source_document_text' (string: the primary textual content, may contain image markers, LaTeX, or pre-formatted code), "
-        "'image_details_list' (list of dicts: image objects with metadata like 'original_source_identifier' matching markers, 'gcs_url', 'alt_text', 'caption', 'llm_description', 'context_before_text', 'context_after_text'), "
-        "and 'source_content_type_hint' (string: e.g., 'pdf_with_markers', 'docx_with_placeholders', 'html_with_context', 'docx_raw_no_placeholders' to guide image placement strategy)."
-        "Returns a string containing a single JSON list of these blocks in the correct sequential order, or an error JSON object."
+        "Uses an LLM to reconstruct a document into an ordered sequence of blocks: 'text', 'image', 'math', 'code'."
     )
-    client: Optional[OpenAI] = None
+    args_schema: Type[BaseModel] = AdvancedLLMStructuringToolInput
+    client: Optional[OpenAI] = None # Allow client to be passed if needed
 
     def __init__(self, client: Optional[OpenAI] = None, **kwargs):
         super().__init__(**kwargs)
-        self.client = client
+        self.client = client if client else openai_client_instance # Fallback to global if not provided
         if self.client:
-            print(f"AdvancedLLMStructuringTool: Initialized with provided OpenAI client.")
+            print(f"AdvancedLLMStructuringTool: Initialized with OpenAI client.")
         else:
             print(f"AdvancedLLMStructuringTool: Initialized WITHOUT an OpenAI client. Placeholder logic will be used.")
 
-    def _run(self, source_document_text: str, image_details_list: list[dict], source_content_type_hint: str) -> str:
-        print(f"AdvancedLLMStructuringTool: Running. Text length: {len(source_document_text)}, Images: {len(image_details_list)}, Hint: {source_content_type_hint}")
-        if not self.client:
-            print("AdvancedLLMStructuringTool: No OpenAI client available. Returning placeholder error.")
-            return json.dumps({"error": "OpenAI client not configured for AdvancedLLMStructuringTool"})
-
-        # Placeholder for actual LLM call
-        print("AdvancedLLMStructuringTool: Placeholder - LLM structuring call would happen here.")
-        # Simulate LLM output for structuring
-        simulated_blocks = [
-            {"type": "text", "content": source_document_text[:100] + "... (structured snippet)"},
-        ]
-        if image_details_list:
-            simulated_blocks.append({"type": "image", "data": image_details_list[0]})
+    def _run(self, 
+             source_document_text: Optional[str],
+             image_details_list: List[Dict[str, Any]], 
+             source_content_type_hint: str,
+             page_title: Optional[str] = None) -> str:
+        print(f"AdvancedLLMStructuringTool: Running. Text length: {len(source_document_text) if source_document_text else 0}, Images: {len(image_details_list)}, Hint: {source_content_type_hint}, Title: {page_title}")
         
+        simulated_blocks = []
+        if page_title:
+            simulated_blocks.append({"type": "text", "content": f"Title: {page_title}"})
+        
+        # Simple placeholder: interleave text chunks and images
+        # A real implementation would use an LLM for semantic chunking and placement.
+        if source_document_text:
+            # Crude split by paragraphs for placeholder, LLM would be smarter
+            text_paragraphs = [p.strip() for p in source_document_text.split('\n') if p.strip()]
+            img_idx = 0
+            for i, para in enumerate(text_paragraphs):
+                simulated_blocks.append({"type": "text", "content": para})
+                # Intersperse images (very naively)
+                if i < len(image_details_list):
+                    img_data = image_details_list[img_idx]
+                    simulated_blocks.append({
+                        "type": "image", 
+                        "gcs_url": img_data.get('image_url'), # This is still image_url, not gcs_url yet
+                        "alt_text": img_data.get('alt_text'),
+                        "caption": img_data.get('caption')
+                    })
+                    img_idx += 1
+            # Add any remaining images
+            while img_idx < len(image_details_list):
+                img_data = image_details_list[img_idx]
+                simulated_blocks.append({
+                    "type": "image", 
+                    "gcs_url": img_data.get('image_url'),
+                    "alt_text": img_data.get('alt_text'),
+                    "caption": img_data.get('caption')
+                })
+                img_idx += 1
+
+        elif image_details_list: # If no text but images exist
+             for img_data in image_details_list:
+                    simulated_blocks.append({
+                        "type": "image", 
+                        "gcs_url": img_data.get('image_url'),
+                        "alt_text": img_data.get('alt_text'),
+                        "caption": img_data.get('caption')
+                    })
+        
+        if not simulated_blocks:
+             simulated_blocks.append({"type": "text", "content": "No content processed by AdvancedLLMStructuringTool placeholder."})
+
         return json.dumps(simulated_blocks)
 
 # It's good practice to have an explicit way to initialize the client if needed by tools.
@@ -128,12 +147,12 @@ except Exception as e:
 if __name__ == '__main__':
     # print("\n--- MultimodalLLMImageMarkerTool Example (Direct Instantiate) ---")
     # marker_tool_no_client = MultimodalLLMImageMarkerTool()
-    # print(marker_tool_no_client._run(image_base64_data="dummydata", page_number=1, text_context="Some text"))
+    # print(marker_tool_no_client._run(image_path_or_base64="dummydata", page_number=1, text_context="Some text"))
 
     # if openai_client_instance:
     #     print("\n--- MultimodalLLMImageMarkerTool Example (With Client) ---")
     #     marker_tool_with_client = MultimodalLLMImageMarkerTool(client=openai_client_instance)
-    #     print(marker_tool_with_client._run(image_base64_data="base64encodedimagedata", page_number=1, text_context="Some text context for the image."))
+    #     print(marker_tool_with_client._run(image_path_or_base64="base64encodedimagedata", page_number=1, text_context="Some text context for the image."))
     
     # print("\n--- AdvancedLLMStructuringTool Example (Direct Instantiate) ---")
     # structuring_tool_no_client = AdvancedLLMStructuringTool()

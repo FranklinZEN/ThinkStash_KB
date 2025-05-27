@@ -2,6 +2,12 @@ import requests
 from crewai.tools import BaseTool
 import os
 import mimetypes # For guessing type from extension
+from typing import Type, Optional, Dict, Any # Added Dict, Any
+from pydantic import BaseModel, Field # Added Pydantic imports
+
+class ContentTypeDetectionToolInput(BaseModel):
+    identifier: str = Field(..., description="The file path or URL to detect content type from.")
+    is_file: Optional[bool] = Field(default=None, description="Specify if the identifier is a file path (True) or URL (False). Tool will infer if None.")
 
 class ContentTypeDetectionTool(BaseTool):
     """Detects content type for files and URLs using mimetypes and HEAD requests.
@@ -18,8 +24,9 @@ class ContentTypeDetectionTool(BaseTool):
         "An optional boolean 'is_file' can specify if the input is a file path (True) or URL (False); "
         "if omitted, the tool attempts to infer this."
     )
+    args_schema: Type[BaseModel] = ContentTypeDetectionToolInput # Explicitly set args_schema
 
-    def _run(self, identifier: str, is_file: bool = None) -> str:
+    def _run(self, identifier: str, is_file: Optional[bool] = None) -> str:
         print(f"ContentTypeDetectionTool (mimetypes): Running for identifier: {identifier}, is_file: {is_file}")
         simplified_type = "unknown"
 
@@ -112,6 +119,37 @@ class ContentTypeDetectionTool(BaseTool):
         elif 'png' in mime_type: return 'png'
         elif 'json' in mime_type: return 'json'
         return "unknown"
+
+class DataStoreAccessToolInput(BaseModel):
+    action: str = Field(description="Action to perform: 'put' or 'get'.")
+    key: str = Field(description="The key to use for storing or retrieving data.")
+    value: Optional[Any] = Field(default=None, description="The value to store (only for 'put' action).")
+
+class DataStoreAccessTool(BaseTool):
+    name: str = "Data Store Access Tool"
+    description: str = "Allows storing and retrieving data from a shared crew data store. Use 'put' to store data with a key, and 'get' to retrieve data using a key."
+    args_schema: Type[BaseModel] = DataStoreAccessToolInput
+    data_store: Dict[str, Any]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _run(self, action: str, key: str, value: Optional[Any] = None) -> Any:
+        print(f"DataStoreAccessTool: Action='{action}', Key='{key}', Value provided: {value is not None}")
+        if action == "put":
+            self.data_store[key] = value
+            print(f"DataStoreAccessTool: Stored data under key '{key}'.")
+            return f"Data successfully stored under key '{key}'."
+        elif action == "get":
+            retrieved_value = self.data_store.get(key)
+            if retrieved_value is not None:
+                print(f"DataStoreAccessTool: Retrieved data for key '{key}'.")
+                return retrieved_value
+            else:
+                print(f"DataStoreAccessTool: No data found for key '{key}'.")
+                return None
+        else:
+            return "Error: Invalid action. Must be 'put' or 'get'."
 
 # Example Usage (not part of the tool, just for illustration during development)
 if __name__ == '__main__':

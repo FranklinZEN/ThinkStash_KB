@@ -1,52 +1,33 @@
 # Placeholder for TS-AI-Reconstruct-4: Image Processing & Persistence Agent 
 
 from crewai import Agent
+from typing import List, Type # Ensure Type is imported if used for args_schema
+from pydantic import BaseModel
 # from app.tools.content_processing_tools import ImageDownloaderTool, GCSUploadTool # Example imports
 # from app.tools.utility_tools import ImageMetadataTool # Example import
 
 class ImageProcessingPersistenceAgent:
-    """Handles the processing and persistence of images for Thinkstash AI.
-
-    This agent is responsible for downloading images from URLs, uploading all acquired
-    images (whether downloaded or extracted from files) to Google Cloud Storage (GCS),
-    and consolidating all available metadata about each image into a standardized format.
-    """
-    def __init__(self):
+    """Handles downloading, processing, and persisting images to GCS."""
+    def __init__(self, tools: List[BaseModel] = None):
         """Initializes the ImageProcessingPersistenceAgent.
-
-        Tools for image downloading (e.g., using requests), GCS interaction
-        (google-cloud-storage client), and image metadata extraction (e.g., Pillow)
-        would be initialized here.
-        For example:
-        self.image_downloader = ImageDownloaderTool()
-        self.gcs_uploader = GCSUploadTool(bucket_name='your-gcs-bucket')
-        self.metadata_extractor = ImageMetadataTool()
+        Args:
+            tools: A list of tool instances (ImageDownloaderTool, GCSUploadTool, ImageMetadataTool).
         """
-        pass
+        self.tools = tools if tools is not None else []
 
     def image_processing_agent(self) -> Agent:
-        """Creates and returns a CrewAI Agent instance for image processing and persistence.
-
-        Configures the agent with its role, goal, backstory, and the tools needed for
-        handling image downloads, GCS uploads, and metadata consolidation.
-
-        Returns:
-            Agent: A configured CrewAI Agent instance.
-        """
+        """Creates and returns a CrewAI Agent instance for image processing and persistence."""
         return Agent(
             role='Image Processing and Persistence Agent',
-            goal='Standardize image handling by downloading URL-based images, uploading all images to GCS, and consolidating available metadata.',
+            goal='Download images from URLs or use local image paths, gather metadata, upload them to Google Cloud Storage (GCS), and provide their GCS URLs.',
             backstory=(
-                "You are the custodian of all visual assets. When an image is identified by other agents, "
-                "whether from a URL or extracted from a file, you take charge. You ensure URL-based images are reliably downloaded, "
-                "handling potential errors and verifying content types. "
-                "Then, all images are securely uploaded to Google Cloud Storage with unique names and appropriate GCS metadata. "
-                "You meticulously gather all available information about each image (e.g., source URL/file, GCS URL, alt text, captions, "
-                "LLM-generated descriptions, dimensions, MIME type) into a standardized ProcessedImageData object, ready for final content assembly."
+                "You are an expert in handling digital images. You efficiently download images from various sources, "
+                "extract crucial metadata like dimensions and MIME types, and securely upload them to Google Cloud Storage. "
+                "Your final output is a list of processed image data, each including its GCS URL and relevant metadata."
             ),
             verbose=True,
-            allow_delegation=False, # This agent uses its specific tools for image operations.
-            # tools=[self.image_downloader, self.gcs_uploader, self.metadata_extractor]
+            allow_delegation=False,
+            tools=self.tools
         )
 
 # Agent-specific methods for the image processing workflow could be added here.

@@ -1,15 +1,47 @@
 # Placeholder for tasks related to TS-AI-Reconstruct-3: Web URL Content Acquisition Agent 
 
 from crewai import Task, Agent # Assuming Agent for type hinting
+from pydantic import HttpUrl # For type hinting if needed in expected output examples
+from typing import Optional, Dict, Any, List # Added List
+import uuid # For generating unique IDs
 
 class WebURLAcquisitionTasks:
-    """Defines tasks for the WebURLContentAcquisitionAgent.
+    """Defines tasks for the WebURLContentAcquisitionAgent, focusing on using the OptimizedHtmlExtractionTool."""
 
-    These tasks cover the entire lifecycle of processing a web URL, from initial
-    validation and content fetching to detailed extraction of text, images, titles,
-    and attempting to identify paywalls. The final step involves packaging all
-    extracted information.
-    """
+    def comprehensive_url_processing_task(self, agent: Agent, url_to_process: str) -> Task:
+        """Creates a Task for comprehensive processing of a web URL using the WebContentFetcherTool.
+        The tool handles initial fetching, paywall detection, URL filtering, and basic content extraction.
+        This task orchestrates the use of the tool and subsequent data storage if successful.
+        """
+        description = f"""Process the web URL: {url_to_process} using the 'Web Content Fetcher Tool'. 
+        The tool will return a dictionary with fields like 'status', 'original_url', 'final_url', 'page_title', 'extracted_text', 'images', 'pdf_bytes', 'error_message', and 'processing_duration_seconds'.
+
+        Your primary actions are:
+        1. Execute the 'Web Content Fetcher Tool' with the provided URL ('{url_to_process}'). Let the output of this tool be referred to as 'tool_output'.
+        2. Analyze the 'status' field from 'tool_output':
+           a. If 'status' is 'success':
+              - Let 'actual_text' be the value of 'tool_output.extracted_text'.
+              - Let 'actual_images' be the value of 'tool_output.images'.
+              - Initialize 'text_ref_id' to null. If 'actual_text' is present and not empty, YOU MUST generate a new unique UUID string (e.g., using a mental model of uuid.uuid4().hex + '_text_ref'). Then, use the 'Data Store Access Tool' with parameters: action='put', key=YOUR_GENERATED_UUID_STRING, value=actual_text. Set 'text_ref_id' to be YOUR_GENERATED_UUID_STRING.
+              - Initialize 'images_ref_id' to null. If 'actual_images' list is present and not empty, YOU MUST generate another new unique UUID string (e.g., uuid.uuid4().hex + '_images_ref'). Then, use the 'Data Store Access Tool' with parameters: action='put', key=YOUR_SECOND_GENERATED_UUID_STRING, value=actual_images. Set 'images_ref_id' to be YOUR_SECOND_GENERATED_UUID_STRING.
+              - Construct a summary string for 'summary_of_extraction' (e.g., 'Text and images stored', 'Only text stored', 'No new content stored').
+              - Your final answer for this task MUST BE a JSON string dictionary containing: 'status' ('success'), 'original_url' (from tool_output), 'final_url' (from tool_output), 'page_title' (from tool_output), 'processing_duration_seconds' (from tool_output), 'summary_of_extraction', 'extracted_text_ref' (which is your 'text_ref_id'), and 'images_ref' (which is your 'images_ref_id').
+           b. If 'status' is 'pdf_content_downloaded':
+              - Your final answer for this task MUST BE a JSON string dictionary containing: 'status' ('pdf_content_downloaded'), 'original_url' (from tool_output), 'final_url' (from tool_output), 'page_title' (from tool_output), 'pdf_content_info' (e.g., 'PDF content was fetched. Reference key for pdf_bytes could be generated and stored if a system for that exists, but for now, note its presence.'), and 'processing_duration_seconds' (from tool_output).
+           c. If 'status' indicates an error (e.g., 'unsupported_url_type', 'strict_paywall_domain', 'error_paywall', etc.):
+              - Your final answer for this task MUST BE a JSON string dictionary containing: 'status' (the error status from tool_output), 'original_url' (from tool_output), 'final_url' (from tool_output, if any), 'page_title' (from tool_output, if any), 'error_message' (from tool_output), and 'processing_duration_seconds' (from tool_output).
+        Ensure your JSON output is concise and directly reflects the outcome based on the tool's 'status'."""
+        
+        expected_output = """A JSON string dictionary. Examples:
+If successful: {\"status\": \"success\", \"original_url\": \"...\", \"final_url\": \"...\", \"page_title\": \"...\", \"processing_duration_seconds\": 0.5, \"summary_of_extraction\": \"Text and images stored\", \"extracted_text_ref\": \"some_uuid_text_ref\", \"images_ref\": \"another_uuid_images_ref\"}
+If PDF: {\"status\": \"pdf_content_downloaded\", \"original_url\": \"...\", \"final_url\": \"...\", \"page_title\": \"doc.pdf\", \"pdf_content_info\": \"PDF content was fetched...\", \"processing_duration_seconds\": 0.2}
+If error (e.g. paywall): {\"status\": \"error_paywall\", \"original_url\": \"...\", \"final_url\": \"...\", \"page_title\": \"Paywall Page\", \"error_message\": \"Paywall detected\", \"processing_duration_seconds\": 0.1}
+"""
+        return Task(
+            description=description,
+            expected_output=expected_output,
+            agent=agent
+        )
 
     def url_validation_task(self, agent: Agent, url: str) -> Task:
         """Creates a Task for validating a given URL.
@@ -52,7 +84,7 @@ class WebURLAcquisitionTasks:
             # tools=[HTTPFetchingTool_instance]
         )
 
-    def paywall_detection_task(self, agent: Agent, url: str, raw_html_content: str = None, extracted_text_length: int = -1) -> Task:
+    def paywall_detection_task(self, agent: Agent, url: str, raw_html_content: Optional[str] = None, extracted_text_length: int = -1) -> Task:
         """Creates a Task for detecting potential paywalls on a web page.
 
         Uses a multi-tiered strategy including domain checks, HTML scanning, and potentially
@@ -67,7 +99,7 @@ class WebURLAcquisitionTasks:
         Returns:
             Task: A CrewAI Task configured for paywall detection.
         """
-        description = (
+        description_str = (
             f"Analyze the content from URL ({url}) for signs of a paywall. "
             f"HTML content provided: {bool(raw_html_content)}. "
             f"Length of pre-extracted text available: {extracted_text_length if extracted_text_length != -1 else 'N/A'}. "
@@ -76,10 +108,9 @@ class WebURLAcquisitionTasks:
             "or inferring based on very short extracted content later."
         )
         return Task(
-            description=description,
+            description=description_str,
             expected_output="A dictionary indicating paywall status (e.g., 'detected', 'not_detected', 'uncertain') and any supporting details or confidence level.",
             agent=agent
-            # tools=[PaywallDetectionTool_instance]
         )
 
     def main_content_extraction_task(self, agent: Agent, raw_html_content: str, url: str) -> Task:

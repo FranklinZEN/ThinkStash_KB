@@ -24,8 +24,8 @@ from aiservice.app.tools.data_extraction_tools import (
     DocxParserTool, TxtParserTool, MarkdownParserTool, PDFMinerSixParserTool
 )
 from aiservice.app.tools.web_tools import (
-    HTTPFetchingTool, TrafilaturaContentExtractorTool, 
-    BeautifulSoupImageExtractorTool, PaywallDetectionTool
+    OptimizedHtmlExtractionTool,
+    PaywallDetectionTool
 )
 from aiservice.app.tools.content_processing_tools import (
     ImageDownloaderTool, GCSUploadTool, ImageMetadataTool
@@ -52,45 +52,44 @@ class CrewFactory:
             self.default_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
             print("CrewFactory: Default LLM (gpt-4o-mini) initialized.")
         except Exception as e:
-            print(f"CrewFactory: Failed to initialize default LLM. Error: {e}")
-            print("Please ensure OPENAI_API_KEY is set and the openai package is correctly installed.")
+            print(f"CrewFactory: Failed to initialize default LLM: {e}. Ensure OPENAI_API_KEY is set.")
             self.default_llm = None
 
         # --- Initialize Tools --- 
         self.content_type_tool = ContentTypeDetectionTool()
+        self.paywall_detection_tool = PaywallDetectionTool()
+        self.optimized_html_tool = OptimizedHtmlExtractionTool()
         self.pymupdf_parser_tool = PyMuPDFParserTool()
-        self.nougat_parser_tool = NougatPDFParserTool() 
-        self.pdfminer_tool = PDFMinerSixParserTool()
+        self.nougat_parser_tool = NougatPDFParserTool()
         self.pdf_to_image_tool = PDFToImageTool()
-        self.docx_parser_tool = DocxParserTool()
-        self.txt_parser_tool = TxtParserTool()
-        self.md_parser_tool = MarkdownParserTool()
-        self.http_fetching_tool = HTTPFetchingTool()
-        self.trafilatura_tool = TrafilaturaContentExtractorTool()
-        self.bs_image_tool = BeautifulSoupImageExtractorTool()
-        self.paywall_tool = PaywallDetectionTool()
+        self.multimodal_marker_tool = MultimodalLLMImageMarkerTool(client=openai_client)
         self.image_downloader_tool = ImageDownloaderTool()
         self.gcs_upload_tool = GCSUploadTool(gcs_bucket_name=get_gcs_bucket_name())
         self.image_metadata_tool = ImageMetadataTool()
-        self.multimodal_marker_tool = MultimodalLLMImageMarkerTool(client=openai_client)
         self.advanced_structuring_tool = AdvancedLLMStructuringTool(client=openai_client)
+        self.docx_parser_tool = DocxParserTool()
+        self.txt_parser_tool = TxtParserTool()
+        self.md_parser_tool = MarkdownParserTool()
 
         # --- Initialize Agent Creators --- 
-        self.orchestration_agent_creator = OrchestrationAgent()
+        self.orchestration_agent_creator = OrchestrationAgent(tools=[self.content_type_tool, self.paywall_detection_tool])
         self.pdf_agent_creator = PDFContentAcquisitionAgent(tools=[
             self.pymupdf_parser_tool,
             self.nougat_parser_tool,
             self.pdf_to_image_tool,
             self.multimodal_marker_tool
         ])
-        self.generic_file_agent_creator = GenericFileContentAcquisitionAgent()
-        self.web_url_agent_creator = WebURLContentAcquisitionAgent(tools=[
-            self.http_fetching_tool,
-            self.trafilatura_tool,
-            self.bs_image_tool,
-            self.paywall_tool
+        self.generic_file_agent_creator = GenericFileContentAcquisitionAgent(tools=[
+            self.docx_parser_tool,
+            self.txt_parser_tool,
+            self.md_parser_tool
         ])
-        self.image_processing_agent_creator = ImageProcessingPersistenceAgent()
+        self.web_url_agent_creator = WebURLContentAcquisitionAgent(tools=[self.optimized_html_tool])
+        self.image_processing_agent_creator = ImageProcessingPersistenceAgent(tools=[
+            self.image_downloader_tool,
+            self.gcs_upload_tool,
+            self.image_metadata_tool
+        ])
         self.content_structuring_agent_creator = ContentConsolidationStructuringAgent(tools=[
             self.advanced_structuring_tool
         ])
@@ -110,6 +109,7 @@ class CrewFactory:
         self.web_tasks_def = WebURLAcquisitionTasks()
         self.img_proc_tasks_def = ImageProcessingTasks()
         self.struct_tasks_def = ContentStructuringTasks()
+        print("CrewFactory: Initialization complete with all tools and agents.")
 
     def create_core_reconstruction_crew(self, crew_input: dict = None) -> Crew:
         """Creates and configures the CoreReconstructionCrew with tasks based on input."""
@@ -125,7 +125,16 @@ class CrewFactory:
                 source_type=crew_input['source_type'],
                 source_identifier=crew_input['source_identifier']
             )
-            initial_tasks.append(triage_task)
+            # Paywall check could also be an early task for the orchestrator if URL
+            if crew_input.get("source_type") == "url":
+                paywall_check_task = self.orch_tasks_def.paywall_check_task(
+                    agent=self.main_orchestrator,
+                    url="{{task_initial_triage.output.normalized_identifier}}" # Use normalized URL from triage
+                )
+                paywall_check_task.context = [triage_task]
+                initial_tasks.extend([triage_task, paywall_check_task])
+            else:
+                initial_tasks.append(triage_task)
 
         return Crew(
             agents=[

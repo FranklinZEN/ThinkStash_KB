@@ -42,12 +42,10 @@ class OrchestrationTasks:
             Task: A CrewAI Task configured for initial content triage.
         """
         return Task(
-            description=f"Perform initial triage for the input: {source_identifier} (source type: {source_type}). "
-                        f"If source_type is 'url', first normalize the URL (e.g., ensure it starts with http:// or https://). "
-                        f"Then, detect its content type (e.g., 'pdf', 'html', 'docx', 'text', 'unknown') using the ContentTypeDetectionTool. "
-                        f"This step determines the nature of the content for further specialized processing. Your final answer should be the dictionary containing the results.",
-            expected_output="A dictionary containing: 'normalized_identifier' (the original identifier for files, or the normalized URL for urls), "
-                            "'detected_content_type', and 'original_source_type'.",
+            description=f"Perform initial triage for input: {source_identifier} (type: {source_type}). "
+                        f"If URL, normalize it (ensure scheme). Then, use ContentTypeDetectionTool to detect content type. "
+                        f"Final answer MUST be a dictionary: {{'normalized_identifier': '...', 'detected_content_type': '...', 'original_source_type': '...'}}.",
+            expected_output="Dictionary with keys: normalized_identifier, detected_content_type, original_source_type.",
             agent=agent
         )
 
@@ -136,6 +134,15 @@ class OrchestrationTasks:
             description=f"Implement fallback strategy due to a critical failure. Package any partial data that might be available. "
                         f"Failure info: {critical_failure_info}. The goal is to provide a clear status and any retrievable information to the user or system.",
             expected_output="A data package containing partial data (if any), a clear error status, and a message explaining the failure.",
+            agent=agent
+        )
+
+    def paywall_check_task(self, agent: Agent, url: str) -> Task:
+        """Creates a task to check a given URL for paywalls using the PaywallDetectionTool."""
+        return Task(
+            description=f"Check the URL {url} for any paywalls using the PaywallDetectionTool. "
+                        "Your final answer MUST be the direct dictionary output from the PaywallDetectionTool.",
+            expected_output="A dictionary from PaywallDetectionTool with keys like 'status', 'details', 'url'.",
             agent=agent
         )
 

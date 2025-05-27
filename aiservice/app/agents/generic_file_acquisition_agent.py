@@ -1,6 +1,8 @@
 # Placeholder for TS-AI-Reconstruct-2: Generic File Content Acquisition Agent (DOCX, TXT, MD) 
 
 from crewai import Agent
+from typing import List, Type # Ensure Type is imported if used for args_schema
+from pydantic import BaseModel
 # Import specific tool classes if they are to be instantiated here, e.g.:
 # from app.tools.data_extraction_tools import DocxParserTool, TxtParserTool, MarkdownParserTool
 
@@ -12,16 +14,13 @@ class GenericFileContentAcquisitionAgent:
     elements from Markdown like linked images, code blocks, and math expressions.
     It primarily uses dedicated parsing libraries rather than direct LLM calls for core extraction.
     """
-    def __init__(self):
+    def __init__(self, tools: List[BaseModel] = None):
         """Initializes the GenericFileContentAcquisitionAgent.
         
-        This is where tools for DOCX, TXT, and MD parsing would be initialized.
-        For example:
-        self.docx_parser = DocxParserTool()
-        self.txt_parser = TxtParserTool()
-        self.md_parser = MarkdownParserTool()
+        Args:
+            tools: A list of tool instances for DOCX, TXT, MD parsing.
         """
-        pass
+        self.tools = tools if tools is not None else []
 
     def generic_file_acquisition_agent(self) -> Agent:
         """Creates and returns a CrewAI Agent instance for generic file acquisition.
@@ -34,17 +33,15 @@ class GenericFileContentAcquisitionAgent:
         """
         return Agent(
             role='Generic File Content Acquisition Agent',
-            goal='Handle common office document formats (DOCX), plain text (TXT), and Markdown (MD) files, extracting text, images (for DOCX), and structured elements from MD.',
+            goal='Extract content from DOCX, TXT, and Markdown files, including text, images (from DOCX), and structured elements (from MD).',
             backstory=(
-                "You are a versatile file processor, adept at handling a variety of common document types. "
-                "For DOCX files, you skillfully extract text and images, preparing them for the next stages using image placeholders. "
-                "For TXT files, you ensure accurate text retrieval, mindful of encodings. "
-                "For Markdown, you parse not just the text, but also identify linked images (alt text, URL), code blocks, and math expressions. "
-                "You focus on robust extraction using established libraries without direct LLM intervention for core parsing logic."
+                "You are a versatile file processor, adept at handling DOCX, TXT, and Markdown. "
+                "For DOCX, you extract text and image placeholders. For TXT, you ensure accurate text retrieval. "
+                "For Markdown, you parse text, linked images, code blocks, and math expressions."
             ),
             verbose=True,
             allow_delegation=False, # This agent uses its specific set of parsing tools for each file type.
-            # tools=[self.docx_parser, self.txt_parser, self.md_parser] # Tool instances passed during crew setup.
+            tools=self.tools
         )
 
 # Agent-specific methods for orchestrating the processing of a given file

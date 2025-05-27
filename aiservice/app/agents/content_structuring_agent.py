@@ -1,6 +1,8 @@
 # Placeholder for TS-AI-Reconstruct-5: Content Consolidation & Structuring Agent 
 
 from crewai import Agent
+from typing import List, Type
+from pydantic import BaseModel
 # from app.tools.llm_interaction_tools import AdvancedLLMStructuringTool # Example import
 
 class ContentConsolidationStructuringAgent:
@@ -14,7 +16,7 @@ class ContentConsolidationStructuringAgent:
     content like math and code, and structures everything into a final, ordered sequence
     of content blocks (text, image, math, code).
     """
-    def __init__(self, tools=None):
+    def __init__(self, tools: List[BaseModel] = None):
         """Initializes the ContentConsolidationStructuringAgent.
 
         Args:
