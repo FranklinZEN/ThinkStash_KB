@@ -308,19 +308,80 @@ class WebContentFetcherTool(BaseTool):
                         paywall_clue_message = f"Initial paywall suspected based on CSS selector: '{selector}'."
                         break
         
-        main_content_html_segment = trafilatura.extract(html_content, url=str(final_url_pydantic), include_comments=False, include_tables=True, output_format='html', favor_precision=True)
+        main_content_html_segment = None
         extracted_article_text: Optional[str] = None
         image_search_soup = soup
 
-        if main_content_html_segment:
-            main_content_soup = BeautifulSoup(main_content_html_segment, 'lxml')
-            temp_extracted_text = main_content_soup.get_text(separator='\n', strip=True)
-            if temp_extracted_text:
-                extracted_article_text = temp_extracted_text
-                image_search_soup = main_content_soup
-        
+        # Attempt 1: Trafilatura with favor_recall=True, output_format='txt' (more aggressive text grabbing)
+        print(f"WebContentFetcherTool: Before Attempt 1 (favor_recall), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}")
+        try:
+            extracted_article_text = trafilatura.extract(
+                html_content, 
+                url=str(final_url_pydantic), 
+                include_comments=False, 
+                include_tables=True, 
+                favor_recall=True, # Try to get more content
+                output_format='txt'
+            )
+            if extracted_article_text and len(extracted_article_text.strip()) > 100: # Basic check for meaningful content
+                print("WebContentFetcherTool: Extracted text with favor_recall=True, output_format='txt'")
+            else:
+                extracted_article_text = None # Discard if too short or empty
+        except Exception as e_recall_txt:
+            print(f"WebContentFetcherTool: Error during trafilatura (favor_recall, txt): {e_recall_txt}")
+            extracted_article_text = None
+        print(f"WebContentFetcherTool: After Attempt 1 (favor_recall), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}, Length: {len(extracted_article_text.strip()) if extracted_article_text else 0}")
+
+        # Attempt 2 (Original Pass 1): Trafilatura with favor_precision=True, output_format='html'
         if not extracted_article_text and html_content:
-            extracted_article_text = trafilatura.extract(html_content, url=str(final_url_pydantic), include_comments=False, include_tables=True, output_format='text')
+            print(f"WebContentFetcherTool: Before Attempt 2 (precision_html), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}")
+            try:
+                main_content_html_segment = trafilatura.extract(
+                    html_content, 
+                    url=str(final_url_pydantic), 
+                    include_comments=False, 
+                    include_tables=True, 
+                    output_format='html', 
+                    favor_precision=True
+                )
+                if main_content_html_segment:
+                    main_content_soup = BeautifulSoup(main_content_html_segment, 'lxml')
+                    temp_extracted_text = main_content_soup.get_text(separator='\n', strip=True)
+                    if temp_extracted_text and len(temp_extracted_text.strip()) > 100:
+                        extracted_article_text = temp_extracted_text
+                        image_search_soup = main_content_soup
+                        print("WebContentFetcherTool: Extracted text with favor_precision=True, output_format='html'")
+                    else:
+                        extracted_article_text = None # Reset if main content segment gave too little text
+                        main_content_html_segment = None # Don't use this segment for images if text was poor
+            except Exception as e_precision_html:
+                print(f"WebContentFetcherTool: Error during trafilatura (favor_precision, html): {e_precision_html}")
+                extracted_article_text = None
+                main_content_html_segment = None
+            print(f"WebContentFetcherTool: After Attempt 2 (precision_html), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}, Length: {len(extracted_article_text.strip()) if extracted_article_text else 0}")
+
+        # Attempt 3 (Original Pass 2 - Fallback): Trafilatura with default settings (often txt), if still no text
+        if not extracted_article_text and html_content:
+            print(f"WebContentFetcherTool: Before Attempt 3 (fallback_txt), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}")
+            try:
+                # This is the original fallback, try with include_tables=True explicitly
+                fallback_text = trafilatura.extract(
+                    html_content, 
+                    url=str(final_url_pydantic), 
+                    include_comments=False, 
+                    include_tables=True, # Explicitly ensure tables are considered here
+                    output_format='txt' # Be explicit for the fallback text attempt
+                )
+                if fallback_text and len(fallback_text.strip()) > 100:
+                    extracted_article_text = fallback_text
+                    print("WebContentFetcherTool: Extracted text with fallback trafilatura (txt output)")
+                # If this fallback also results in very short text, it might be better to leave extracted_article_text as None
+                # so that paywall logic (which checks for short text + keywords) can trigger correctly.
+                # No need to set image_search_soup here as it defaults to full soup if main_content_html_segment wasn't successful.
+            except Exception as e_fallback_txt:
+                print(f"WebContentFetcherTool: Error during fallback trafilatura (txt): {e_fallback_txt}")
+                # extracted_article_text remains None or its previous value
+            print(f"WebContentFetcherTool: After Attempt 3 (fallback_txt), extracted_article_text is: {'None' if extracted_article_text is None else 'Populated'}, Length: {len(extracted_article_text.strip()) if extracted_article_text else 0}")
 
         final_paywall_verdict = False
         final_paywall_message = paywall_clue_message
@@ -421,8 +482,10 @@ class WebContentFetcherTool(BaseTool):
                     if fetched_image: images_found.append(fetched_image)
 
         if not extracted_article_text and not images_found:
+             print(f"WebContentFetcherTool: Returning parse_error. extracted_article_text is {'None' if extracted_article_text is None else 'Populated'}. images_found: {len(images_found)}")
              return WebContent(status="parse_error", original_url=original_url_pydantic, final_url=final_url_pydantic, page_title=page_title_text, error_message="Trafilatura and BeautifulSoup could not extract significant text or images.", processing_duration_seconds = time.time() - start_time).model_dump()
 
+        print(f"WebContentFetcherTool: Returning success. extracted_article_text is {'None' if extracted_article_text is None else 'Populated'}. Length: {len(extracted_article_text.strip()) if extracted_article_text else 0}")
         return WebContent(
             status="success", original_url=original_url_pydantic, final_url=final_url_pydantic, 
             page_title=page_title_text, extracted_text=extracted_article_text, 

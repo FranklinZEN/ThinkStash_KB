@@ -49,11 +49,33 @@ class ContentTypeDetectionTool(BaseTool):
                 # Use mimetypes to guess type from extension
                 mime_type, _ = mimetypes.guess_type(identifier)
                 print(f"ContentTypeDetectionTool (mimetypes): Guessed MIME type (file): {mime_type}")
+                
                 if mime_type:
                     simplified_type = self._simplify_mime_type(mime_type)
-                else:
-                    # If mimetypes fails, it's truly unknown or needs content inspection (which we removed)
-                    simplified_type = "unknown_file_type" 
+                else: 
+                    # If mimetypes returns None, try to infer from common extensions
+                    _, ext = os.path.splitext(identifier)
+                    ext = ext.lower()
+                    print(f"ContentTypeDetectionTool (mimetypes): MIME type was None, trying extension '{ext}' directly.")
+                    if ext == ".pdf":
+                        simplified_type = "pdf"
+                    elif ext == ".docx":
+                        simplified_type = "docx"
+                    elif ext == ".md":
+                        simplified_type = "md"
+                    elif ext == ".txt":
+                        simplified_type = "txt"
+                    elif ext in [".jpg", ".jpeg"]:
+                        simplified_type = "jpeg"
+                    elif ext == ".png":
+                        simplified_type = "png"
+                    # Add other common extensions here if needed
+                    else:
+                        simplified_type = "unknown_file_type"
+                
+                # Fallback if still unknown after extension check
+                if simplified_type == "unknown":
+                     simplified_type = "unknown_file_type"
 
             else: # It's a URL
                 print(f"ContentTypeDetectionTool (mimetypes): Processing as URL: {identifier}")
@@ -112,7 +134,7 @@ class ContentTypeDetectionTool(BaseTool):
         elif 'vnd.openxmlformats-officedocument.wordprocessingml.document' in mime_type: return 'docx'
         elif 'msword' in mime_type: return 'docx' 
         elif 'html' in mime_type: return 'html'
-        elif 'markdown' in mime_type: return 'md'
+        elif 'markdown' in mime_type or mime_type == 'text/md': return 'md'
         elif 'plain' in mime_type or 'text/text' in mime_type: return 'txt' # common for .txt
         elif 'text' in mime_type: return 'txt' # Broader catch for other text types as txt
         elif 'jpeg' in mime_type or 'jpg' in mime_type: return 'jpeg'

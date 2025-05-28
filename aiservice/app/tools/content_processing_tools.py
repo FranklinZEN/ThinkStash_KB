@@ -5,7 +5,7 @@ from crewai.tools import BaseTool
 import os
 import uuid # For generating unique filenames
 import io # For handling image bytes
-from aiservice.app.config import get_gcs_bucket_name # Import the accessor
+from app.config import get_gcs_bucket_name # Changed from aiservice.app.config
 
 class ImageDownloaderTool(BaseTool):
     name: str = "Image Downloader from URL"
@@ -18,17 +18,42 @@ class ImageDownloaderTool(BaseTool):
     )
 
     def _run(self, image_url: str, output_folder: str = "temp_downloaded_images") -> dict:
-        """Downloads an image from a URL.
+        """Downloads an image from a URL or confirms a local file path.
 
         Args:
-            image_url: The URL of the image.
-            output_folder: Local folder to save the image.
+            image_url: The URL of the image or a local file path.
+            output_folder: Local folder to save the image if downloaded.
 
         Returns:
-            A dictionary with download details or an error message.
+            A dictionary with image details or an error message.
         """
+        # Check if image_url is a local path first
+        if isinstance(image_url, str) and os.path.exists(image_url):
+            print(f"ImageDownloaderTool: Identified '{image_url}' as an existing local file path.")
+            # For local files, we don't download. We just confirm its existence and format the output.
+            filename = os.path.basename(image_url)
+            # Try to guess content type for local files, similar to GCSUploadTool
+            ext = os.path.splitext(filename)[1].lower()
+            content_type_map = {
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp',
+                '.bmp': 'image/bmp',
+                '.tiff': 'image/tiff'
+            }
+            content_type = content_type_map.get(ext, 'application/octet-stream')
+            return {
+                "local_path": image_url, # It's already local
+                "original_url": image_url, # Treat path as original identifier
+                "filename": filename,
+                "content_type": content_type,
+                "error": None
+            }
+
         if not isinstance(image_url, str) or not image_url.startswith(('http://', 'https://')):
-            return {"error": "Invalid image URL provided.", "local_path": None}
+            return {"error": "Invalid image URL or non-existent local path provided.", "local_path": None}
 
         if not os.path.exists(output_folder):
             try:
