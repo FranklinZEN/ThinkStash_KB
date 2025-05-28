@@ -3,7 +3,7 @@ import base64
 import requests # For illustration if calling a separate LLM service, or use OpenAI client
 import os
 import json # For constructing and parsing LLM I/O
-from app.config import get_openai_api_key # Changed from aiservice.app.config
+from aiservice.app.config.settings import settings # New import for V2.5 settings
 from typing import Any, Optional, List, Dict, Type # Added Optional, List, Dict, Type
 from openai import OpenAI # Keep the import for type hinting and potential direct use
 from pydantic import BaseModel, Field
@@ -362,12 +362,11 @@ Ensure the JSON is a single list at the root. If the input `document_text` is em
 # This can be done in the CrewFactory or a similar central place.
 openai_client_instance: Optional[OpenAI] = None
 try:
-    api_key = get_openai_api_key()
-    if api_key:
-        openai_client_instance = OpenAI(api_key=api_key)
-        print("llm_interaction_tools.py: OpenAI client initialized successfully.")
+    if settings.openai_api_key:
+        openai_client_instance = OpenAI(api_key=settings.openai_api_key)
+        print("llm_interaction_tools.py: OpenAI client initialized successfully using settings.openai_api_key.")
     else:
-        print("llm_interaction_tools.py: OPENAI_API_KEY not found. LLM tools requiring it will use placeholders if no client is passed to them.")
+        print("llm_interaction_tools.py: OPENAI_API_KEY not found in settings. LLM tools requiring it will use placeholders if no client is passed to them.")
 except ImportError:
     print("llm_interaction_tools.py: OpenAI Python library not installed. LLM tools requiring it will use placeholders if no client is passed to them.")
 except Exception as e:

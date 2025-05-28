@@ -5,12 +5,12 @@ from langchain_openai import ChatOpenAI
 
 # --- Step 1: Uncomment Agent Imports ---
 # Import Agents
-from aiservice.app.agents.orchestration_agent import OrchestrationAgent
-from aiservice.app.agents.pdf_acquisition_agent import PDFContentAcquisitionAgent
-from aiservice.app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent
-from aiservice.app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent
-from aiservice.app.agents.image_processing_agent import ImageProcessingPersistenceAgent
-from aiservice.app.agents.content_structuring_agent import ContentConsolidationStructuringAgent
+from aiservice.app.agents.orchestration_agent import OrchestrationAgent as OrchestrationAgentClass
+from aiservice.app.agents.pdf_acquisition_agent import PDFAcquisitionAgent as PDFAgentClass
+from aiservice.app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent as GenericFileAgentClass
+from aiservice.app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent as WebAgentClass
+from aiservice.app.agents.image_processing_agent import ImageProcessingPersistenceAgent as ImageAgentClass
+from aiservice.app.agents.content_structuring_agent import ContentConsolidationStructuringAgent as StructuringAgentClass
 
 # --- Step 2: Uncomment Task Imports ---
 # Import Tasks
@@ -39,12 +39,14 @@ from aiservice.app.tools.content_processing_tools import (
     GCSUploadTool, 
     ImageMetadataTool 
 )
-from aiservice.app.config import get_gcs_bucket_name, get_openai_api_key
+from aiservice.app.config.settings import settings # New V2.5 settings import
 
 from aiservice.app.tools.llm_interaction_tools import (
     MultimodalLLMImageMarkerTool, AdvancedLLMStructuringTool,
     openai_client_instance
 )
+
+from aiservice.app.models.content_structuring_models import ContentStructuringInput
 
 class CrewFactory:
     """Factory class to create and configure different crews."""
@@ -59,8 +61,16 @@ class CrewFactory:
         """Initializes the factory, loads configurations, and instantiates tools and agents."""
         print("CrewFactory: Initializing...")
         try:
-            self.default_llm = ChatOpenAI(model=self.DEFAULT_LLM_NAME, temperature=0.2)
-            print(f"CrewFactory: Default LLM ({self.DEFAULT_LLM_NAME}) initialized.")
+            # Use settings for LLM configuration if available, otherwise fallback or error
+            if settings.openai_api_key and settings.default_llm_model:
+                 self.default_llm = ChatOpenAI(api_key=settings.openai_api_key, model_name=settings.default_llm_model, temperature=0.2)
+                 print(f"CrewFactory: Default LLM ({settings.default_llm_model}) initialized using settings.")
+            elif openai_client_instance: # Fallback to pre-initialized client from llm_interaction_tools
+                 self.default_llm = ChatOpenAI(model_name=self.DEFAULT_LLM_NAME, temperature=0.2) # Needs API key from client or env
+                 print(f"CrewFactory: Default LLM ({self.DEFAULT_LLM_NAME}) initialized using pre-existing client instance context.")
+            else:
+                self.default_llm = ChatOpenAI(model=self.DEFAULT_LLM_NAME, temperature=0.2) # Will try to use env vars
+                print(f"CrewFactory: Default LLM ({self.DEFAULT_LLM_NAME}) initialized (attempting env vars).")
         except Exception as e:
             print(f"CrewFactory: Failed to initialize default LLM: {e}. Ensure OPENAI_API_KEY is set.")
             self.default_llm = None
@@ -80,7 +90,7 @@ class CrewFactory:
         self.md_parser_tool = MarkdownParserTool()
 
         self.image_downloader_tool = ImageDownloaderTool()
-        self.gcs_upload_tool = GCSUploadTool(gcs_bucket_name=get_gcs_bucket_name())
+        self.gcs_upload_tool = GCSUploadTool(gcs_bucket_name_override=settings.gcs_bucket_name)
         self.image_metadata_tool = ImageMetadataTool()
         
         self.multimodal_marker_tool = MultimodalLLMImageMarkerTool(client=openai_client_instance)
@@ -89,19 +99,19 @@ class CrewFactory:
 
         # --- Initialize Agent Creators, passing specific tools ---
         print("CrewFactory: Initializing Agent Creators...")
-        self.orchestration_agent_creator = OrchestrationAgent(tools=[self.content_type_tool])
-        self.pdf_agent_creator = PDFContentAcquisitionAgent(tools=[
+        self.orchestration_agent_creator = OrchestrationAgentClass(tools=[self.content_type_tool])
+        self.pdf_agent_creator = PDFAgentClass(tools=[
             self.pymupdf_parser_tool, self.nougat_parser_tool, 
             self.pdf_to_image_tool, self.multimodal_marker_tool
         ])
-        self.web_url_agent_creator = WebURLContentAcquisitionAgent(tools=[self.web_content_fetcher_tool])
-        self.generic_file_agent_creator = GenericFileContentAcquisitionAgent(tools=[
+        self.web_url_agent_creator = WebAgentClass(tools=[self.web_content_fetcher_tool])
+        self.generic_file_agent_creator = GenericFileAgentClass(tools=[
             self.docx_parser_tool, self.txt_parser_tool, self.md_parser_tool
         ])
-        self.image_processing_agent_creator = ImageProcessingPersistenceAgent(tools=[
+        self.image_processing_agent_creator = ImageAgentClass(tools=[
             self.image_downloader_tool, self.gcs_upload_tool, self.image_metadata_tool
         ])
-        self.content_structuring_agent_creator = ContentConsolidationStructuringAgent(tools=[
+        self.content_structuring_agent_creator = StructuringAgentClass(tools=[
             self.advanced_structuring_tool
         ])
         

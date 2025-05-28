@@ -5,7 +5,7 @@ from crewai.tools import BaseTool
 import os
 import uuid # For generating unique filenames
 import io # For handling image bytes
-from app.config import get_gcs_bucket_name # Changed from aiservice.app.config
+from aiservice.app.config.settings import settings # New import for V2.5 settings
 
 class ImageDownloaderTool(BaseTool):
     name: str = "Image Downloader from URL"
@@ -111,10 +111,10 @@ class GCSUploadTool(BaseTool):
     storage_client: storage.Client | None = None
     default_gcs_bucket_name: str | None = None
 
-    def __init__(self, gcs_bucket_name: str = None, **kwargs):
+    def __init__(self, gcs_bucket_name_override: str = None, **kwargs):
         super().__init__(**kwargs)
-        # Try to get bucket name from argument, then from .env via config, then None
-        self.default_gcs_bucket_name = gcs_bucket_name or get_gcs_bucket_name()
+        # Use override if provided, otherwise use settings, then None
+        self.default_gcs_bucket_name = gcs_bucket_name_override or settings.gcs_bucket_name
         
         try:
             self.storage_client = storage.Client()
@@ -122,7 +122,7 @@ class GCSUploadTool(BaseTool):
             if self.default_gcs_bucket_name:
                  self.description = f"{current_desc} Default bucket configured: {self.default_gcs_bucket_name}."
             else:
-                self.description = f"{current_desc} GCS bucket name needs to be provided at runtime as it was not found in config."
+                self.description = f"{current_desc} GCS bucket name needs to be provided at runtime as it was not found in settings."
         except Exception as e:
             print(f"CRITICAL: Failed to initialize Google Cloud Storage client: {e}. GCSUploadTool will not work.")
             self.storage_client = None

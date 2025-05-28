@@ -14,6 +14,7 @@ python-dotenv==1.1.0
 
 # Utility and Parsing Libraries (pinned where specific versions are known good or important)
 requests==2.32.3
+aiohttp
 beautifulsoup4==4.13.4
 newspaper3k==0.2.8
 lxml[html_clean]==5.4.0
