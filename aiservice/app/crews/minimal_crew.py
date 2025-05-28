@@ -17,18 +17,33 @@ from crewai.tools import BaseTool as CrewAIBaseTool_ForCheck # For isinstance ch
 
 # Global LLM for the Agent itself
 agent_llm_instance = None # Renamed for clarity from just agent_llm to avoid confusion with tool's llm
-if settings.openai_api_key and settings.default_llm_model:
+
+if settings.use_gemini_via_openai_compatibility and \
+   settings.gemini_api_key and \
+   settings.gemini_text_model_compat and \
+   settings.gemini_compatibility_base_url:
+    try:
+        agent_llm_instance = ChatOpenAI(
+            api_key=settings.gemini_api_key,
+            model_name=settings.gemini_text_model_compat, # Assuming agent uses the text model
+            base_url=settings.gemini_compatibility_base_url,
+            temperature=0.0
+        )
+        print(f"MinimalLLMCrew: Agent LLM initialized using GEMINI compatibility (Model: {settings.gemini_text_model_compat}, Temp: 0.0).")
+    except Exception as e:
+        print(f"MinimalLLMCrew: ERROR - Failed to initialize Agent LLM with GEMINI compatibility: {e}.")
+elif settings.openai_api_key and settings.default_llm_model:
     try:
         agent_llm_instance = ChatOpenAI(
             api_key=settings.openai_api_key,
             model_name=settings.default_llm_model,
             temperature=0.0 # Ensure temperature is 0 for deterministic structuring
         )
-        print(f"MinimalLLMCrew: Agent LLM initialized with model: {settings.default_llm_model}, Temperature: 0.0")
+        print(f"MinimalLLMCrew: Agent LLM initialized with OpenAI model: {settings.default_llm_model}, Temperature: 0.0")
     except Exception as e:
-        print(f"MinimalLLMCrew: ERROR - Failed to initialize Agent LLM: {e}.")
+        print(f"MinimalLLMCrew: ERROR - Failed to initialize Agent LLM with OpenAI: {e}.")
 else:
-    print("MinimalLLMCrew: WARNING - Agent LLM not configured.")
+    print("MinimalLLMCrew: WARNING - Agent LLM not configured (neither Gemini nor OpenAI settings found).")
 
 # Default LLM for the tool if no override is passed to MinimalLLMCrew
 default_llm_for_tool_if_needed = None
@@ -46,12 +61,17 @@ class MinimalLLMCrew:
         self.agent_llm = agent_llm_instance
         if not self.agent_llm:
             print("MinimalLLMCrew __init__: CRITICAL - Agent LLM is not configured. Structuring will fail.")
-            # In a real app, might raise ValueError here
-            # self.structuring_helper will be None or initialized in a way that its calls will fail gracefully
-            self.structuring_helper = ContentStructuringLLMHelper(llm_instance=None) 
+            # Initialize helper with None, it should handle this
+            self.structuring_helper = ContentStructuringLLMHelper(llm_instance=None)
         else:
-            # Instantiate the helper class, passing the agent's LLM to it
-            self.structuring_helper = ContentStructuringLLMHelper(llm_instance=self.agent_llm)
+            # If using Gemini, ContentStructuringLLMHelper should use its own default (Gemini-aware) client.
+            # Otherwise, pass the normally configured OpenAI agent_llm.
+            if settings.use_gemini_via_openai_compatibility:
+                print("MinimalLLMCrew __init__: Using Gemini compatibility. ContentStructuringLLMHelper will use its default (Gemini-aware) LLM.")
+                self.structuring_helper = ContentStructuringLLMHelper()
+            else:
+                print("MinimalLLMCrew __init__: Not using Gemini compatibility. Passing agent_llm to ContentStructuringLLMHelper.")
+                self.structuring_helper = ContentStructuringLLMHelper(llm_instance=self.agent_llm)
 
         # The ContentAnalystAgent and its task are no longer directly used in .run()
         # but could be kept if there's a future use case for a CrewAI agent performing other actions.

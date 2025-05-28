@@ -1,8 +1,5 @@
 import os
 import sys
-import asyncio
-import json
-import uuid
 
 # Determine the project root (E:\ThinkStash\aiservice)
 # __file__ is aiservice\scripts\run_e2e_test.py
@@ -46,6 +43,7 @@ except AttributeError as e:
 
 
 # ========= Your original script's imports should start around here =========
+import asyncio
 import time
 
 from aiservice.app.config.settings import settings
@@ -61,16 +59,4 @@ from aiservice.app.tools.llm_tools import ImageAnalysisLLMTool, ContentStructuri
 from aiservice.app.crews.minimal_crew import MinimalLLMCrew
 from langchain_openai import ChatOpenAI
 
-# ========= Test Case Setup =========
-# Ensure uuid is imported right before its first use for this specific debug
-import uuid 
-
-pdf_file_path = r"E:\ThinkStash\documentation\AI Agents Testing File\Embedding-Based Retrieval for Airbnb Search.pdf"
-docx_file_path = r"E:\ThinkStash\documentation\AI Agents Testing File\Fulfillment Planning Deep Research Paper.docx"
-md_file_path = r"E:\ThinkStash\documentation\AI Agents Testing File\Product Requirement Document - Knowledge Card System v3.8.md"
-
-job_id_for_pdf_test = f"job_{uuid.uuid4().hex[:8]}" 
-job_id_for_docx_test = f"job_{uuid.uuid4().hex[:8]}"
-job_id_for_md_test = f"job_{uuid.uuid4().hex[:8]}"
-
-# ... (rest of your script, potentially creating OrchestrationInput objects etc.) ... 
+# ... (rest of your script) ... 

@@ -11,13 +11,15 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
-    default_llm_model: str = Field(default="gpt-4o-mini", description="Default LLM model for text generation/analysis.") # Loads from DEFAULT_LLM_MODEL in .env
-    default_multimodal_llm_model: str = Field(default="gpt-4o", description="Default LLM for multimodal tasks (e.g., vision).") # Loads from DEFAULT_MULTIMODAL_MODEL_NAME in .env
+    default_llm_model: str = Field(default="gpt-4o-mini", env="DEFAULT_LLM_MODEL", description="Default LLM model for text generation/analysis.") # Loads from DEFAULT_LLM_MODEL in .env
+    default_multimodal_llm_model: str = Field(default="gpt-4o", env="DEFAULT_MULTIMODAL_LLM_MODEL", description="Default LLM for multimodal tasks (e.g., vision).") # Loads from DEFAULT_MULTIMODAL_LLM_MODEL in .env
 
-    # Gemini Configuration (REMOVED/COMMENTED)
-    # gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY")
-    # gemini_text_model: str = Field(default="models/gemini-1.5-flash-lite", env="GEMINI_TEXT_MODEL", description="Gemini model for text generation/analysis.")
-    # gemini_multimodal_model: str = Field(default="models/gemini-1.5-flash", env="GEMINI_MULTIMODAL_MODEL", description="Gemini model for multimodal tasks.")
+    # Gemini Configuration for OpenAI Compatibility Layer
+    use_gemini_via_openai_compatibility: bool = Field(default=False, env="USE_GEMINI_VIA_OPENAI_COMPATIBILITY", description="Flag to enable Gemini via OpenAI compatibility layer.")
+    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY", description="API key for Gemini models.")
+    gemini_text_model_compat: str = Field(default="gemini-2.5-flash-preview-05-20", env="GEMINI_TEXT_MODEL_COMPAT", description="Gemini text model compatible with OpenAI library.")
+    gemini_multimodal_model_compat: str = Field(default="gemini-2.5-flash-preview-05-20", env="GEMINI_MULTIMODAL_MODEL_COMPAT", description="Gemini multimodal model compatible with OpenAI library.")
+    gemini_compatibility_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta/openai", env="GEMINI_COMPATIBILITY_BASE_URL", description="Base URL for Gemini OpenAI compatibility.")
 
     # Service Behavior Flags
     use_llm_for_routing: bool = Field(default=False, description="Use LLM for routing (V2.4 style, should be False for V2.5 deterministic). Set to False for V2.5.")

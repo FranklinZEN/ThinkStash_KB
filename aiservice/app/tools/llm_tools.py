@@ -21,17 +21,28 @@ from aiservice.app.config.settings import settings, Settings as AppSettings # Im
 # --- LLM Client Initialization ---
 # This client is for general text tasks, used by ContentStructuringLLMHelper if no specific one is passed
 default_openai_text_client = None
-if settings.openai_api_key:
+if settings.use_gemini_via_openai_compatibility and settings.gemini_api_key and settings.gemini_text_model_compat and settings.gemini_compatibility_base_url:
+    try:
+        default_openai_text_client = ChatOpenAI(
+            api_key=settings.gemini_api_key,
+            model_name=settings.gemini_text_model_compat,
+            base_url=settings.gemini_compatibility_base_url,
+            # Any other necessary params for Gemini via OpenAI lib, e.g., temperature if not set by model_name
+        )
+        print(f"LLM_TOOLS: Default ChatOpenAI client initialized for TEXT tasks using GEMINI compatibility (Model: {settings.gemini_text_model_compat}).")
+    except Exception as e:
+        print(f"LLM_TOOLS: ERROR - Failed to initialize ChatOpenAI client with GEMINI compatibility for TEXT: {e}")
+elif settings.openai_api_key and settings.default_llm_model:
     try:
         default_openai_text_client = ChatOpenAI(
             api_key=settings.openai_api_key,
-            model_name=settings.default_llm_model 
+            model_name=settings.default_llm_model
         )
-        print("LLM_TOOLS: Default ChatOpenAI client initialized for text tasks.")
+        print("LLM_TOOLS: Default ChatOpenAI client initialized for text tasks using OpenAI.")
     except Exception as e:
-        print(f"LLM_TOOLS: ERROR - Failed to initialize default ChatOpenAI: {e}")
+        print(f"LLM_TOOLS: ERROR - Failed to initialize default ChatOpenAI using OpenAI: {e}")
 else:
-    print("LLM_TOOLS: WARNING - OpenAI API key not found. LLM tools may fail.")
+    print("LLM_TOOLS: WARNING - Neither Gemini compatibility nor OpenAI API key found for TEXT tasks. LLM tools may fail.")
 
 # --- Input/Output Schemas for ImageAnalysisLLMTool ---
 class ImageAnalysisInput(PydanticV2BaseModel):
@@ -55,16 +66,34 @@ class ImageAnalysisLLMTool: # Not inheriting from Langchain BaseTool for this di
     description: str = "Analyzes an image using OpenAI's vision model to generate a description, caption, and keywords."
     args_schema: Type[PydanticV2BaseModel] = ImageAnalysisInput
     openai_vision_client: Optional[OpenAIClient] = None
+    vision_model_name: Optional[str] = None # To store the actual model name being used
 
     def __init__(self, **kwargs):
-        if settings.openai_api_key:
+        self.vision_model_name = settings.default_multimodal_llm_model # Default to OpenAI model
+
+        if settings.use_gemini_via_openai_compatibility and \
+           settings.gemini_api_key and \
+           settings.gemini_multimodal_model_compat and \
+           settings.gemini_compatibility_base_url:
+            try:
+                self.openai_vision_client = OpenAIClient(
+                    api_key=settings.gemini_api_key,
+                    base_url=settings.gemini_compatibility_base_url
+                    # model_name is not set here for the client, but in the create call later
+                )
+                self.vision_model_name = settings.gemini_multimodal_model_compat
+                print(f"ImageAnalysisLLMTool: OpenAIClient initialized for VISION tasks using GEMINI compatibility (Model to be used: {self.vision_model_name}). Base URL: {settings.gemini_compatibility_base_url}")
+            except Exception as e:
+                print(f"ImageAnalysisLLMTool: ERROR - Failed to initialize OpenAIClient with GEMINI compatibility for VISION: {e}")
+        elif settings.openai_api_key and settings.default_multimodal_llm_model:
             try:
                 self.openai_vision_client = OpenAIClient(api_key=settings.openai_api_key)
-                print(f"ImageAnalysisLLMTool: OpenAI client initialized for vision model ({settings.default_multimodal_llm_model}).")
+                self.vision_model_name = settings.default_multimodal_llm_model
+                print(f"ImageAnalysisLLMTool: OpenAIClient initialized for VISION tasks using OpenAI (Model: {self.vision_model_name}).")
             except Exception as e:
-                print(f"ImageAnalysisLLMTool: ERROR - Failed to initialize OpenAI client for vision: {e}")
+                print(f"ImageAnalysisLLMTool: ERROR - Failed to initialize OpenAIClient for VISION using OpenAI: {e}")
         else:
-             print("ImageAnalysisLLMTool: WARNING - OpenAI API key not found. Image analysis will fail.")
+             print("ImageAnalysisLLMTool: WARNING - Neither Gemini compatibility nor OpenAI API key found for VISION tasks. Image analysis will fail.")
 
     def _get_image_mime_type(self, image_bytes: bytes) -> Optional[str]:
         try:
@@ -86,6 +115,7 @@ class ImageAnalysisLLMTool: # Not inheriting from Langchain BaseTool for this di
 
     def _run(self, image_bytes: Optional[bytes] = None, image_path: Optional[str] = None, text_context: Optional[str] = None, prompt_override: Optional[str] = None) -> Dict[str, Any]:
         if not self.openai_vision_client: return ImageAnalysisOutput(error_message="OpenAI vision client not initialized.").model_dump()
+        if not self.vision_model_name: return ImageAnalysisOutput(error_message="Vision model name not set.").model_dump()
 
         current_image_bytes = image_bytes
         if image_path and not current_image_bytes:
@@ -106,24 +136,59 @@ class ImageAnalysisLLMTool: # Not inheriting from Langchain BaseTool for this di
         user_messages_content.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{base64_image_data}"}})
 
         try:
-            print(f"ImageAnalysisLLMTool: Calling OpenAI vision model ({settings.default_multimodal_llm_model}) for image analysis...")
+            print(f"ImageAnalysisLLMTool: Calling vision model ({self.vision_model_name}) for image analysis...")
             response = self.openai_vision_client.chat.completions.create(
-                model=settings.default_multimodal_llm_model or "gpt-4-vision-preview",
+                model=self.vision_model_name, # Use the determined model name
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_messages_content}],
-                max_tokens=450, response_format={"type": "json_object"})
+                max_tokens=1024, # Increased max_tokens from 450 to 1024
+                response_format={"type": "json_object"})
+            
+            if not response.choices or not response.choices[0].message or response.choices[0].message.content is None:
+                error_detail = f"LLM response content is None or not found. Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
+                print(f"ImageAnalysisLLMTool: Error - {error_detail}")
+                return ImageAnalysisOutput(error_message=error_detail).model_dump()
+                
             llm_response_str = response.choices[0].message.content
+            
+            if llm_response_str is None: # Should have been caught above, but defensive
+                error_detail = f"llm_response_str is unexpectedly None. Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
+                print(f"ImageAnalysisLLMTool: Error - {error_detail}")
+                return ImageAnalysisOutput(error_message=error_detail).model_dump()
+
             cleaned_json_str = llm_response_str.strip()
-            if cleaned_json_str.startswith("```json"): cleaned_json_str = cleaned_json_str[7:] 
-            if cleaned_json_str.endswith("```"): cleaned_json_str = cleaned_json_str[:-3]
-            elif cleaned_json_str.startswith("```"): cleaned_json_str = cleaned_json_str[3:]
-            if cleaned_json_str.endswith("```"): cleaned_json_str = cleaned_json_str[:-3] # Ensure this is not elif
+            # Ensure that even if strip results in an empty string, we don't proceed to json.loads
+            if not cleaned_json_str:
+                error_detail = f"LLM response content stripped to empty string. Original: {llm_response_str[:100]}... Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
+                print(f"ImageAnalysisLLMTool: Error - {error_detail}")
+                return ImageAnalysisOutput(error_message=error_detail).model_dump()
+
+            # Attempt to clean common markdown code block fences if response_format wasn't fully respected
+            if cleaned_json_str.startswith("```json"):
+                cleaned_json_str = cleaned_json_str[7:]
+                if cleaned_json_str.endswith("```"):
+                    cleaned_json_str = cleaned_json_str[:-3]
+            elif cleaned_json_str.startswith("```"):
+                cleaned_json_str = cleaned_json_str[3:]
+                if cleaned_json_str.endswith("```"):
+                    cleaned_json_str = cleaned_json_str[:-3]
             cleaned_json_str = cleaned_json_str.strip()
-            data = json.loads(cleaned_json_str)
+            
+            if not cleaned_json_str:
+                error_detail = f"LLM response content became empty after attempting to strip markdown. Original: {llm_response_str[:100]}... Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
+                print(f"ImageAnalysisLLMTool: Error - {error_detail}")
+                return ImageAnalysisOutput(error_message=error_detail).model_dump()
+
+            data = json.loads(cleaned_json_str) # This is where "Unterminated string" could happen if cleaned_json_str is not valid JSON
             return ImageAnalysisOutput(description=data.get("description"), caption=data.get("caption"), keywords=data.get("keywords", [])).model_dump()
+        except json.JSONDecodeError as je:
+            error_detail = f"JSONDecodeError: {je}. Problematic string: '{cleaned_json_str[:200]}...' Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
+            print(f"ImageAnalysisLLMTool: Error during OpenAI vision call - {error_detail}")
+            return ImageAnalysisOutput(error_message=error_detail).model_dump()
         except Exception as e:
+            error_detail = f"OpenAI vision call failed: {str(e)}. Finish reason: {response.choices[0].finish_reason if response.choices and response.choices[0] else 'Unknown'}. Full response: {response!r}"
             print(f"ImageAnalysisLLMTool: Error during OpenAI vision call: {e}")
             # import traceback; traceback.print_exc() # Keep commented
-            return ImageAnalysisOutput(error_message=f"OpenAI vision call failed: {str(e)}").model_dump()
+            return ImageAnalysisOutput(error_message=error_detail).model_dump()
 
 # Define allowed block types using Literal
 BlockType = Literal["text", "image_reference", "code", "math"]
@@ -215,20 +280,35 @@ class ContentStructuringLLMHelper:
             if hasattr(response, 'tool_calls') and response.tool_calls and isinstance(response.tool_calls, list) and len(response.tool_calls) > 0:
                 first_tool_call = response.tool_calls[0]
                 tool_args_dict = None
-                if isinstance(first_tool_call, dict): # Langchain can return dicts here
-                    tool_args_str = first_tool_call.get('args')
-                elif hasattr(first_tool_call, 'args'): # Or objects with .args
+                function_name = None
+                tool_args_str = None # Initialize tool_args_str to None here
+
+                # Langchain with OpenAI client might return a dict-like or object-like structure for tool_calls
+                # when using Gemini compatibility, it seems to be a dict.
+                if isinstance(first_tool_call, dict):
+                    # Assuming the structure is {'id': '...', 'type': 'function', 'function': {'name': '...', 'arguments': '...'}}
+                    function_call_details = first_tool_call.get('function')
+                    if isinstance(function_call_details, dict):
+                        function_name = function_call_details.get('name')
+                        tool_args_str = function_call_details.get('arguments')
+                elif hasattr(first_tool_call, 'name') and hasattr(first_tool_call, 'args'): # More OpenAI-like structure
+                    function_name = first_tool_call.name
                     tool_args_str = first_tool_call.args
-                else:
-                    tool_args_str = None
-                
+                # Removed the bare else that only had a comment, ensure tool_args_str remains None if no other condition met.
+                # else:
+                    # Fallback or unknown structure - tool_args_str remains None as initialized
+                    # if hasattr(first_tool_call, 'args'): # Attempt to get args if possible
+                         # tool_args_str = first_tool_call.args # This was problematic as it could leave function_name as None
+
                 if isinstance(tool_args_str, str):
                     try: tool_args_dict = json.loads(tool_args_str)
-                    except json.JSONDecodeError: pass
+                    except json.JSONDecodeError: 
+                        print(f"ContentStructuringLLMHelper: WARNING - Failed to JSON decode tool_args_str: {tool_args_str[:500]}...")
+                        pass # Keep tool_args_dict as None
                 elif isinstance(tool_args_str, dict):
                     tool_args_dict = tool_args_str
 
-                if tool_args_dict and first_tool_call.name == "format_content_blocks":
+                if tool_args_dict and function_name == "format_content_blocks":
                     validated_output = ContentStructuringOutput(**tool_args_dict)
                     print(f"ContentStructuringLLMHelper: OpenAI LLM function call successful, {len(validated_output.blocks)} blocks structured.")
                     return validated_output.model_dump()
