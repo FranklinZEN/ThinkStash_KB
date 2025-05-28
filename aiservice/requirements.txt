@@ -30,7 +30,7 @@ Markdown # Let pip pick latest
 
 # OpenAI SDK (pinned as it's generally stable)
 openai==1.75.0 
-
+google-genai
 # Google Cloud Storage (pinned as it's generally stable)
 google-cloud-storage==3.1.0
 

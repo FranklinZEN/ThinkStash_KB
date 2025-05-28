@@ -61,54 +61,64 @@ class PDFAcquisitionService(BaseService):
     async def _extract_images_from_pdf(self, doc: fitz.Document, job_id: str, pdf_filename: str) -> List[ProcessedPDFImage]:
         extracted_images: List[ProcessedPDFImage] = []
         loop = asyncio.get_event_loop()
+        print(f"PDFAcquisitionService._extract_images_from_pdf: Starting image extraction for {pdf_filename}, Job ID: {job_id}")
 
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            # PyMuPDF's get_images(full=True) gives more details about images
             image_list = await loop.run_in_executor(None, page.get_images, True)
+            print(f"PDFAcquisitionService._extract_images_from_pdf: Page {page_num + 1}, found {len(image_list)} potential images.")
             
             for img_index, img_info in enumerate(image_list):
                 xref = img_info[0]
                 base_image = await loop.run_in_executor(None, doc.extract_image, xref)
                 image_bytes = base_image["image"]
-                # image_ext = base_image["ext"]
-                # width = base_image["width"]
-                # height = base_image["height"]
-
-                # Try to get bounding box of the image on the page
-                # This is complex as get_images() doesn't directly give bbox on page.
-                # We might need to iterate page display list or use other methods if exact bbox is crucial.
-                # For now, keeping it simple. If PDF has vector graphics, bbox is more relevant.
-                
                 image_id = f"PDF_{job_id or uuid.uuid4().hex[:4]}P{page_num + 1}_IMG{img_index + 1}"
-                
-                # Placeholder for potential filename if available from PDF structure (rare)
                 original_image_filename = f"image_{xref}.{base_image['ext']}"
 
                 img_data = ProcessedPDFImage(
                     image_id=image_id,
                     image_bytes=image_bytes,
-                    original_file_name=original_image_filename, # Or more meaningful if possible
+                    original_file_name=original_image_filename,
                     page_number=page_num + 1,
-                    # bbox= # Requires more complex logic to find bbox on page
                 )
+                print(f"PDFAcquisitionService._extract_images_from_pdf: Extracted basic info for {image_id}")
 
                 if self.use_llm_for_image_analysis and self.image_analysis_tool:
-                    print(f"PDFAcquisitionService: Analyzing image {image_id} with LLM.")
-                    # Run LLM analysis (which is sync in BaseTool) in executor
-                    analysis_input = ImageAnalysisInput(image_bytes=image_bytes, text_context=f"Image from PDF: {pdf_filename}, page {page_num+1}")
-                    llm_result_dict = await loop.run_in_executor(None, self.image_analysis_tool._run, **analysis_input.model_dump())
-                    llm_output = ImageAnalysisOutput(**llm_result_dict)
+                    print(f"PDFAcquisitionService: Analyzing image {image_id} with LLM (Tool: {self.image_analysis_tool}).")
+                    # Ensure all expected args for ImageAnalysisInput are provided, even if None
+                    analysis_input = ImageAnalysisInput(
+                        image_bytes=image_bytes, 
+                        image_path=None, # Explicitly None
+                        text_context=f"Image from PDF: {pdf_filename}, page {page_num+1}",
+                        prompt_override=None # Explicitly None
+                    )
+                    try:
+                        # Corrected call to image_analysis_tool._run, passing args individually
+                        llm_result_dict = await loop.run_in_executor(
+                            None, 
+                            self.image_analysis_tool._run, 
+                            analysis_input.image_bytes,
+                            analysis_input.image_path,    # Pass image_path (even if None)
+                            analysis_input.text_context,
+                            analysis_input.prompt_override # Pass prompt_override (even if None)
+                        )
+                        llm_output = ImageAnalysisOutput(**llm_result_dict)
+                        print(f"PDFAcquisitionService: LLM analysis API call completed for {image_id}.")
 
-                    if llm_output.error_message:
-                        print(f"PDFAcquisitionService: LLM analysis error for {image_id}: {llm_output.error_message}")
-                        # Optionally log this error or attach to image_data
-                    else:
-                        img_data.description = llm_output.description
-                        img_data.caption = llm_output.caption
-                        img_data.keywords = llm_output.keywords
+                        if llm_output.error_message:
+                            print(f"PDFAcquisitionService: LLM analysis error for {image_id}: {llm_output.error_message}")
+                        else:
+                            img_data.description = llm_output.description
+                            img_data.caption = llm_output.caption
+                            img_data.keywords = llm_output.keywords
+                            print(f"PDFAcquisitionService: LLM analysis successful for {image_id}, caption: {llm_output.caption}")
+                    except Exception as e_llm_analysis:
+                        print(f"PDFAcquisitionService: EXCEPTION during LLM analysis for {image_id}: {e_llm_analysis}")
                 
                 extracted_images.append(img_data)
+                print(f"PDFAcquisitionService._extract_images_from_pdf: Appended {image_id} to extracted_images list.")
+        
+        print(f"PDFAcquisitionService._extract_images_from_pdf: Finished image extraction. Total images extracted: {len(extracted_images)}")
         return extracted_images
 
     async def execute(self, pdf_input: PDFAcquisitionServiceInput) -> ServiceResult[PDFAcquisitionServiceOutput]:

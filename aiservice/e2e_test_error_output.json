@@ -1,14 +1,113 @@
 {
-  "status_code": "failure_structuring",
-  "source_identifier": "https://medium.com/pinterest-engineering/multi-gate-mixture-of-experts-mmoe-model-architecture-and-knowledge-distillation-in-ads-08ec7f4aa857",
-  "source_type": "url",
+  "status_code": "failure_image_processing",
+  "source_identifier": "E:\\ThinkStash\\documentation\\AI Agents Testing File\\Embedding-Based Retrieval for Airbnb Search.pdf",
+  "source_type": "pdf",
   "processing_level_used": "full_content",
-  "extracted_title": "Multi-gate-Mixture-of-Experts (MMoE) model architecture and knowledge distillation in Ads Engagement modeling development | by Pinterest Engineering | Pinterest Engineering Blog | Apr, 2025 | Medium",
+  "extracted_title": "Embedding-Based Retrieval for Airbnb Search.pdf",
   "is_long_article": false,
   "original_content_blocks": [
     {
       "type": "text",
-      "content": "Multi-gate-Mixture-of-Experts (MMoE) model architecture and knowledge distillation in Ads Engagement modeling development\nAuthors: Jiacheng Li | Machine Learning Engineer II, Ads Ranking; Matt Meng | Staff Machine Learning Engineer, Ads Ranking; Kungang Li | Principal Machine Learning Engineer, Ads Performance; Qifei Shen | Senior Staff Machine Learning Engineer, Ads Ranking\nIntroduction\nMulti-gate Mixture-of-Experts (MMoE)[1,2] is a recent industry-proven powerful architecture in neural network models that offers several significant benefits. First, it enhances model efficiency by dynamically allocating computational resources to different sub-networks (experts) based on the input data, ensuring that only the most relevant experts are activated for each task. This selective activation reduces computational overhead and improves inference speed. Second, MMoE promotes better generalization and performance by allowing the model to learn specialized features through multiple experts, each focusing on different aspects of the data. This specialization helps in capturing complex patterns and relationships that a single monolithic model might miss. Additionally, the multi-gate mechanism enables the model to handle multi-task learning more effectively, as it can tailor the contribution of each expert to different tasks, leading to improved accuracy and robustness across various applications. Overall, MMoE provides a flexible, efficient, and powerful approach to building advanced neural network models.\nOn top of the MMoE model architecture, we also propose to use knowledge distillation[4] to mitigate the performance gap due to short data retention period and further enhance the new model performance. More specifically, we distill knowledge from existing production models to experimental models during the batch training stage to make the experimental models converge to a better state.\nMulti-gate-Mixture-of-Experts (MMoE) model architecture\nA known problem for the DCNv2[4] style recommendation system model is that simply adding more layers and more parameters cannot bring proportional metric gain. How to effectively make the model larger and bring proportional sizable gain is a question for all. The MMoE model architecture is a potential solution to help our engagement model learn more complicated patterns and relationships between users and their ads engagement actions, and eventually perform better at the ads-user matching task.\nWe started from our current shared-bottom model architecture with DCNv2. We experimented with various architectures for experts and their combinations: DCNv2, Masknet[5], FinalMLP[6] etc. Besides these seemingly advanced architectures, we also notice that adding MLP-based experts can further lift the offline metrics. Through experiments, we realized that the return of investment (ROI) is decreasing with more experts added and for our use case DCNv2 has the highest ROI. Therefore we chose the most suitable combination of experts via careful consideration of metrics-infrastructure cost tradeoff.\nServing an MMoE style model would bring noticeable infrastructure cost increase since multiple experts are introduced, and we also explored various techniques to reduce the infrastructure cost while keeping the model performance on-par. One promising solution is mixed precision inference. Luckily our team has already explored and productionized mixed precision inference [7] and we can apply this great technique out of the box. From experiments, we verified that mixed precision inference has nearly zero impact on model offline performance. By applying this mixed precision inference, we observe 40% inference latency reduction in benchmarking and this latency reduction translates to a significant amount of infrastructure cost.\nBesides mixed precision inference, through experiments, we observed that the gate layers of MMoE only need very simple architecture and small amounts of parameters to achieve similar performance as very sophisticated architectures that we use for experts. Lightweight gate layers bring further infrastructure cost reduction.\nKnowledge distillation from production model\nIn the ads engagement modeling world, the volume of data is huge. A common practice is to retain the data for a relatively short period of time, usually a few months to a year. When a new modeling idea is well tested offline and ready for online experimentation to validate online metrics movements, a common issue is that the training data of the current production model is no longer available, making the comparison between the new experimental model and the production model unfair.\nTo mitigate this issue, we proposed to use knowledge distillation from the production model to help the new experimental model \u201clearn\u201d from old data that has been deleted from the training dataset, thus enhancing the performance of the new experimental model. More specifically, on top of the standard cross entropy loss calculated using binary labels, we add a new loss to calculate the prediction differences between the experimental model and the production model. We experimented with various loss functions and we found out that pairwise style loss not only can mitigate the performance gap caused by missing data, but also can boost the experimental model offline metrics further. Applying the knowledge distillation loss in the batch training stage seems undoubtedly correct, but the story is different for the incremental training stage. Moreover, when the experimental model is promoted to production, the question becomes harder to answer: should a model distill from itself? Through experiments, in our current design, we observe significant overfitting if we keep the distillation loss in incremental training and thus we decide to remove distillation loss in the incremental training stage.\nBesides smoothing the metric movements oriented model training, knowledge distillation can also help for no metric movement cases, such as feature upgrade or new computation graph improvement for serving latency reduction. In such cases, warm starting from a production model checkpoint is no longer available and retraining a production model is necessary. Retraining a production model will also suffer from the above mentioned data missing problem, and knowledge distillation can kick in here to make sure the retrained production model can have on-par offline and online performance.\nEvaluation\nIn this section, we show some offline and online results [8] for the MMoE model on different view types (RelatedPins and Search). The baseline model is our production model with DCNv2 architecture and internal training data. It is to be noted that 0.1% offline accuracy improvement in the Engagement ranking model is considered to be significant. Therefore the MMoE model architecture with knowledge distillation increases both online and offline metrics very significantly.\nConclusion\nMMoE model architecture is capable of modeling more sophisticated tasks, especially in multitask learning (MTL).\nBy leveraging knowledge distillation technique, we successfully mitigate the performance gap caused by short data retention period and help the new experimental model learn from deleted data. The practically longer training data window and large data volume can effectively help us to improve the ads matching quality and Pinner experience.\nAs a result of these endeavors, Pinterest continues to deliver highly desirable, adaptive, and relevant recommendations that inspire and drive discovery for each unique user.\nAcknowledgements\nThis work represents a result of collaboration of the engagement modeling team members and across multiple teams at Pinterest.\nEngineering Teams:\nAds Ranking: Duna Zhan, Liangzhe Chen, Dongtao Liu\nAds Infra: Shantam Shorewala, Yiran Zhao, Haoyang Li\nData Science: Milos Curcic, Adriaan ten Kate\nLeadership: Ling Leng, Caijie Zhang, Prathibha Deshikachar\nReferences\n[1] Jacobs, Robert A., et al. \u201cAdaptive mixtures of local experts.\u201d Neural computation 3.1 (1991): 79\u201387.\n[2] Ma, Jiaqi, et al. \u201cModeling task relationships in multi-task learning with multi-gate mixture-of-experts.\u201d Proceedings of the 24th ACM SIGKDD international conference on knowledge discovery & data mining. 2018.\n[3] Hinton, Geoffrey, et al. \u201cDistilling the Knowledge in a Neural Network.\u201d arXiv preprint arXiv:1503.02531.\n[4] Wang, Ruoxi, et al. \u201cDcn v2: Improved deep & cross network and practical lessons for web-scale learning to rank systems.\u201d Proceedings of the web conference 2021. 2021.\n[5] Wang, Zhiqiang, et al. \u201cMasknet: Introducing feature-wise multiplication to CTR ranking models by instance-guided mask.\u201d arXiv preprint arXiv:2102.07619 (2021).\n[6] Mao, Kelong, et al. \u201cFinalMLP: an enhanced two-stream MLP model for CTR prediction.\u201d Proceedings of the AAAI Conference on Artificial Intelligence. Vol. 37. \u21164. 2023.\n[7] Lei, Yulin, et al. \u201cUser Action Sequence Modeling for Pinterest Ads Engagement Modeling\u201d. Pinterest Engineering Blog.\n[8] Pinterest Internal Data, US, 2024.",
+      "content": "Embedding-Based Retrieval for Airbnb Search",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "Introduction",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "Search plays a crucial role in helping Airbnb guests find the perfect stay. The goal of Airbnb Search is to surface the most relevant listings for each user\u2019s query \u2014 but with millions of available homes, that\u2019s no easy task. It\u2019s especially difficult when searches include large geographic areas (like California or France) or high-demand destinations (like Paris or London). Recent innovations \u2014 such as flexible date search, which allows guests to explore stays without fixed check-in and check-out dates \u2014 have added yet another layer of complexity to ranking and finding the right results.",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "To tackle these challenges, we need a system that can retrieve relevant homes while also being scalable enough (in terms of latency and compute) to handle queries with a large candidate count. In this blog post, we share our journey in building Airbnb\u2019s first-ever Embedding-Based Retrieval (EBR) search system. The goal of this system is to narrow down the initial set of eligible homes into a smaller pool, which can then be scored by more compute-intensive machine learning models later in the search ranking process.",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "[Image Reference (ID Not Found): IMG_001]",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "We\u2019ll explore three key challenges in building this EBR system: (1) constructing training data, (2) designing the model architecture, and (3) developing an online serving strategy using Approximate Nearest Neighbor (ANN) solutions.",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "Training Data Construction",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "[Image Reference (ID Not Found): IMG_002]",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "[Image Reference (ID Not Found): IMG_003]",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "Model Architecture",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "A key design decision here was choosing features such that the listing tower could be computed offline on a daily basis. This enabled us to pre-compute the home embeddings in a daily batch job, significantly reducing online latency, since only the query tower had to be evaluated in real-time for incoming search requests.",
+      "original_source_identifier": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null
+    },
+    {
+      "type": "text",
+      "content": "[Image Reference (ID Not Found): IMG_004]",
       "original_source_identifier": null,
       "gcs_url": null,
       "alt_text": null,
@@ -16,28 +115,6 @@
       "llm_description": null
     }
   ],
-  "processed_images_data": {
-    "WEB_IMG_job_ea7bc448_2": {
-      "original_source_identifier": "WEB_IMG_job_ea7bc448_2",
-      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/multi-gate-mixture-of-experts-mmoe-model-architecture-and-knowledge-distillation-in-ads-08ec7f4aa857/job_ea7bc448/WEB_IMG_job_ea7bc448_2.png",
-      "alt_text": null,
-      "caption": "Comparison of model architectures: shared-bottom, single-gate expert, and multi-gate expert.",
-      "llm_description": "This image is a schematic diagram showing three types of machine learning architectures or models labeled (a), (b), and (c). Model (a) demonstrates a traditional shared-bottom architecture where a single shared layer processes the input before branching into different towers for Output A and Output B. Model (b) represents an expert network with multiple experts (labeled as Expert 0, 1, and 2) gated by a single gate to determine their contribution to the final outputs through Towers A and B. Model (c) illustrates a multi-gate architecture where separate gates (Gate A and Gate B) manage the inputs from multiple experts, again leading to separate outputs A and B. The diagram uses arrows to indicate the flow of data, distinguishing between vector and scalar pathways."
-    },
-    "WEB_IMG_job_ea7bc448_3": {
-      "original_source_identifier": "WEB_IMG_job_ea7bc448_3",
-      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/multi-gate-mixture-of-experts-mmoe-model-architecture-and-knowledge-distillation-in-ads-08ec7f4aa857/job_ea7bc448/WEB_IMG_job_ea7bc448_3.webp",
-      "alt_text": "",
-      "caption": "Diagram of multitask learning architectures: Shared Bottom, Mixture of Experts, and Cross-Stitch Network.",
-      "llm_description": "The image is a diagram consisting of three sections labeled (a), (b), and (c), each illustrating different neural network architectures for multitask learning. The first section (a) shows a 'Shared Bottom' architecture with a shared layer leading to two outputs, labeled Output A and Output B, through separate 'Tower A' and 'Tower B.' The second section (b) shows a 'Mixture of Experts' structure involving two experts and a gate, also leading to Output A and Output B. The third section (c) illustrates a 'Cross-Stitch Network' incorporating cross-links between experts and separate gates for each output. Arrows and lines indicate the flow of data inputs to outputs and connections between components."
-    },
-    "WEB_IMG_job_ea7bc448_4": {
-      "original_source_identifier": "WEB_IMG_job_ea7bc448_4",
-      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/multi-gate-mixture-of-experts-mmoe-model-architecture-and-knowledge-distillation-in-ads-08ec7f4aa857/job_ea7bc448/WEB_IMG_job_ea7bc448_4.webp",
-      "alt_text": "",
-      "caption": "Comparison of Offline Accuracy Metrics and Online Engagement Wins.",
-      "llm_description": "The table compares Offline Accuracy Metrics and Online Engagement Wins for two categories: RelatedPins and Search. Both categories show the same improvement in Offline Accuracy Metrics, marked as +0.15%. However, the increase in Online Engagement Wins varies, with RelatedPins having a +3.34% improvement and Search showing a higher increase of +3.82%."
-    }
-  },
-  "error_message": "; Content structuring service failed: Content structuring crew execution failed: 'Task' object has no attribute 'error'"
+  "processed_images_data": {},
+  "error_message": "; Image processing service failed: None"
 }

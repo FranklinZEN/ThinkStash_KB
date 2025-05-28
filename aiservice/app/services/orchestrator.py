@@ -77,6 +77,7 @@ class ParallelOrchestrator(BaseService):
                 source_type_for_gcs_path=source_type,
                 job_id_for_gcs_path=job_id
             ))
+        print(f"Orchestrator._map_to_raw_image_input: Mapped {len(raw_image_inputs)} images for ImageProcessingService.") # DEBUG PRINT
         return raw_image_inputs
 
     # @monitor.track_operation() # Add when monitor is implemented
@@ -180,6 +181,10 @@ class ParallelOrchestrator(BaseService):
             else:
                  final_status_code = "success" # Tentative success after acquisition
 
+            print(f"Orchestrator.process: Number of raw images from acquisition for processing: {len(raw_images_for_processing)}") # DEBUG PRINT
+            for i, raw_img in enumerate(raw_images_for_processing):
+                print(f"Orchestrator.process: Raw image {i+1} for IPS: ID={raw_img.image_id}, HasBytes={bool(raw_img.image_bytes)}, URL={raw_img.source_url}")
+
         # If acquisition failed or resulted in a state that stops processing
         if final_status_code.startswith("failure") or final_status_code == "unsupported_type" or final_status_code == "success_pdf_redirect_unhandled":
             if extracted_text and not final_content_blocks : final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
@@ -189,7 +194,6 @@ class ParallelOrchestrator(BaseService):
             return ServiceResult.success(data=output_obj) # e.g. for unsupported_type or pdf_unhandled
 
         # 3. Parallel Processing: Image Processing and Content Structuring
-        # Prepare inputs for parallel tasks
         image_processing_service_input = ImageProcessingServiceInput(images_to_process=raw_images_for_processing)
         image_processing_task = self.image_processing_service.execute(image_processing_service_input)
         processed_images_from_service: List[ProcessedImageData] = []

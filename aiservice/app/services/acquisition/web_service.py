@@ -113,7 +113,7 @@ class WebAcquisitionService(BaseService):
     async def _extract_images_from_html(self, html_content_str: str, base_url: str, job_id: Optional[str]) -> List[ProcessedWebImage]:
         """
         Extracts image URLs from HTML content using various strategies.
-        Adapted from the version previously developed.
+        Enhanced with more robust filtering.
         """
         images: List[ProcessedWebImage] = []
         processed_urls: Set[str] = set()
@@ -121,13 +121,30 @@ class WebAcquisitionService(BaseService):
         image_counter = 0
 
         MIN_DIMENSION = 50  # Minimum width/height for an image to be considered relevant
-        # Refined keyword list
-        IRRELEVANT_ALT_STRINGS = ["logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", "pinterest", "pinterest engineering", "pinterest engineering blog"]
-        # For substring checks, we primarily care about 'logo', 'avatar', 'icon', 'profile'
-        IRRELEVANT_SUBSTRINGS_IN_ALT = ["logo", "avatar", "icon", "profile"]
+        MIN_AREA = 5000 # Increased min area slightly (e.g. > 70x70)
+        MAX_ASPECT_RATIO_DEVIATION = 4.0 
 
-        IRRELEVANT_URL_SEGMENTS = ["/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif"]
-        ALLOWED_CONTENT_PATH_INDICATORS = ["/content/", "/media/", "/wp-content/uploads/", "/uploads/", "/images/", "/image/"]
+        IRRELEVANT_ALT_STRINGS_EXACT = [
+            "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
+            "pinterest", "pinterest engineering", "pinterest engineering blog", "walmart global tech blog", # Added specific
+            "user", "author", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
+            "figure", "image", "photo", "illustration", "diagram" # Generic terms if alone
+        ]
+        IRRELEVANT_SUBSTRINGS_IN_ALT = [
+            "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
+            "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo" # Added more specific and common phrases
+        ]
+        IRRELEVANT_URL_SEGMENTS = [
+            "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
+            "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
+            "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
+            "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
+            "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com", "blogger.googleusercontent.com/img/b" # Added more
+        ]
+        ALLOWED_CONTENT_PATH_INDICATORS = [ 
+            "/content/", "/media/", "/wp-content/uploads/", "/uploads/", "/images/", "/image/",
+            "/wp-content/uploads", "/files/", "/assets/", "/_posts/", "/posts/", "/articles/", "/article/" # Added more
+        ]
 
         def _create_image_id(index: int) -> str:
             job_prefix = f"{job_id}_" if job_id else ""
@@ -151,20 +168,20 @@ class WebAcquisitionService(BaseService):
                 if abs_img_url in processed_urls:
                     continue
 
-                # --- Start Filtering Logic ---
+                # --- Start Filtering Logic (Enhanced) ---
+                abs_img_url_lower = abs_img_url.lower()
+
                 # Filter by URL segments
-                is_url_potentially_irrelevant = any(segment in abs_img_url.lower() for segment in IRRELEVANT_URL_SEGMENTS)
-                is_url_explicitly_content = any(indicator in abs_img_url.lower() for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
+                is_url_potentially_irrelevant = any(segment in abs_img_url_lower for segment in IRRELEVANT_URL_SEGMENTS)
+                is_url_explicitly_content = any(indicator in abs_img_url_lower for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
+                
                 if is_url_potentially_irrelevant and not is_url_explicitly_content:
-                    print(f"WebAcquisitionService: Skipping image by URL segment: {abs_img_url}")
                     continue
 
                 alt_text_raw = img_tag.get('alt', '').strip()
                 alt_text_lower = alt_text_raw.lower()
 
-                # Updated alt text filtering
-                if alt_text_lower in IRRELEVANT_ALT_STRINGS:
-                    print(f"WebAcquisitionService: Skipping image by exact alt text match: '{alt_text_raw}' for {abs_img_url}")
+                if alt_text_lower in IRRELEVANT_ALT_STRINGS_EXACT:
                     continue
                 
                 is_irrelevant_substring = False
@@ -173,24 +190,31 @@ class WebAcquisitionService(BaseService):
                         is_irrelevant_substring = True
                         break
                 if is_irrelevant_substring:
-                    print(f"WebAcquisitionService: Skipping image by alt text substring: '{alt_text_raw}' for {abs_img_url}")
                     continue
                 
-                width_attr = img_tag.get('width')
-                height_attr = img_tag.get('height')
-                try:
-                    if width_attr and width_attr.isdigit() and int(width_attr) < MIN_DIMENSION:
-                        print(f"WebAcquisitionService: Skipping image by width ({width_attr} < {MIN_DIMENSION}): {abs_img_url}")
-                        continue
-                    if height_attr and height_attr.isdigit() and int(height_attr) < MIN_DIMENSION:
-                        print(f"WebAcquisitionService: Skipping image by height ({height_attr} < {MIN_DIMENSION}): {abs_img_url}")
-                        continue
-                except ValueError:
-                    pass # Non-integer width/height, can't filter by this
+                # Dimension and Aspect Ratio Filtering
+                width_str = img_tag.get('width')
+                height_str = img_tag.get('height')
+                width = None
+                height = None
 
-                # Role 'presentation' is tricky. Medium uses it for content images.
-                # If role is 'presentation' AND dimensions are very small, it might be decorative.
-                # For now, relying on explicit dimension attributes and keywords.
+                if width_str and width_str.replace('px','').isdigit():
+                    width = int(width_str.replace('px',''))
+                if height_str and height_str.replace('px','').isdigit():
+                    height = int(height_str.replace('px',''))
+
+                if width is not None and width < MIN_DIMENSION:
+                    continue
+                if height is not None and height < MIN_DIMENSION:
+                    continue
+                
+                if width is not None and height is not None:
+                    if width * height < MIN_AREA:
+                        continue
+                    if height > 0 and (width / height > MAX_ASPECT_RATIO_DEVIATION):
+                        continue
+                    if width > 0 and (height / width > MAX_ASPECT_RATIO_DEVIATION):
+                        continue
                 # --- End Filtering Logic ---
 
                 validated_url = HttpUrl(abs_img_url)
@@ -221,9 +245,9 @@ class WebAcquisitionService(BaseService):
                     context_after=await self._get_contextual_text(context_element, "after")
                 ))
             except ValueError: # Pydantic validation error for HttpUrl
-                print(f"WebAcquisitionService: Invalid image URL skipped: {abs_img_url}")
+                continue
             except Exception as e:
-                print(f"WebAcquisitionService: Error processing <img> tag {src}: {e}")
+                continue
 
         # 2. Meta tags (og:image, twitter:image)
         meta_tags_selectors = {
@@ -256,9 +280,9 @@ class WebAcquisitionService(BaseService):
                             source_scope="meta_tag"
                         ))
                     except ValueError:
-                        print(f"WebAcquisitionService: Invalid meta image URL skipped: {abs_meta_url}")
+                        continue
                     except Exception as e:
-                        print(f"WebAcquisitionService: Error processing meta tag {content}: {e}")
+                        continue
 
         # 3. JSON-LD scripts
         for script_tag in soup.find_all('script', type='application/ld+json'):
@@ -323,11 +347,11 @@ class WebAcquisitionService(BaseService):
                                     source_scope="json_ld"
                                 ))
                             except ValueError:
-                                print(f"WebAcquisitionService: Invalid JSON-LD image URL skipped: {abs_json_img_url}")
+                                continue
             except json.JSONDecodeError:
-                print("WebAcquisitionService: Failed to parse JSON-LD content.")
+                continue
             except Exception as e:
-                print(f"WebAcquisitionService: Error processing JSON-LD: {e}")
+                continue
         
         # 4. <picture> tags (simplified: taking the first <img> or <source> src)
         for pic_tag in soup.find_all('picture'):
@@ -358,9 +382,9 @@ class WebAcquisitionService(BaseService):
                         source_scope="picture_tag"
                     ))
                 except ValueError:
-                     print(f"WebAcquisitionService: Invalid picture image URL skipped: {abs_pic_url}")
+                     continue
                 except Exception as e:
-                    print(f"WebAcquisitionService: Error processing <picture> tag: {e}")
+                    continue
 
         return images
 
@@ -574,7 +598,6 @@ class WebAcquisitionService(BaseService):
             parsed_original_url = urlparse(original_url)
             if not all([parsed_original_url.scheme, parsed_original_url.netloc]):
                 raise ValueError("Invalid URL scheme or netloc.")
-            # pydantic_original_url = HttpUrl(original_url) # Already validated by pydantic if input is model
         except ValueError as ve:
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(
@@ -582,7 +605,6 @@ class WebAcquisitionService(BaseService):
                 processing_duration_seconds=duration
             )
             return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
-
 
         # --- Initial URL Filtering (Domain/Path/Strict Paywall) ---
         current_domain = self._get_domain(original_url)
@@ -594,38 +616,36 @@ class WebAcquisitionService(BaseService):
             if not is_allowed_social or (is_allowed_social and is_unsupported_path) : # An allowed social can still have unsupported path
                  duration = time.time() - start_time
                  output = WebAcquisitionServiceOutput(status="error_unsupported_content_type", original_url=original_url, error_message="URL points to an unsupported page type (e.g., social media feed, video platform).", processing_duration_seconds=duration)
-                 return ServiceResult.success(data=output) # Or failure, depending on how orchestrator handles this
+                 return ServiceResult.success(data=output)
 
 
         if self._check_domain_in_set(current_domain, VERY_STRICT_PAYWALL_DOMAINS):
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(status="error_paywall", original_url=original_url, final_url=original_url, is_paywalled=True, error_message="Site is known for a strict paywall; fetching not attempted.", processing_duration_seconds=duration)
-            return ServiceResult.success(data=output) # Success from service perspective, paywall noted
+            return ServiceResult.success(data=output)
 
 
         # --- HTTP Fetching ---
         final_url_str: Optional[str] = None
         html_content: Optional[str] = None
         pdf_bytes: Optional[bytes] = None
-        response_status_code: Optional[int] = None
+        # response_status_code: Optional[int] = None # Not strictly needed for output if using raise_for_status
         
         try:
             async with aiohttp.ClientSession(headers={"User-Agent": "ThinkStashBot/1.0 (compatible; Mozilla/5.0; +http://thinkstash.com/bot)"}) as session:
                 async with session.get(original_url, timeout=aiohttp.ClientTimeout(total=20, connect=10), allow_redirects=True) as response:
-                    response_status_code = response.status
+                    # response_status_code = response.status # Store if needed before raise_for_status
                     final_url_str = str(response.url)
                     response.raise_for_status() # Raises for 4xx/5xx
 
                     content_type = response.headers.get('Content-Type', '').lower()
                     
-                    # PDF Handling
-                    if 'application/pdf' in content_type or final_url_str.lower().endswith('.pdf'):
+                    if 'application/pdf' in content_type or (final_url_str and final_url_str.lower().endswith('.pdf')):
                         pdf_bytes = await response.read()
-                        page_title_from_pdf = os.path.basename(urlparse(final_url_str).path) # Basic title
-                        # Check Content-Disposition for filename
+                        page_title_from_pdf = os.path.basename(urlparse(final_url_str).path)
                         content_disposition = response.headers.get('Content-Disposition')
                         if content_disposition:
-                            disp_match = re.search(r"filename\*?=['\"]?([^'\"]+)['\"]?", content_disposition, re.I)
+                            disp_match = re.search(r"filename\\*?=[\'\\\"]?([^\'\\\"]+)[\'\\\"]?", content_disposition, re.I)
                             if disp_match: page_title_from_pdf = disp_match.group(1)
                         
                         duration = time.time() - start_time
@@ -642,50 +662,42 @@ class WebAcquisitionService(BaseService):
                     
                     html_content = await response.text()
 
-        except aiohttp.ClientResponseError as e: # Catches 4xx/5xx specifically
+        except aiohttp.ClientResponseError as e:
             duration = time.time() - start_time
             error_message = f"HTTP error: {e.status} {e.message}"
-            # Try to get some info from error page for paywall check
-            html_preview_on_error = None
-            page_title_on_error = None
-            try: # Read body of error if possible
-                if e.history: # If there were redirects
-                    final_url_str = str(e.history[-1].url) # URL that led to error
-                # html_preview_on_error = await e.response.text() # This might fail if response is already closed or not text
-            except Exception: pass
-
-            # Basic paywall check on error status/content (if available)
+            page_title_on_error = None 
+            # if e.history: final_url_str = str(e.history[-1].url) # final_url_str might be set from successful part of redirect chain
+            
             is_paywall_on_error = False
             if e.status in [401, 403, 451]: is_paywall_on_error = True
-            # if html_preview_on_error: (add keyword/selector check here if html_preview_on_error is reliable)
                 
             output = WebAcquisitionServiceOutput(
                 status="error_paywall" if is_paywall_on_error else "error_fetch",
                 original_url=original_url, final_url=final_url_str or original_url,
                 page_title=page_title_on_error,
-                #extracted_text=html_preview_on_error[:1000] if html_preview_on_error else None,
                 is_paywalled=is_paywall_on_error,
                 error_message=error_message, processing_duration_seconds=duration
             )
-            return ServiceResult.success(data=output) # Return success with error status in data
+            return ServiceResult.success(data=output)
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e: # Other client errors, timeouts
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(status="error_fetch", original_url=original_url, final_url=final_url_str, error_message=f"Fetch error: {type(e).__name__} - {str(e)}", processing_duration_seconds=duration)
             return ServiceResult.success(data=output)
-        except Exception as e: # Catch-all for unexpected
+        except Exception as e:
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(status="error_fetch", original_url=original_url, final_url=final_url_str, error_message=f"Unexpected fetch error: {type(e).__name__} - {str(e)}", processing_duration_seconds=duration)
             return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
 
-        if not html_content or not final_url_str: # Should not happen if no exception before
+        if not html_content or not final_url_str:
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(status="error_parsing", original_url=original_url, final_url=final_url_str, error_message="No HTML content fetched.", processing_duration_seconds=duration)
             return ServiceResult.success(data=output)
 
         # --- HTML Parsing, Text/Image Extraction ---
         try:
-            parsed_data = await self._parse_html_content(html_content, final_url_str, web_input.processing_level, job_id)
+            # Ensure _parse_html_content uses the job_id from web_input
+            parsed_data = await self._parse_html_content(html_content, final_url_str, web_input.processing_level, web_input.job_id)
         except Exception as e:
             duration = time.time() - start_time
             output = WebAcquisitionServiceOutput(
@@ -694,18 +706,15 @@ class WebAcquisitionService(BaseService):
             )
             return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
 
-        # Determine final status based on extraction and paywall detection
         final_status = "success"
         final_is_paywalled = parsed_data.get("is_paywalled_after_parse", False)
+        extracted_text_final = parsed_data.get("extracted_text")
         
-        if final_is_paywalled and not parsed_data.get("extracted_text"):
+        if final_is_paywalled and not extracted_text_final:
             final_status = "error_paywall"
-        elif not parsed_data.get("extracted_text") and not parsed_data.get("images"):
-             # If no text AND no images, consider it a parse error if not already a paywall
+        elif not extracted_text_final and not parsed_data.get("images"):
             if final_status != "error_paywall": final_status = "error_parsing"
-            # Default error message if none from parser specific step
             parsed_data["error_message"] = parsed_data.get("error_message", "Could not extract significant text or images.")
-
 
         duration = time.time() - start_time
         output = WebAcquisitionServiceOutput(
@@ -713,9 +722,9 @@ class WebAcquisitionService(BaseService):
             original_url=original_url,
             final_url=final_url_str,
             page_title=parsed_data.get("page_title"),
-            extracted_text=parsed_data.get("extracted_text"),
+            extracted_text=extracted_text_final,
             images=parsed_data.get("images"),
-            is_paywalled=final_is_paywalled, # Overall paywall status
+            is_paywalled=final_is_paywalled,
             error_message=parsed_data.get("error_message") if final_status != "success" else (parsed_data.get("paywall_detection_message") if final_is_paywalled else None),
             processing_duration_seconds=duration
         )
