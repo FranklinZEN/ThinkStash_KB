@@ -22,7 +22,7 @@ if settings.openai_api_key and settings.default_llm_model:
         agent_llm_instance = ChatOpenAI(
             api_key=settings.openai_api_key,
             model_name=settings.default_llm_model,
-            temperature=0.0
+            temperature=0.0 # Ensure temperature is 0 for deterministic structuring
         )
         print(f"MinimalLLMCrew: Agent LLM initialized with model: {settings.default_llm_model}, Temperature: 0.0")
     except Exception as e:
@@ -45,27 +45,28 @@ class MinimalLLMCrew:
     def __init__(self):
         self.agent_llm = agent_llm_instance
         if not self.agent_llm:
-            print("MinimalLLMCrew __init__: CRITICAL - Agent LLM is not configured. Agent cannot function.")
+            print("MinimalLLMCrew __init__: CRITICAL - Agent LLM is not configured. Structuring will fail.")
             # In a real app, might raise ValueError here
+            # self.structuring_helper will be None or initialized in a way that its calls will fail gracefully
+            self.structuring_helper = ContentStructuringLLMHelper(llm_instance=None) 
+        else:
+            # Instantiate the helper class, passing the agent's LLM to it
+            self.structuring_helper = ContentStructuringLLMHelper(llm_instance=self.agent_llm)
 
-        # Instantiate the helper class, passing the agent's LLM to it
-        # (or could use default_llm_client_for_tools from llm_tools.py if desired)
-        self.structuring_helper = ContentStructuringLLMHelper(llm_instance=self.agent_llm)
-
-        self.content_analyst_agent = Agent(
+        # The ContentAnalystAgent and its task are no longer directly used in .run()
+        # but could be kept if there's a future use case for a CrewAI agent performing other actions.
+        # For now, they are effectively bypassed by the direct call to the helper.
+        self.content_analyst_agent_for_other_uses = Agent( # Renamed for clarity
             role="Content Structuring Specialist",
-            goal=("Given 'raw_text_content' and 'image_metadata_list' from task arguments, I will directly use my LLM capabilities "
-                  "(leveraging an internal structuring helper with a specific function calling schema named 'format_content_blocks') "
-                  "to process this data. My final answer MUST be the JSON object argument that was successfully passed to the 'format_content_blocks' function."),
-            backstory=("I am an AI assistant that uses my own LLM and a predefined function calling schema to structure content. "
-                       "I ensure the output is the exact JSON arguments from the function call, using the full provided text and metadata."),
-            tools=[], # Agent has no external CrewAI tools for this task
+            goal=("This agent's run method is now bypassed for structuring. Structuring is done by ContentStructuringLLMHelper."),
+            backstory=("I was an AI assistant for structuring content, but my primary structuring task is now handled directly by a helper class using LLM function calling."),
+            tools=[], 
             llm=self.agent_llm, 
             verbose=True, 
             allow_delegation=False
         )
 
-    def create_structuring_task(self, raw_text: str, image_metadata: List[Dict[str, Any]]) -> Task:
+    def create_structuring_task_for_other_uses(self, raw_text: str, image_metadata: List[Dict[str, Any]]) -> Task:
         task_arguments = {
             "raw_text_content": raw_text, 
             "image_metadata_list": image_metadata
@@ -78,34 +79,49 @@ class MinimalLLMCrew:
             f"To achieve this, you will construct and execute an LLM call that invokes the 'format_content_blocks' function. "
             f"CRITICAL: The 'user prompt' section for THIS INTERNAL LLM CALL must include a specific segment, for example, labeled 'Raw Text to Structure:'. "
             f"The text that follows this 'Raw Text to Structure:' label in your constructed user prompt MUST BE THE EXACT, VERBATIM, UNALTERED 'raw_text_content' string you received in your task arguments. Do NOT summarize, shorten, paraphrase, or modify it in any way before placing it into that prompt. "
-            f"The system prompt for this internal LLM call (derived from ContentStructuringLLMHelper's system_prompt_content) will provide further strict instructions to ONLY use text from this 'Raw Text to Structure' for any generated 'content' fields within the function arguments. "
-            f"Your final answer for this task MUST be the single JSON object representing the arguments successfully passed to the 'format_content_blocks' function call. This JSON object must contain a 'blocks' key with a list of structured content objects, where all textual 'content' fields are verbatim extractions from the original 'raw_text_content'."
+            f"The system prompt for this internal LLM call (derived from ContentStructuringLLMHelper's system_prompt_content) will provide further strict instructions. These include: "
+            f"  - ONLY use text from the 'Raw Text to Structure' for any generated 'content' fields within the function arguments for 'text', 'code', and 'math' blocks. "
+            f"  - All general text segments MUST be output with type 'text'. Code segments as 'code', math as 'math'. "
+            f"  - Image captions MUST be taken from provided metadata or be null if not provided; DO NOT invent captions. "
+            f"Your final answer for this task MUST be the single JSON object representing the arguments successfully passed to the 'format_content_blocks' function call. This JSON object must contain a 'blocks' key with a list of structured content objects, where all textual 'content' fields are verbatim extractions from the original 'raw_text_content', and all block types are one of ['text', 'image_reference', 'code', 'math']."
         )
         expected_output=(
-            "A single JSON object string, representing the arguments for the 'format_content_blocks' function call (this object must contain a 'blocks' key with a list of structured content objects, where 'content' fields are verbatim extractions from the input 'raw_text_content')."
+            "A single JSON object string, representing the arguments for the 'format_content_blocks' function call (this object must contain a 'blocks' key with a list of structured content objects, adhering to the type constraints ['text', 'image_reference', 'code', 'math'] and verbatim content rules)."
         )
         return Task(
             description=description,
             expected_output=expected_output,
-            agent=self.content_analyst_agent,
+            agent=self.content_analyst_agent_for_other_uses,
             arguments=task_arguments,
         )
 
     def run(self, raw_text: str, image_metadata: List[Dict[str, Any]]) -> List[StructuredContentBlock]:
-        if not self.agent_llm:
-            print("MinimalLLMCrew.run(): CRITICAL - Agent LLM not configured.")
+        if not self.structuring_helper or not self.structuring_helper.llm_instance:
+            print("MinimalLLMCrew.run(): CRITICAL - Structuring helper or its LLM not configured.")
             return []
         
-        # The agent itself is now responsible for the logic that was in ContentStructuringLLMTool.perform_direct_structuring
-        # It will use its own LLM (self.agent_llm) and the schema (block_item_schema_for_llm_tool).
-        # We are essentially asking the agent to perform this complex LLM call with function calling as its main action.
+        print(f"MinimalLLMCrew.run: Calling ContentStructuringLLMHelper.perform_direct_structuring for raw_text (approx {len(raw_text)} chars) and {len(image_metadata)} images.")
         
-        structuring_task = self.create_structuring_task(raw_text, image_metadata)
-        minimal_crew = Crew(
-            agents=[self.content_analyst_agent],
-            tasks=[structuring_task],
-            process=Process.sequential,
-            verbose=True
-        )
-        
-        # The task arguments are already in `
+        try:
+            # Directly call the helper method that uses LLM function calling
+            structuring_result_dict = self.structuring_helper.perform_direct_structuring(
+                raw_text=raw_text,
+                image_metadata=image_metadata
+            )
+
+            # The helper method already returns a dict that ContentStructuringOutput can parse
+            # (or a dict with an 'error_message' key)
+            if structuring_result_dict.get("error_message"):
+                print(f"MinimalLLMCrew.run: Error from structuring_helper: {structuring_result_dict['error_message']}")
+                return []
+
+            # Validate and extract blocks
+            validated_output = ContentStructuringOutput(**structuring_result_dict)
+            print(f"MinimalLLMCrew.run: Successfully structured by helper, {len(validated_output.blocks)} blocks found.")
+            return list(validated_output.blocks)
+
+        except Exception as e_direct_call:
+            print(f"MinimalLLMCrew.run: Exception during direct call to structuring_helper: {e_direct_call}")
+            import traceback
+            traceback.print_exc()
+            return []

@@ -78,15 +78,29 @@ class ContentStructuringService(BaseService):
         # Call the MinimalLLMCrew.run() method
         # CrewAI's kickoff is synchronous. We need to run it in an executor.
         loop = asyncio.get_event_loop()
+        raw_crew_run_output_for_log: Any = None # For logging in case of error before assignment
         try:
             # The MinimalLLMCrew.run method itself should return List[StructuredContentBlock]
             # It handles the parsing of the crew's raw output.
-            crew_output_blocks: List[StructuredContentBlock] = await loop.run_in_executor(
+            # Let's capture its direct output for logging before assuming its type.
+            raw_crew_run_output_for_log = await loop.run_in_executor(
                 None, 
                 self.minimal_llm_crew.run, 
                 service_input.raw_text_content or "", 
                 image_metadata_for_crew
             )
+            print(f"ContentStructuringService: RAW CREW RUN OUTPUT Type: {type(raw_crew_run_output_for_log)}")
+            print(f"ContentStructuringService: RAW CREW RUN OUTPUT Content: {raw_crew_run_output_for_log!r}")
+
+            # Now, assume/check if it's the expected List[StructuredContentBlock]
+            # The run method of MinimalLLMCrew is now designed to always return a list (empty on error)
+            if isinstance(raw_crew_run_output_for_log, list):
+                crew_output_blocks: List[StructuredContentBlock] = raw_crew_run_output_for_log
+            else:
+                # This case should ideally not be hit if MinimalLLMCrew.run adheres to its return type
+                print(f"ContentStructuringService: WARNING - Output from MinimalLLMCrew.run was not a list as expected. Got: {type(raw_crew_run_output_for_log)}. Falling back to empty list.")
+                crew_output_blocks: List[StructuredContentBlock] = []
+
         except Exception as e_crew_run: # Catch exceptions from running the crew itself
             fallback_content = service_input.raw_text_content or "Error during content structuring crew execution."
             final_content_blocks.append(ContentBlock(type="text", content=fallback_content))

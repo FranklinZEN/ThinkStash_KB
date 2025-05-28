@@ -120,6 +120,15 @@ class WebAcquisitionService(BaseService):
         soup = BeautifulSoup(html_content_str, 'lxml')
         image_counter = 0
 
+        MIN_DIMENSION = 50  # Minimum width/height for an image to be considered relevant
+        # Refined keyword list
+        IRRELEVANT_ALT_STRINGS = ["logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", "pinterest", "pinterest engineering", "pinterest engineering blog"]
+        # For substring checks, we primarily care about 'logo', 'avatar', 'icon', 'profile'
+        IRRELEVANT_SUBSTRINGS_IN_ALT = ["logo", "avatar", "icon", "profile"]
+
+        IRRELEVANT_URL_SEGMENTS = ["/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif"]
+        ALLOWED_CONTENT_PATH_INDICATORS = ["/content/", "/media/", "/wp-content/uploads/", "/uploads/", "/images/", "/image/"]
+
         def _create_image_id(index: int) -> str:
             job_prefix = f"{job_id}_" if job_id else ""
             # Fallback to hashing part of URL if no job_id and index is not enough for global uniqueness
@@ -141,11 +150,54 @@ class WebAcquisitionService(BaseService):
                 abs_img_url = urljoin(base_url, str(src).strip())
                 if abs_img_url in processed_urls:
                     continue
+
+                # --- Start Filtering Logic ---
+                # Filter by URL segments
+                is_url_potentially_irrelevant = any(segment in abs_img_url.lower() for segment in IRRELEVANT_URL_SEGMENTS)
+                is_url_explicitly_content = any(indicator in abs_img_url.lower() for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
+                if is_url_potentially_irrelevant and not is_url_explicitly_content:
+                    print(f"WebAcquisitionService: Skipping image by URL segment: {abs_img_url}")
+                    continue
+
+                alt_text_raw = img_tag.get('alt', '').strip()
+                alt_text_lower = alt_text_raw.lower()
+
+                # Updated alt text filtering
+                if alt_text_lower in IRRELEVANT_ALT_STRINGS:
+                    print(f"WebAcquisitionService: Skipping image by exact alt text match: '{alt_text_raw}' for {abs_img_url}")
+                    continue
+                
+                is_irrelevant_substring = False
+                for substring in IRRELEVANT_SUBSTRINGS_IN_ALT:
+                    if substring in alt_text_lower:
+                        is_irrelevant_substring = True
+                        break
+                if is_irrelevant_substring:
+                    print(f"WebAcquisitionService: Skipping image by alt text substring: '{alt_text_raw}' for {abs_img_url}")
+                    continue
+                
+                width_attr = img_tag.get('width')
+                height_attr = img_tag.get('height')
+                try:
+                    if width_attr and width_attr.isdigit() and int(width_attr) < MIN_DIMENSION:
+                        print(f"WebAcquisitionService: Skipping image by width ({width_attr} < {MIN_DIMENSION}): {abs_img_url}")
+                        continue
+                    if height_attr and height_attr.isdigit() and int(height_attr) < MIN_DIMENSION:
+                        print(f"WebAcquisitionService: Skipping image by height ({height_attr} < {MIN_DIMENSION}): {abs_img_url}")
+                        continue
+                except ValueError:
+                    pass # Non-integer width/height, can't filter by this
+
+                # Role 'presentation' is tricky. Medium uses it for content images.
+                # If role is 'presentation' AND dimensions are very small, it might be decorative.
+                # For now, relying on explicit dimension attributes and keywords.
+                # --- End Filtering Logic ---
+
                 validated_url = HttpUrl(abs_img_url)
                 processed_urls.add(abs_img_url)
                 image_counter += 1
                 
-                alt_text = img_tag.get('alt', '').strip() or None
+                alt_text = alt_text_raw or None # Use original case for storage, None if empty
                 caption_text: Optional[str] = None
                 figure_parent = img_tag.find_parent('figure')
                 context_element = figure_parent if figure_parent else img_tag

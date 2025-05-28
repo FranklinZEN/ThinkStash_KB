@@ -34,7 +34,7 @@ from langchain_openai import ChatOpenAI # Ensure this is imported
 
 # --- Test Configuration ---
 # Reverted to a hardcoded URL for now to avoid AttributeError
-TEST_SOURCE_IDENTIFIER = "https://medium.com/the-quantastic-journal/inside-a-language-models-mind-curved-inference-as-a-new-ai-interpretability-paradigm-ca1abf49b55d" 
+TEST_SOURCE_IDENTIFIER = "https://medium.com/pinterest-engineering/multi-gate-mixture-of-experts-mmoe-model-architecture-and-knowledge-distillation-in-ads-08ec7f4aa857" 
 # You can change this to your preferred test URL, e.g.:
 # TEST_SOURCE_IDENTIFIER = "https://cloud.google.com/blog/products/ai-machine-learning/build-multilingual-chatbots-with-gemini-gemma-and-mcp"
 TEST_SOURCE_TYPE = "url" 
