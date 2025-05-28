@@ -21,9 +21,10 @@ if settings.openai_api_key and settings.default_llm_model:
     try:
         agent_llm_instance = ChatOpenAI(
             api_key=settings.openai_api_key,
-            model_name=settings.default_llm_model
+            model_name=settings.default_llm_model,
+            temperature=0.0
         )
-        print(f"MinimalLLMCrew: Agent LLM initialized with model: {settings.default_llm_model}")
+        print(f"MinimalLLMCrew: Agent LLM initialized with model: {settings.default_llm_model}, Temperature: 0.0")
     except Exception as e:
         print(f"MinimalLLMCrew: ERROR - Failed to initialize Agent LLM: {e}.")
 else:
@@ -68,32 +69,26 @@ class MinimalLLMCrew:
         task_arguments = {
             "raw_text_content": raw_text, 
             "image_metadata_list": image_metadata
-            # The agent will use these arguments to call self.structuring_helper.perform_direct_structuring
         }
         image_metadata_snippet_for_desc = json.dumps(image_metadata[:1]) + ("..." if len(image_metadata) > 1 else "")
 
-        # The agent will perform the structuring internally using its LLM and the helper logic.
-        # The description guides the agent on how to use its arguments for this internal process.
+        description = (
+            f"Task: Structure content using your internal LLM and the predefined 'format_content_blocks' function calling schema. "
+            f"You have received 'raw_text_content' (approx. {len(raw_text)} chars) and 'image_metadata_list' ({len(image_metadata)} items, e.g., {image_metadata_snippet_for_desc}) as direct task arguments. "
+            f"To achieve this, you will construct and execute an LLM call that invokes the 'format_content_blocks' function. "
+            f"CRITICAL: The 'user prompt' section for THIS INTERNAL LLM CALL must include a specific segment, for example, labeled 'Raw Text to Structure:'. "
+            f"The text that follows this 'Raw Text to Structure:' label in your constructed user prompt MUST BE THE EXACT, VERBATIM, UNALTERED 'raw_text_content' string you received in your task arguments. Do NOT summarize, shorten, paraphrase, or modify it in any way before placing it into that prompt. "
+            f"The system prompt for this internal LLM call (derived from ContentStructuringLLMHelper's system_prompt_content) will provide further strict instructions to ONLY use text from this 'Raw Text to Structure' for any generated 'content' fields within the function arguments. "
+            f"Your final answer for this task MUST be the single JSON object representing the arguments successfully passed to the 'format_content_blocks' function call. This JSON object must contain a 'blocks' key with a list of structured content objects, where all textual 'content' fields are verbatim extractions from the original 'raw_text_content'."
+        )
+        expected_output=(
+            "A single JSON object string, representing the arguments for the 'format_content_blocks' function call (this object must contain a 'blocks' key with a list of structured content objects, where 'content' fields are verbatim extractions from the input 'raw_text_content')."
+        )
         return Task(
-            description=(
-                f"Task: Structure content using your internal LLM and the predefined 'format_content_blocks' function calling schema. "
-                f"Process the 'raw_text_content' (approx. {len(raw_text)} chars) and 'image_metadata_list' ({len(image_metadata)} items, e.g., {image_metadata_snippet_for_desc}) from your task arguments. "
-                f"You will effectively be calling a helper method that encapsulates the LLM call with function calling. "
-                f"Ensure the full text and all image metadata are used. "
-                f"Your final answer MUST be the JSON object representing the arguments of the 'format_content_blocks' function call."
-            ),
-            expected_output=(
-                "A single JSON object string, representing the arguments for the 'format_content_blocks' function call (this object must contain a 'blocks' key with a list of structured content objects)."
-            ),
+            description=description,
+            expected_output=expected_output,
             agent=self.content_analyst_agent,
             arguments=task_arguments,
-            # This is where we define the agent's action if not using tools:
-            # The agent, when this task is run, will execute this function.
-            # We need to ensure this function has access to `self.structuring_helper` and task arguments.
-            # This is a more advanced CrewAI pattern.
-            # For now, we assume the agent's LLM, based on the goal/description, will know to call a Python method if we could equip it so.
-            # --- OR --- the agent's response will be the JSON it *would* have used, and we parse that.
-            # The current `run` method assumes the agent's final response *is* the JSON string.
         )
 
     def run(self, raw_text: str, image_metadata: List[Dict[str, Any]]) -> List[StructuredContentBlock]:
@@ -110,57 +105,7 @@ class MinimalLLMCrew:
             agents=[self.content_analyst_agent],
             tasks=[structuring_task],
             process=Process.sequential,
-            verbose=2 
+            verbose=True
         )
         
-        # The task arguments are already in `structuring_task.arguments`
-        # The agent should pick these up and use them for its direct LLM call.
-        try:
-            crew_kickoff_result = minimal_crew.kickoff() 
-            print(f"MinimalLLMCrew: kickoff result type: {type(crew_kickoff_result)}")
-            raw_agent_output_str = str(crew_kickoff_result).strip()
-            if hasattr(crew_kickoff_result, 'tasks_output') and crew_kickoff_result.tasks_output:
-                raw_agent_output_str = str(crew_kickoff_result.tasks_output[0].raw).strip()
-            print(f"MinimalLLMCrew: Agent's raw output from kickoff: {raw_agent_output_str[:1000]}...")
-
-            if raw_agent_output_str:
-                cleaned_json_str = raw_agent_output_str
-                if cleaned_json_str.startswith("```json"):
-                    cleaned_json_str = cleaned_json_str[7:]
-                    if cleaned_json_str.endswith("```"):
-                        cleaned_json_str = cleaned_json_str[:-3]
-                elif cleaned_json_str.startswith("```"):
-                    cleaned_json_str = cleaned_json_str[3:]
-                    if cleaned_json_str.endswith("```"):
-                        cleaned_json_str = cleaned_json_str[:-3]
-                cleaned_json_str = cleaned_json_str.strip()
-                try:
-                    output_dict = None
-                    if (cleaned_json_str.startswith('{') and cleaned_json_str.endswith('}')):
-                        try: output_dict = ast.literal_eval(cleaned_json_str)
-                        except (ValueError, SyntaxError): 
-                            print(f"MinimalLLMCrew: ast.literal_eval failed, attempting json.loads for: {cleaned_json_str[:200]}...")
-                            output_dict = json.loads(cleaned_json_str) 
-                    else:
-                        print(f"MinimalLLMCrew: Agent output was not a dict-like string: {cleaned_json_str[:500]}")
-                        return []
-                    
-                    # output_dict is now expected to be the args of the function call, i.e., {"blocks": [...]}
-                    parsed_output = ContentStructuringOutput(**output_dict) 
-                    if parsed_output.error_message:
-                        print(f"MinimalLLMCrew: Parsed output contained an error from LLM: {parsed_output.error_message}")
-                        return [] 
-                    return parsed_output.blocks
-                except Exception as e_parse: 
-                    print(f"MinimalLLMCrew: Error parsing agent output: {e_parse}. String was: {cleaned_json_str[:500]}")
-                    return []
-            else:
-                print(f"MinimalLLMCrew: No valid string output obtained from crew agent.")
-                return []
-        except Exception as e:
-            print(f"MinimalLLMCrew: Error running crew - {str(e)}")
-            import traceback; traceback.print_exc() 
-            return []
-
-# Need to import json for parsing if task output is stringified JSON
-# import json # Removed redundant import 
+        # The task arguments are already in `

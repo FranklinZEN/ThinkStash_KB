@@ -202,16 +202,18 @@ class ImageProcessingService(BaseService):
                 failed_image_ids.append(raw_image_input.image_id)
         
         duration = time.time() - start_time
-        status_message = f"Processed {len(processed_images_list)} images, failed {len(failed_image_ids)}."
+        status_message = f"Processed {len(processed_images_list)} out of {len(service_input.images_to_process)} images, {len(failed_image_ids)} failed."
         print(f"ImageProcessingService: Completed in {duration:.2f}s. {status_message}")
 
-        if failed_image_ids and not processed_images_list:
-            return ServiceResult.failure(error_message=f"All images failed processing. First failure on: {failed_image_ids[0] if failed_image_ids else 'N/A'}. {status_message}", error_details=failed_image_ids)
-        elif failed_image_ids:
-            return ServiceResult.success(data=processed_images_list, error_message=f"Some images failed processing. Failures: {', '.join(failed_image_ids)}. {status_message}")
-        elif not processed_images_list and not service_input.images_to_process:
-             return ServiceResult.success(data=[], error_message="No images provided for processing.")
+        if failed_image_ids and not processed_images_list: # All images failed
+            # Construct a more informative error message for the failure case
+            failure_summary = f"All {len(failed_image_ids)} images failed processing. First failure on: {failed_image_ids[0] if failed_image_ids else 'N/A'}."
+            return ServiceResult.failure(error_message=failure_summary, error_details={"failed_ids": failed_image_ids, "summary": status_message})
         
+        # If some images failed but others succeeded, or if all succeeded, or if no images were provided:
+        # The orchestrator can inspect the length of processed_images_list against the input 
+        # to determine if it was a partial success and log/handle accordingly.
+        # The ServiceResult itself is a success if at least some images were processed or no images were there to begin with.
         return ServiceResult.success(data=processed_images_list)
 
 # Required for _sanitize_for_gcs_path

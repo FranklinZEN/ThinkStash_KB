@@ -10,6 +10,7 @@ from langchain_core.tools import BaseTool as LangchainCoreBaseTool, InjectedTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel as PydanticV2BaseModel, Field as PydanticV2Field
 from PIL import Image # To determine MIME type for base64 encoding
+from langchain_core.pydantic_v1 import BaseModel, Field, validator # For ContentStructuringOutput
 
 from aiservice.app.config.settings import settings # Import global settings
 
@@ -31,20 +32,20 @@ else:
     print("LLM_TOOLS: WARNING - OpenAI API key not found. Tools needing LLMs may fail if not provided one.")
 
 # --- Input/Output Schemas for ImageAnalysisLLMTool ---
-class ImageAnalysisInput(BaseModel):
-    image_bytes: Optional[bytes] = Field(None, description="Bytes of the image to analyze.")
-    image_path: Optional[str] = Field(None, description="Path to the image file if bytes are not provided.")
+class ImageAnalysisInput(PydanticV2BaseModel):
+    image_bytes: Optional[bytes] = PydanticV2Field(None, description="Bytes of the image to analyze.")
+    image_path: Optional[str] = PydanticV2Field(None, description="Path to the image file if bytes are not provided.")
     # Potentially add context like surrounding text, page number for better analysis
-    text_context: Optional[str] = Field(None, description="Text surrounding or relevant to the image.")
-    prompt_override: Optional[str] = Field(None, description="Alternative prompt for the vision model.")
+    text_context: Optional[str] = PydanticV2Field(None, description="Text surrounding or relevant to the image.")
+    prompt_override: Optional[str] = PydanticV2Field(None, description="Alternative prompt for the vision model.")
     # filename_for_mime: Optional[str] = Field(None, description="Optional filename to help infer MIME type if bytes are directly provided.")
 
-class ImageAnalysisOutput(BaseModel):
-    description: Optional[str] = Field(None, description="Detailed LLM-generated description of the image.")
-    caption: Optional[str] = Field(None, description="Concise LLM-generated caption for the image.")
-    keywords: Optional[List[str]] = Field(default_factory=list, description="Keywords related to the image content.")
+class ImageAnalysisOutput(PydanticV2BaseModel):
+    description: Optional[str] = PydanticV2Field(None, description="Detailed LLM-generated description of the image.")
+    caption: Optional[str] = PydanticV2Field(None, description="Concise LLM-generated caption for the image.")
+    keywords: Optional[List[str]] = PydanticV2Field(default_factory=list, description="Keywords related to the image content.")
     # Add other structured fields as needed, e.g., detected objects, OCR text if applicable
-    error_message: Optional[str] = Field(None)
+    error_message: Optional[str] = PydanticV2Field(None)
 
 # --- ImageAnalysisLLMTool: Now with Real Vision Call ---
 class ImageAnalysisLLMTool(LangchainCoreBaseTool):
@@ -178,30 +179,31 @@ class ImageAnalysisLLMTool(LangchainCoreBaseTool):
             return ImageAnalysisOutput(error_message=f"Vision LLM call failed: {str(e)}").model_dump()
 
 # --- Input/Output Schemas for ContentStructuringLLMTool ---
-class ContentStructuringInput(BaseModel):
-    raw_text: str = Field(description="Full raw text content to be structured.")
-    image_metadata: List[Dict[str, Any]] = Field(default_factory=list, description="List of image metadata dictionaries.")
-    prompt_override: Optional[str] = Field(None, description="Optional specific prompt for content structuring rules.")
+class ContentStructuringInput(PydanticV2BaseModel):
+    raw_text: str = PydanticV2Field(description="Full raw text content to be structured.")
+    image_metadata: List[Dict[str, Any]] = PydanticV2Field(default_factory=list, description="List of image metadata dictionaries.")
+    prompt_override: Optional[str] = PydanticV2Field(None, description="Optional specific prompt for content structuring rules.")
 
 # Refers to aiservice.app.models.content_structuring_models.ContentBlock (or orchestration_models.ContentBlock)
 # For now, let's use a generic structure that can be mapped.
-class StructuredContentBlock(BaseModel):
+class StructuredContentBlock(PydanticV2BaseModel):
     """Represents a single block of structured content, matching LLM function call schema."""
-    type: str = Field(description="Type of content block (e.g., 'text', 'image_reference', 'code', 'math').")
-    content: Optional[str] = Field(default=None, description="Text content for the block.")
-    image_id: Optional[str] = Field(default=None, description="ID of the image for image blocks.")
-    caption: Optional[str] = Field(default=None, description="Caption for the image.")
+    type: str = PydanticV2Field(description="Type of content block (e.g., 'text', 'image_reference', 'code', 'math').")
+    content: Optional[str] = PydanticV2Field(default=None, description="Text content for the block.")
+    image_id: Optional[str] = PydanticV2Field(default=None, description="ID of the image for image blocks.")
+    caption: Optional[str] = PydanticV2Field(default=None, description="Caption for the image.")
     # Removed alt_text from here to align with schema for now
 
-class ContentStructuringOutput(BaseModel):
-    blocks: List[StructuredContentBlock] = Field(default_factory=list)
-    error_message: Optional[str] = None
+class ContentStructuringOutput(PydanticV2BaseModel):
+    blocks: List[StructuredContentBlock] = PydanticV2Field(default_factory=list)
+    error_message: Optional[str] = PydanticV2Field(None)
 
 # --- ContentStructuringLLMTool ---
 class ContentStructuringLLMHelper:
     llm_instance: Optional[ChatOpenAI]
 
-    def __init__(self, llm_instance: Optional[ChatOpenAI] = None):
+    def __init__(self, llm_instance: Optional[ChatOpenAI] = None, settings_override: Optional[Any] = None):
+        self.current_settings = settings_override if settings_override else settings
         self.llm_instance = llm_instance if llm_instance is not None else default_llm_client_for_tools
         if not self.llm_instance:
             print("ContentStructuringLLMHelper: WARNING - Initialized WITHOUT an LLM instance. Calls will fail.")
@@ -224,21 +226,50 @@ class ContentStructuringLLMHelper:
             if image_details_list:
                 image_refs_segment = "\n\nAvailable images for reference (use their Image ID and provided caption to create image_reference blocks):\n" + "\n".join(image_details_list)
 
+        # This system_prompt_content is what the agent's LLM should use when it internally
+        # makes the call to the LLM API with the format_content_blocks function.
         system_prompt_content = (
-            "You are an expert content structuring AI. Your task is to accurately segment the provided 'Raw Text to Structure' into a sequence of content blocks and integrate image references. "
-            "You MUST ONLY use the text provided in 'Raw Text to Structure'. Do NOT add, invent, or synthesize any new textual content or introductory/concluding sentences. "
-            "Segment the provided text into logical 'text', 'code', or 'math' blocks. "
-            "For images, use the provided 'image_metadata' to create 'image_reference' blocks. The 'caption' for an 'image_reference' block MUST come from the provided metadata if available; do not invent captions. "
-            "Your entire response MUST be a single, valid JSON object. This JSON object must have a key named 'blocks'. "
-            "The value for the 'blocks' key must be a JSON list of content block objects, adhering strictly to the schema: 'type' (enum: 'text', 'image_reference', 'code', 'math'), and conditional 'content', 'image_id', 'caption' fields."
-            "\nExample of the expected root JSON object format:\n"
-            "{\n"
-            "  \"blocks\": [\n"
-            "    {\"type\": \"text\", \"content\": \"Exact sentence from source text.\"},\n"
-            "    {\"type\": \"image_reference\", \"image_id\": \"IMG_XYZ\", \"caption\": \"Caption from metadata or null if none.\"}\n"
-            "  ]\n"
-            "}"
-        )
+    "You are an expert content structuring AI. Your task is to accurately segment the provided 'Raw Text to Structure' (found in the user prompt) "
+    "into a sequence of content blocks and integrate image references, outputting a JSON object for the 'format_content_blocks' function. "
+    "ABSOLUTE REQUIREMENT FOR 'content' FIELDS: You MUST ONLY use the exact text provided in the 'Raw Text to Structure' section of the user prompt. "
+    "Do NOT add, invent, paraphrase, or synthesize ANY new textual content, introductory/concluding sentences, or transitional phrases for the 'content' fields of 'text', 'math', or 'code' blocks. "
+    "Every single word in a 'text', 'math', or 'code' block's 'content' field MUST be a direct, verbatim subsequence copied EXACTLY from the 'Raw Text to Structure'. "
+    "You are an extractor and segmenter, NOT a creative writer or summarizer for these fields. "
+    "If a segment from the 'Raw Text to Structure' is suitable as is, use it. If a segment implies a different type (e.g. an image placeholder that you convert to image_reference), handle that. "
+    "Do not invent captions for image_reference blocks; use provided metadata or null. "
+    "Segment the provided text into logical 'text', 'code', or 'math' blocks. Insert 'image_reference' blocks where appropriate based on image metadata. "
+    "Your entire response MUST be a single, valid JSON object. This JSON object must have a key named 'blocks'. "
+    "The value for the 'blocks' key must be a JSON list of content block objects, adhering strictly to the schema: "
+    "'type' (enum: ['text', 'image_reference', 'code', 'math']), and conditional 'content', 'image_id', 'caption' fields."
+    "\nExample of the root JSON object format you must produce (this is the argument to the 'format_content_blocks' function):\n"
+    "{\n"
+    "  \"blocks\": [\n"
+    "    {\"type\": \"text\", \"content\": \"Exact sentence from source text.\"},\n"
+    "    {\"type\": \"image_reference\", \"image_id\": \"IMG_XYZ\", \"caption\": \"Caption from metadata or null if none.\"},\n"
+    "    {\"type\": \"code\", \"content\": \"verbatim_code_from_source();\"}\n"
+    "  ]\n"
+    "}\n\n"
+    "DETAILED EXAMPLES OF VERBATIM EXTRACTION for the 'blocks' argument:\n\n"
+    "Example 1:\n"
+    "If User Prompt's 'Raw Text to Structure' is:\n'''\nThis is the first sentence. Some code: `val i = 10;`. This is math: $$E=mc^2$$. End of text.\n'''\n"
+    "The 'blocks' argument you generate for 'format_content_blocks' MUST BE:\n"
+    "{\n"
+    "  \"blocks\": [\n"
+    "    {\"type\": \"text\", \"content\": \"This is the first sentence.\"},\n"
+    "    {\"type\": \"code\", \"content\": \"val i = 10;\"},\n"
+    "    {\"type\": \"math\", \"content\": \"E=mc^2\"},\n"
+    "    {\"type\": \"text\", \"content\": \"End of text.\"}\n"
+    "  ]\n"
+    "}\n\n"
+    "Example 2:\n"
+    "If User Prompt's 'Raw Text to Structure' is:\n'''\nOnly one sentence here.\n'''\n"
+    "The 'blocks' argument you generate for 'format_content_blocks' MUST BE:\n"
+    "{\n"
+    "  \"blocks\": [\n"
+    "    {\"type\": \"text\", \"content\": \"Only one sentence here.\"}\n"
+    "  ]\n"
+    "}\n"
+)
         user_prompt_content = prompt_override or (
             f"Using ONLY the provided 'Raw Text to Structure' below, and the 'Available images for reference' list, segment the text and integrate image references. Adhere strictly to the schema and instructions given in the system prompt."
             f"{image_refs_segment}\n\nRaw Text to Structure:\n'''\n{raw_text}\n'''"
@@ -297,16 +328,38 @@ class ContentStructuringLLMHelper:
 
 # Moved to module level for importability
 block_item_schema_for_llm_tool = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string", 
-            "description": "Type of content block. Must be one of: 'text', 'image_reference', 'code', 'math'.",
-            "enum": ["text", "image_reference", "code", "math"]
+    "name": "format_content_blocks",
+    "description": "Formats the extracted web content into a structured list of blocks (text, image_reference, code, math).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "blocks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": ["text", "image_reference", "code", "math"]
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Textual content for 'text', 'code', or 'math' blocks. Verbatim from source."
+                        },
+                        "image_id": {
+                            "type": "string",
+                            "description": "Unique identifier for an image, used in 'image_reference' type blocks."
+                        },
+                        "caption": {
+                            "type": "string",
+                            "description": "Caption for an image, used in 'image_reference' type blocks. From metadata or null."
+                        }
+                    },
+                    "required": ["type"]
+                },
+                "description": "A list of content blocks representing the structured article."
+            }
         },
-        "content": {"type": ["string", "null"], "description": "Text content for 'text', 'code', or 'math' blocks. MUST BE NULL for 'image_reference' blocks."},
-        "image_id": {"type": ["string", "null"], "description": "ID of the image for 'image_reference' blocks. MUST BE NULL for other block types."},
-        "caption": {"type": ["string", "null"], "description": "Optional caption for 'image_reference' blocks (from metadata if available). MUST BE NULL for other block types."}
-    },
-    "required": ["type"] 
+        "required": ["blocks"]
+    }
 }

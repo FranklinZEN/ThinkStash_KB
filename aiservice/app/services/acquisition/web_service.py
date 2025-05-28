@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import time
 import aiohttp
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 import trafilatura
 from urllib.parse import urljoin, urlparse
 import re
@@ -10,6 +10,7 @@ import os
 import uuid
 from typing import Type, Dict, Optional, Any, List, Union, Set
 import functools
+import json
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -109,6 +110,208 @@ class WebAcquisitionService(BaseService):
                 return True
         return False
 
+    async def _extract_images_from_html(self, html_content_str: str, base_url: str, job_id: Optional[str]) -> List[ProcessedWebImage]:
+        """
+        Extracts image URLs from HTML content using various strategies.
+        Adapted from the version previously developed.
+        """
+        images: List[ProcessedWebImage] = []
+        processed_urls: Set[str] = set()
+        soup = BeautifulSoup(html_content_str, 'lxml')
+        image_counter = 0
+
+        def _create_image_id(index: int) -> str:
+            job_prefix = f"{job_id}_" if job_id else ""
+            # Fallback to hashing part of URL if no job_id and index is not enough for global uniqueness
+            # This part might need access to the image URL itself if we want more unique IDs without job_id
+            # For now, using a simpler counter if no job_id
+            unique_part = str(index + 1)
+            return f"WEB_IMG_{job_prefix}{unique_part}"
+
+        # 1. Standard <img> tags
+        for idx, img_tag in enumerate(soup.find_all('img')):
+            if not isinstance(img_tag, Tag): continue
+            src = img_tag.get('src')
+            if not src: src = img_tag.get('data-src')
+            if not src: src = img_tag.get('data-original')
+            if not src or str(src).startswith('data:image'):
+                continue
+
+            try:
+                abs_img_url = urljoin(base_url, str(src).strip())
+                if abs_img_url in processed_urls:
+                    continue
+                validated_url = HttpUrl(abs_img_url)
+                processed_urls.add(abs_img_url)
+                image_counter += 1
+                
+                alt_text = img_tag.get('alt', '').strip() or None
+                caption_text: Optional[str] = None
+                figure_parent = img_tag.find_parent('figure')
+                context_element = figure_parent if figure_parent else img_tag
+
+                if figure_parent and isinstance(figure_parent, Tag):
+                    figcaption = figure_parent.find('figcaption')
+                    if figcaption and isinstance(figcaption, Tag): caption_text = figcaption.get_text(strip=True)
+
+                if not caption_text:
+                    title_attr = img_tag.get('title','').strip()
+                    if title_attr: caption_text = title_attr
+                    elif alt_text and len(alt_text.split()) > 3: caption_text = alt_text
+
+                images.append(ProcessedWebImage(
+                    image_id=_create_image_id(image_counter),
+                    image_url=validated_url,
+                    alt_text=alt_text,
+                    caption=caption_text,
+                    source_scope="img_tag",
+                    context_before=await self._get_contextual_text(context_element, "before"),
+                    context_after=await self._get_contextual_text(context_element, "after")
+                ))
+            except ValueError: # Pydantic validation error for HttpUrl
+                print(f"WebAcquisitionService: Invalid image URL skipped: {abs_img_url}")
+            except Exception as e:
+                print(f"WebAcquisitionService: Error processing <img> tag {src}: {e}")
+
+        # 2. Meta tags (og:image, twitter:image)
+        meta_tags_selectors = {
+            'og:image': 'meta[property="og:image"]',
+            'twitter:image': 'meta[name="twitter:image"]',
+            'twitter:image:src': 'meta[name="twitter:image:src"]',
+            'og:image:secure_url': 'meta[property="og:image:secure_url"]',
+        }
+        for key, selector in meta_tags_selectors.items():
+            for meta_tag in soup.select(selector):
+                if not isinstance(meta_tag, Tag): continue
+                content = meta_tag.get('content')
+                if content and str(content).strip() and not str(content).startswith('data:image'):
+                    try:
+                        abs_meta_url = urljoin(base_url, str(content).strip())
+                        if abs_meta_url in processed_urls:
+                            continue
+                        validated_url = HttpUrl(abs_meta_url)
+                        processed_urls.add(abs_meta_url)
+                        image_counter += 1
+                        # Try to get alt/caption from related meta tags if they exist
+                        og_alt = soup.find('meta', property='og:image:alt')
+                        alt_text_meta = og_alt['content'] if og_alt and isinstance(og_alt, Tag) and og_alt.get('content') else None
+
+                        images.append(ProcessedWebImage(
+                            image_id=_create_image_id(image_counter),
+                            image_url=validated_url,
+                            alt_text=alt_text_meta,
+                            caption=f"Image from meta tag ({key})",
+                            source_scope="meta_tag"
+                        ))
+                    except ValueError:
+                        print(f"WebAcquisitionService: Invalid meta image URL skipped: {abs_meta_url}")
+                    except Exception as e:
+                        print(f"WebAcquisitionService: Error processing meta tag {content}: {e}")
+
+        # 3. JSON-LD scripts
+        for script_tag in soup.find_all('script', type='application/ld+json'):
+            if not isinstance(script_tag, Tag): continue
+            try:
+                json_ld_content = json.loads(script_tag.string if script_tag.string else "{}")
+                if isinstance(json_ld_content, list):
+                    for item in json_ld_content:
+                        if isinstance(item, dict) and item.get("@type") == "ImageObject" and item.get("contentUrl"):
+                            img_url_json = item["contentUrl"]
+                            abs_json_img_url = urljoin(base_url, str(img_url_json).strip())
+                            if abs_json_img_url in processed_urls:
+                                continue
+                            validated_url = HttpUrl(abs_json_img_url)
+                            processed_urls.add(abs_json_img_url)
+                            image_counter += 1
+                            images.append(ProcessedWebImage(
+                                image_id=_create_image_id(image_counter),
+                                image_url=validated_url,
+                                alt_text=item.get("caption") or item.get("name"),
+                                caption=item.get("description") or "Image from JSON-LD",
+                                source_scope="json_ld"
+                            ))
+                elif isinstance(json_ld_content, dict):
+                    if json_ld_content.get("@type") == "ImageObject" and json_ld_content.get("contentUrl"):
+                        img_url_json = json_ld_content["contentUrl"]
+                        abs_json_img_url = urljoin(base_url, str(img_url_json).strip())
+                        if abs_json_img_url not in processed_urls:
+                            validated_url = HttpUrl(abs_json_img_url)
+                            processed_urls.add(abs_json_img_url)
+                            image_counter += 1
+                            images.append(ProcessedWebImage(
+                                image_id=_create_image_id(image_counter),
+                                image_url=validated_url,
+                                alt_text=json_ld_content.get("caption") or json_ld_content.get("name"),
+                                caption=json_ld_content.get("description") or "Image from JSON-LD",
+                                source_scope="json_ld"
+                            ))
+                    elif "image" in json_ld_content: # Common pattern for articles, etc.
+                        image_field = json_ld_content["image"]
+                        potential_urls = []
+                        if isinstance(image_field, str): potential_urls.append(image_field)
+                        elif isinstance(image_field, list):
+                            for item in image_field:
+                                if isinstance(item, str): potential_urls.append(item)
+                                elif isinstance(item, dict) and item.get("url"): potential_urls.append(item["url"])
+                        elif isinstance(image_field, dict) and image_field.get("url"):
+                            potential_urls.append(image_field["url"])
+                        
+                        for img_url_item in potential_urls:
+                            abs_json_img_url = urljoin(base_url, str(img_url_item).strip())
+                            if abs_json_img_url in processed_urls: continue
+                            try:
+                                validated_url = HttpUrl(abs_json_img_url)
+                                processed_urls.add(abs_json_img_url)
+                                image_counter += 1
+                                images.append(ProcessedWebImage(
+                                    image_id=_create_image_id(image_counter),
+                                    image_url=validated_url,
+                                    alt_text=json_ld_content.get("headline") or "Image from JSON-LD",
+                                    caption="Image from JSON-LD structure",
+                                    source_scope="json_ld"
+                                ))
+                            except ValueError:
+                                print(f"WebAcquisitionService: Invalid JSON-LD image URL skipped: {abs_json_img_url}")
+            except json.JSONDecodeError:
+                print("WebAcquisitionService: Failed to parse JSON-LD content.")
+            except Exception as e:
+                print(f"WebAcquisitionService: Error processing JSON-LD: {e}")
+        
+        # 4. <picture> tags (simplified: taking the first <img> or <source> src)
+        for pic_tag in soup.find_all('picture'):
+            if not isinstance(pic_tag, Tag): continue
+            img_in_picture = pic_tag.find('img')
+            source_in_picture = pic_tag.find('source')
+            pic_src = None
+            if img_in_picture and isinstance(img_in_picture, Tag) and img_in_picture.get('src'):
+                pic_src = img_in_picture.get('src')
+            elif source_in_picture and isinstance(source_in_picture, Tag) and source_in_picture.get('srcset'):
+                # Take the first URL from srcset for simplicity
+                pic_src = str(source_in_picture.get('srcset', '')).split(',')[0].strip().split(' ')[0]
+            
+            if pic_src and str(pic_src).strip() and not str(pic_src).startswith('data:image'):
+                try:
+                    abs_pic_url = urljoin(base_url, str(pic_src).strip())
+                    if abs_pic_url in processed_urls:
+                        continue
+                    validated_url = HttpUrl(abs_pic_url)
+                    processed_urls.add(abs_pic_url)
+                    image_counter += 1
+                    alt_text_pic = img_in_picture.get('alt', '').strip() if img_in_picture and isinstance(img_in_picture, Tag) else None
+                    images.append(ProcessedWebImage(
+                        image_id=_create_image_id(image_counter),
+                        image_url=validated_url,
+                        alt_text=alt_text_pic,
+                        caption="Image from <picture> element",
+                        source_scope="picture_tag"
+                    ))
+                except ValueError:
+                     print(f"WebAcquisitionService: Invalid picture image URL skipped: {abs_pic_url}")
+                except Exception as e:
+                    print(f"WebAcquisitionService: Error processing <picture> tag: {e}")
+
+        return images
+
     async def _parse_html_content(self, html_content: str, final_url: str, processing_level: str, job_id: Optional[str]) -> Dict[str, Any]:
         """Helper to parse HTML, extract text and images using BeautifulSoup and Trafilatura."""
         loop = asyncio.get_event_loop()
@@ -116,11 +319,10 @@ class WebAcquisitionService(BaseService):
         # Run BeautifulSoup parsing in executor
         soup = await loop.run_in_executor(None, BeautifulSoup, html_content, 'lxml')
         page_title_tag = soup.find('title')
-        page_title_text = page_title_tag.string.strip() if page_title_tag else None
+        page_title_text = page_title_tag.string.strip() if page_title_tag and isinstance(page_title_tag, Tag) else None
         print(f"WebAcquisitionService._parse_html_content: Page title: {page_title_text}")
 
         extracted_article_text: Optional[str] = None
-        image_search_soup = soup 
         images_found: List[ProcessedWebImage] = []
         is_paywalled_after_parse = False
         paywall_detection_message = ""
@@ -154,7 +356,6 @@ class WebAcquisitionService(BaseService):
                     print(f"WebAcquisitionService._parse_html_content: Trafilatura (favor_precision, html) extracted text length: {len(temp_extracted_text) if temp_extracted_text else 0}")
                     if temp_extracted_text and len(temp_extracted_text.strip()) > 100:
                         extracted_article_text = temp_extracted_text
-                        image_search_soup = main_content_soup 
             except Exception as e_precision: 
                 print(f"WebAcquisitionService._parse_html_content: Error during Trafilatura (favor_precision, html): {str(e_precision)}")
 
@@ -190,15 +391,14 @@ class WebAcquisitionService(BaseService):
             pass # Content extracted, but paywall clues present. is_paywalled_after_parse will be true.
 
         # --- Image Extraction ---
-        if processing_level == "full_content" and image_search_soup:
-            processed_image_urls_set: Set[str] = set()
-            img_tags = image_search_soup.find_all('img')
-            if image_search_soup != soup and len(img_tags) < 3:
-                img_tags.extend(soup.find_all('img'))
-            for idx, img_tag in enumerate(img_tags):
-                image_data = await self._process_image_tag(img_tag, final_url, image_search_soup == soup, processed_image_urls_set, idx, job_id)
-                if image_data:
-                    images_found.append(image_data)
+        if processing_level == "full_content":
+            # Call the new comprehensive image extraction method
+            try:
+                images_found = await self._extract_images_from_html(html_content, final_url, job_id)
+                print(f"WebAcquisitionService._parse_html_content: Found {len(images_found)} images via _extract_images_from_html.")
+            except Exception as e_img_extract:
+                print(f"WebAcquisitionService._parse_html_content: Error during _extract_images_from_html: {str(e_img_extract)}")
+                images_found = [] # Ensure it's an empty list on error
         
         return {
             "page_title": page_title_text,
@@ -244,8 +444,10 @@ class WebAcquisitionService(BaseService):
         full_context = " ".join(context_snippets).strip()
         return (full_context[:max_length] + "...") if len(full_context) > max_length else full_context
 
-
     async def _process_image_tag(self, img_tag, base_url: str, is_full_page_scope: bool, processed_urls: Set[str], index: int, job_id: Optional[str]) -> Optional[ProcessedWebImage]:
+        # This method is now effectively replaced by the logic within _extract_images_from_html
+        # Keeping it here to minimize diff for now, but it's not directly called by the new _parse_html_content flow for image extraction.
+        # If called directly, it would still work for single img tags, but _extract_images_from_html is more comprehensive.
         src = img_tag.get('src')
         if not src: src = img_tag.get('data-src')
         if not src: src = img_tag.get('data-original')
@@ -257,7 +459,7 @@ class WebAcquisitionService(BaseService):
             if re.search(r'/(ads|banner|pixel|spacer|tracker|sidebar|logo|icon|avatar)s?(_|\.|/)', abs_img_url_str, re.I):
                  if not re.search(r'/content/|/media/|/wp-content/uploads/', abs_img_url_str, re.I): # Allow if it looks like content
                     return None
-            if '.svg' in abs_img_url_str.lower() and 'icon' in abs_img_url_str.lower(): return None # Often small icons
+            if '.svg' in abs_img_url_str.lower() and 'icon' in abs_img_str.lower(): return None # Often small icons
 
             validated_img_url = HttpUrl(abs_img_url_str)
             if str(validated_img_url) in processed_urls: return None
