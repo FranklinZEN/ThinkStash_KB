@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 class RoutingInput(BaseModel):
     source_identifier: str # e.g., URL, file path
-    source_type: Literal['url', 'pdf', 'docx', 'txt', 'md', 'generic_file'] # Extend as needed
+    source_type: str # Changed from Literal to str to accommodate varied outputs from get_source_type
     # Any other relevant input for routing
 
 class RoutingOutput(BaseModel):

@@ -98,11 +98,13 @@ class ParallelOrchestrator(BaseService):
         
         acquisition_service_output_data: Any = None # To hold data from the called acquisition service
         raw_images_for_processing: List[RawImageInput] = []
+        determined_final_source_type: Optional[str] = None # ADDED: To store the actual source type
 
         # 1. Routing
         # Determine initial routing based on the primary identifier (URL or file path)
         # The source_type in orchestrator_input can be a hint or None
         initial_source_type_for_routing = orchestrator_input.source_type or RoutingService.get_source_type(orchestrator_input.source_identifier)
+        determined_final_source_type = initial_source_type_for_routing # Initialize with routing input type
         
         routing_input_obj = RoutingInput(
             source_identifier=orchestrator_input.source_identifier,
@@ -114,10 +116,13 @@ class ParallelOrchestrator(BaseService):
             error_message = f"Routing failed: {routing_result.error_message}"
             final_status_code = "failure_routing"
             # Early exit if routing fails
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url)
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type) # MODIFIED
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
+        # If RoutingOutput includes the determined source type, prefer that.
+        # For now, we'll infer based on service or explicitly set it, e.g., for PDF redirect.
+        # Example: determined_final_source_type = routing_result.data.source_type_used_for_routing
 
         # 2. Acquisition
         if determined_service_name == "WebAcquisitionService":
@@ -130,6 +135,7 @@ class ParallelOrchestrator(BaseService):
             acq_result = await self.web_acquisition_service.execute(web_acq_input)
             if acq_result.data: acquisition_service_output_data = acq_result.data
         elif determined_service_name == "PDFAcquisitionService":
+            determined_final_source_type = 'pdf' # Set based on service
             pdf_acq_input = PDFAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier,
                 processing_level=orchestrator_input.processing_level,
@@ -138,6 +144,10 @@ class ParallelOrchestrator(BaseService):
             acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input)
             if acq_result.data: acquisition_service_output_data = acq_result.data
         elif determined_service_name == "FileAcquisitionService":
+            # For FileAcquisitionService, source_type might be more specific (e.g., "docx", "txt")
+            # We will use initial_source_type_for_routing for now, but ideally, FileAcquisitionServiceOutput
+            # could provide a more precise 'file_type_processed'.
+            determined_final_source_type = initial_source_type_for_routing # Or a more specific type from FileAcquisitionService if available
             file_acq_input = FileAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier,
                 source_content_type=orchestrator_input.source_type, # Assuming source_type maps correctly
@@ -166,6 +176,7 @@ class ParallelOrchestrator(BaseService):
              acquisition_service_output_data.pdf_content_bytes:
             
             print(f"Orchestrator: PDF content detected from URL {acquisition_service_output_data.final_url}. Redirecting to PDFAcquisitionService.")
+            determined_final_source_type = 'pdf' # MODIFIED: Crucial update for PDF redirect
             # Original URL/final URL from web acquisition becomes the identifier for PDF processing
             pdf_identifier = acquisition_service_output_data.final_url or orchestrator_input.source_identifier
 
@@ -199,7 +210,7 @@ class ParallelOrchestrator(BaseService):
                     acquisition_service_output_data, 
                     job_id, 
                     pdf_identifier, # Use the URL as the source identifier for GCS path
-                    'pdf' # Source type is now effectively PDF
+                    determined_final_source_type # MODIFIED: Use the updated type
                 )
                 final_status_code = "success" # Tentative success after PDF redirect and processing
 
@@ -210,14 +221,18 @@ class ParallelOrchestrator(BaseService):
             extracted_text = getattr(acquisition_service_output_data, 'extracted_text', None)
             
             # Determine source_type for GCS path based on the service that successfully ran
-            source_type_for_gcs = initial_source_type_for_routing
+            # AND update determined_final_source_type for the OrchestrationOutput
+            source_type_for_gcs = initial_source_type_for_routing # Default
             if isinstance(acquisition_service_output_data, PDFAcquisitionServiceOutput):
                 source_type_for_gcs = 'pdf'
+                determined_final_source_type = 'pdf'
             elif isinstance(acquisition_service_output_data, FileAcquisitionServiceOutput):
                 # Assuming FileAcquisitionServiceOutput might have a more specific file_type if available
                 source_type_for_gcs = getattr(acquisition_service_output_data, 'file_type', initial_source_type_for_routing)
+                determined_final_source_type = source_type_for_gcs # Update with potentially more specific type
             elif isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput):
                 source_type_for_gcs = 'url' # Web content is type 'url' for GCS path
+                determined_final_source_type = 'url'
 
             raw_images_for_processing = self._map_to_raw_image_input(
                 acquisition_service_output_data, 
@@ -241,7 +256,9 @@ class ParallelOrchestrator(BaseService):
         # If acquisition failed or resulted in a state that stops processing
         if final_status_code.startswith("failure") or final_status_code == "unsupported_type":
             if extracted_text and not final_content_blocks : final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url)
+            # Use determined_final_source_type, defaulting to initial if somehow not set
+            output_source_type = determined_final_source_type if determined_final_source_type else initial_source_type_for_routing
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, output_source_type) # MODIFIED
             if final_status_code.startswith("failure"):
                 return ServiceResult.failure(error_message=error_message or "Orchestration failed at acquisition.", error_details=output_obj.model_dump())
             return ServiceResult.success(data=output_obj) # e.g. for unsupported_type or pdf_unhandled
@@ -255,16 +272,26 @@ class ParallelOrchestrator(BaseService):
             image_processing_result: ServiceResult[List[ProcessedImageData]] = await image_processing_task
             
             if image_processing_result.status == 'error' or not image_processing_result.data:
-                error_message = (error_message or "") + f"; Image processing service failed: {image_processing_result.error_message}"
-                final_status_code = "failure_image_processing" if final_status_code == "success" else "partial_success"
-            else:
-                processed_images_from_service = image_processing_result.data
-                for img_data in processed_images_from_service:
-                    processed_images_data_dict[img_data.original_source_identifier] = img_data
-                if image_processing_result.error_message: 
-                     error_message = (error_message or "") + f"; Image processing issue: {image_processing_result.error_message}"
-                     if final_status_code == "success": final_status_code = "partial_success"
+                error_message_img = f"ImageProcessingService failed: {image_processing_result.error_message}"
+                print(f"Orchestrator: {error_message_img}") # Log this error
+                if not error_message: error_message = error_message_img # Store if no primary error yet
+                # Consider if this should change final_status_code to "partial_success" or similar
             
+            if image_processing_result.data:
+                processed_images_data_dict = {
+                    img_data.original_source_identifier: ProcessedImageData(
+                        original_source_identifier=img_data.original_source_identifier,
+                        gcs_url=img_data.gcs_url,
+                        alt_text=img_data.alt_text,
+                        caption=img_data.caption,
+                        llm_description=img_data.llm_description
+                        # Map other fields as necessary
+                    ) for img_data in image_processing_result.data
+                }
+                print(f"Orchestrator.process: Successfully processed {len(processed_images_data_dict)} images according to ImageProcessingService.") # DEBUG PRINT
+            else:
+                print("Orchestrator.process: No data returned from ImageProcessingService or it failed.") # DEBUG PRINT
+
             # Debug: Check extracted_text before passing to content structuring
             print(f"ParallelOrchestrator: Text length before structuring: {len(extracted_text) if extracted_text else 0}")
             if extracted_text:
@@ -278,8 +305,10 @@ class ParallelOrchestrator(BaseService):
             content_structuring_result: ServiceResult[List[ContentBlock]] = await self.content_structuring_service.execute(content_structuring_service_input)
 
             if content_structuring_result.status == 'error' or not content_structuring_result.data:
-                error_message = (error_message or "") + f"; Content structuring service failed: {content_structuring_result.error_message}"
-                final_status_code = "failure_structuring" if final_status_code == "success" else "partial_success"
+                error_message_struct = f"ContentStructuringService failed: {content_structuring_result.error_message}"
+                print(f"Orchestrator: {error_message_struct}")
+                if not error_message: error_message = error_message_struct
+                final_status_code = "failure_structuring"
                 if not final_content_blocks and extracted_text: # Keep raw text if structuring fails
                     final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
             else:
@@ -289,7 +318,9 @@ class ParallelOrchestrator(BaseService):
 
 
         except Exception as e_processing_phase: # Should not happen if services handle their exceptions
-            error_message = (error_message or "") + f"; Critical error during processing phase: {str(e_processing_phase)}"
+            error_message_struct = f"Critical error during processing phase: {str(e_processing_phase)}"
+            print(f"Orchestrator: {error_message_struct}")
+            if not error_message: error_message = error_message_struct
             final_status_code = "failure_processing_critical"
             if not final_content_blocks and extracted_text: final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
 
@@ -305,13 +336,22 @@ class ParallelOrchestrator(BaseService):
 
 
         # 4. Aggregate Output & Finalize
+        # Ensure determined_final_source_type has a value. Fallback to initial_source_type_for_routing if it's somehow None.
+        output_source_type = determined_final_source_type if determined_final_source_type else initial_source_type_for_routing
+        if not output_source_type: # Absolute fallback if initial routing type was also None (should not happen with current logic)
+            print("Orchestrator WARNING: output_source_type is None before calling _prepare_final_output. Defaulting to 'unknown'.")
+            output_source_type = "unknown"
+
         final_output_obj = self._prepare_final_output(
             orchestrator_input, final_status_code, page_title, final_content_blocks, 
-            processed_images_data_dict, error_message, final_url
+            processed_images_data_dict, error_message, final_url, output_source_type # MODIFIED: Pass the determined type
         )
 
+        end_time = time.time()
+        print(f"Orchestrator processing time: {end_time - start_time:.2f} seconds. Final status: {final_status_code}")
+
         if final_status_code.startswith("failure"):
-            return ServiceResult.failure(error_message=error_message or "Orchestration completed with errors.", error_details=final_output_obj.model_dump())
+            return ServiceResult.failure(error_message=error_message or "Orchestration failed.", error_details=final_output_obj.model_dump())
         
         return ServiceResult.success(data=final_output_obj)
     
@@ -322,18 +362,28 @@ class ParallelOrchestrator(BaseService):
                               blocks: List[ContentBlock],
                               images_data: Dict[str, ProcessedImageData],
                               err_msg: Optional[str],
-                              final_url_val: Optional[str]) -> OrchestrationOutput:
+                              final_url_val: Optional[str],
+                              actual_source_type: Optional[str]) -> OrchestrationOutput: # MODIFIED: Add actual_source_type
+        """
+        Helper method to construct the OrchestrationOutput object.
+        """
+        # Ensure actual_source_type has a fallback if it's None, though it should be set by `process`
+        # The OrchestrationOutput model requires a string for source_type.
+        final_source_type_for_output = actual_source_type or inp.source_type or "unknown"
+        if not actual_source_type and inp.source_type is None:
+             print(f"Orchestrator._prepare_final_output WARNING: actual_source_type and inp.source_type are None. Using '{final_source_type_for_output}'. Input source: {inp.source_identifier}")
+
+
         return OrchestrationOutput(
             status_code=status,
-            source_identifier=inp.source_identifier,
-            source_type=inp.source_type,
+            source_identifier=final_url_val or inp.source_identifier, 
+            source_type=final_source_type_for_output, # MODIFIED: Use the passed or determined type
             processing_level_used=inp.processing_level,
             extracted_title=title,
-            # is_long_article: bool = False, # To be determined by content structuring perhaps
-            original_content_blocks=blocks, # Use the structured blocks
+            is_long_article=False, # Placeholder, determine actual value if needed
+            original_content_blocks=blocks,
             processed_images_data=images_data,
-            error_message=err_msg,
-            # final_url=final_url_val # Not in OrchestrationOutput V2.4 schema directly
+            error_message=err_msg
         )
 
     async def execute(self, *args: Any, **kwargs: Any) -> ServiceResult[Any]:

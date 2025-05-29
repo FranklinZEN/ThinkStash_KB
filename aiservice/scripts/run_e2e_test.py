@@ -1,25 +1,25 @@
 import sys
 import os
 import json
-import uuid
+
+# Add the workspace root to sys.path
+# Assumes the script is in aiservice/scripts/ and workspace root is two levels up
+WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if WORKSPACE_ROOT not in sys.path:
+    sys.path.insert(0, WORKSPACE_ROOT)
+
 import asyncio
 import time
-
-# Determine the aiservice package root and the overall project workspace root
-AISERVICE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-PROJECT_WORKSPACE_ROOT = os.path.abspath(os.path.join(AISERVICE_ROOT, '..'))
-
-if PROJECT_WORKSPACE_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_WORKSPACE_ROOT) # For `import aiservice`
+import os # For potential path manipulation if needed for test files
 
 # Import the actual settings
 from aiservice.app.config.settings import settings
 
 # Orchestrator and its input
-from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput
+from aiservice.app.models.orchestration_models import OrchestrationInput
 from aiservice.app.services.orchestrator import ParallelOrchestrator
 
-# Services
+# Services (import all that ParallelOrchestrator needs)
 from aiservice.app.services.routing_service import RoutingService
 from aiservice.app.services.acquisition.web_service import WebAcquisitionService
 from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService
@@ -27,40 +27,65 @@ from aiservice.app.services.acquisition.file_service import FileAcquisitionServi
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
 
-# Tools and Crew
-from aiservice.app.tools.llm_tools import ImageAnalysisLLMTool
-from aiservice.app.crews.minimal_crew import MinimalLLMCrew
+# Tools (import tools that services need)
+from aiservice.app.tools.llm_tools import ImageAnalysisLLMTool, ContentStructuringLLMHelper
+from aiservice.app.crews.minimal_crew import MinimalLLMCrew # Import the crew
+from langchain_openai import ChatOpenAI # Ensure this is imported
 
-# ========= Test Configuration Constants =========
-URL_MEDIUM_ARTICLE = "https://medium.com/walmartglobaltech/single-ai-view-of-customer-a-retailers-guide-to-know-your-customer-better-using-customer-6b588ff336bd"
-URL_DIRECT_PDF = "chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://www.pwc.com/th/en/press-room/industry-newsletters/market-matters-newsletters/issue-3.pdf"
+# --- Test Configuration ---
+# Reverted to a hardcoded URL for now to avoid AttributeError
+TEST_SOURCE_IDENTIFIER="E:\ThinkStash\documentation\AI Agents Testing File\Embedding-Based Retrieval for Airbnb Search.pdf"
+# You can change this to your preferred test URL, e.g.:
+# TEST_SOURCE_IDENTIFIER = "https://cloud.google.com/blog/products/ai-machine-learning/build-multilingual-chatbots-with-gemini-gemma-and-mcp"
+# TEST_SOURCE_TYPE = "url" # Removed, as routing service will determine this
+TEST_PROCESSING_LEVEL = "full_content"
 
-# Base path for local test input files within aiservice directory
-LOCAL_TEST_FILES_DIR = os.path.join(AISERVICE_ROOT, "test_data", "e2e_input_files")
+# --- Mock Settings Object (as a simple class for now) ---
+# class MockSettings: # No longer needed, using actual settings
+#     def __init__(self):
+#         self.use_llm_for_image_analysis = False 
+#         self.gcs_bucket = "your-mock-gcs-bucket" 
 
-# Base path for test output JSON files within aiservice directory
-TEST_RESULTS_DIR = os.path.join(AISERVICE_ROOT, "test_data", "e2e_test_results")
+async def main():
+    print(f"Starting E2E test for: {TEST_SOURCE_IDENTIFIER} (Level: {TEST_PROCESSING_LEVEL})\n")
 
-async def run_single_test(input_identifier: str, test_name: str):
-    current_job_id = f"job_{test_name.lower().replace(' ', '_').replace('/', '_').replace(':','')}_{uuid.uuid4().hex[:4]}"
-    
-    print(f"\n--- Starting E2E test: {test_name} ---")
-    print(f"Input: {input_identifier}, Job: {current_job_id}")
+    # Ensure the setting for LLM image analysis is True for this test run
+    settings.use_llm_for_image_analysis = True 
+    print(f"E2E Test: Forcing use_llm_for_image_analysis = {settings.use_llm_for_image_analysis}")
+    if not settings.openai_api_key:
+        print("E2E Test: WARNING - OpenAI API key not set in settings, LLM calls will fail!")
 
-    if settings.use_llm_for_image_analysis:
-        print(f"E2E Test: use_llm_for_image_analysis is True (from settings)")
+    # Create a single LLM instance for the agent and tools if they accept it
+    shared_llm_instance = None
+    if settings.openai_api_key and settings.default_llm_model:
+        try:
+            shared_llm_instance = ChatOpenAI(
+                api_key=settings.openai_api_key,
+                model_name=settings.default_llm_model 
+            )
+            print(f"E2E Test: Initialized shared LLM instance with model")
+        except Exception as e:
+            print(f"E2E Test: Failed to initialize shared LLM: {e}. Some components might fail.")
     else:
-        print(f"E2E Test: use_llm_for_image_analysis is False (from settings)")
+        print("E2E Test: OpenAI API key or default_llm_model not in settings. Shared LLM not initialized.")
 
-    image_analysis_tool_instance = ImageAnalysisLLMTool()
+    # 1. Initialize Tools that are passed directly to services
+    # ImageAnalysisLLMTool will now attempt real calls if API key is present
+    image_analysis_tool = ImageAnalysisLLMTool() 
+
+    # 1.b Initialize Crew 
     minimal_llm_crew = MinimalLLMCrew()
+
+    # 2. Initialize Services (inject tools and settings)
     routing_service = RoutingService(settings=settings)
     web_acquisition_service = WebAcquisitionService(settings=settings)
-    pdf_acquisition_service = PDFAcquisitionService(image_analysis_llm_tool=image_analysis_tool_instance, settings=settings)
+    pdf_acquisition_service = PDFAcquisitionService(image_analysis_tool=image_analysis_tool, settings=settings)
     file_acquisition_service = FileAcquisitionService(settings=settings)
-    image_processing_service = ImageProcessingService(image_analysis_llm_tool=image_analysis_tool_instance, settings=settings)
-    content_structuring_service = ContentStructuringService(crew=minimal_llm_crew, settings=settings)
-    
+    # ImageProcessingService will use the updated ImageAnalysisLLMTool and settings.use_llm_for_image_analysis
+    image_processing_service = ImageProcessingService(image_analysis_tool=image_analysis_tool, settings=settings)
+    content_structuring_service = ContentStructuringService(minimal_llm_crew=minimal_llm_crew, settings=settings)
+
+    # 3. Initialize Orchestrator
     orchestrator = ParallelOrchestrator(
         routing_service=routing_service,
         web_acquisition_service=web_acquisition_service,
@@ -71,162 +96,73 @@ async def run_single_test(input_identifier: str, test_name: str):
         settings=settings
     )
 
+    # 4. Prepare Orchestration Input
+    # Generate a job_id for this specific test run
+    test_run_job_id = f"e2e_job_{os.urandom(4).hex()}"
+    print(f"E2E Test: Generated Job ID: {test_run_job_id}")
+
     orchestration_input = OrchestrationInput(
-        source_identifier=input_identifier,
-        job_id=current_job_id,
-        content_level="full_content",
-        source_type_hint=None 
+        source_identifier=TEST_SOURCE_IDENTIFIER,
+        # source_type=TEST_SOURCE_TYPE, # Omitted to allow routing service to determine it
+        processing_level=TEST_PROCESSING_LEVEL,
+        job_id=test_run_job_id,
+        user_id="e2e_test_user",
+        output_format_options=None # Assuming JSON output for this test
     )
+    print(f"E2E Test: OrchestrationInput prepared. source_type is intentionally None to test routing.")
 
-    start_time = time.perf_counter()
-    orchestration_output_obj: Optional[OrchestrationOutput] = None
-    service_result_status_for_file = "unknown_failure"
-    service_result_error_message = "No error message captured"
-    raw_service_result_error_details = None
-
-    try:
-        service_result = await orchestrator.process(orchestration_input)
-        service_result_error_message = service_result.error_message
-        raw_service_result_error_details = service_result.error_details
-
-        if service_result.data and isinstance(service_result.data, OrchestrationOutput):
-            orchestration_output_obj = service_result.data
-            service_result_status_for_file = orchestration_output_obj.status_code
-            if service_result.status != 'success':
-                 print(f"E2E Test ServiceResult (with data) indicates issue: {service_result.error_message}")
-        elif service_result.error_details and isinstance(service_result.error_details, OrchestrationOutput):
-            orchestration_output_obj = service_result.error_details
-            service_result_status_for_file = orchestration_output_obj.status_code
-            print(f"E2E Test ServiceResult Error (details as OrchestrationOutput): {service_result.error_message}")
-        elif service_result.error_details and isinstance(service_result.error_details, dict):
-            try:
-                orchestration_output_obj = OrchestrationOutput(**service_result.error_details)
-                service_result_status_for_file = orchestration_output_obj.status_code
-            except Exception as pydantic_err:
-                print(f"E2E Test: Could not cast error_details dict to OrchestrationOutput: {pydantic_err}")
-                service_result_status_for_file = service_result.status or "dict_cast_error"
-            print(f"E2E Test ServiceResult Error (details as dict): {service_result.error_message}")
-        else:
-            service_result_status_for_file = service_result.status or "error_no_output_data"
-            print(f"E2E Test ServiceResult Error: {service_result.error_message}. No detailed OrchestrationOutput.")
-
-    except Exception as e:
-        print(f"E2E Test CRITICAL ERROR during orchestrator.process for {test_name}: {e}")
-        import traceback
-        traceback.print_exc()
-        service_result_status_for_file = "critical_exception"
-        service_result_error_message = str(e)
-    
+    # 5. Run and Time the Orchestration
+    start_time = time.perf_counter() # More precise for timing short durations
+    service_result = await orchestrator.process(orchestration_input)
     end_time = time.perf_counter()
-    processing_time = end_time - start_time
+    duration_seconds = end_time - start_time
 
-    # Ensure TEST_RESULTS_DIR exists
-    os.makedirs(TEST_RESULTS_DIR, exist_ok=True)
+    # 6. Print Results
+    print(f"\n--- E2E Test Results ---")
+    print(f"Total Processing Time: {duration_seconds:.4f} seconds")
 
-    print(f"--- Results for: {test_name} ---")
-    safe_test_name = test_name.lower().replace(' ', '_').replace('/', '_').replace(':', '') \
-                                  .replace('(', '').replace(')', '').replace('.', '')
-
-    if orchestration_output_obj:
-        print(f"Total Processing Time: {processing_time:.4f} seconds")
-        print(f"Orchestration Status Code: {orchestration_output_obj.status_code}")
-        print(f"Source Identifier: {orchestration_output_obj.source_identifier}")
-        print(f"Extracted Title: {orchestration_output_obj.extracted_title}")
-        if orchestration_output_obj.error_message:
-            print(f"Message: {orchestration_output_obj.error_message}")
+    if service_result.data:
+        output_data = service_result.data
+        print(f"Orchestration Status Code: {output_data.status_code}")
+        print(f"Source Identifier: {output_data.source_identifier}")
+        print(f"Extracted Title: {output_data.extracted_title}")
         
-        output_filename = os.path.join(TEST_RESULTS_DIR, f"e2e_output_{safe_test_name}_{current_job_id}.json")
-        with open(output_filename, "w", encoding="utf-8") as f:
-            json.dump(orchestration_output_obj.model_dump(), f, indent=2, ensure_ascii=False)
-        print(f"Full output saved to: {output_filename}")
-    else:
-        print(f"E2E Test ERROR: OrchestrationOutput object was not created for {test_name} (status: {service_result_status_for_file}). Processing time: {processing_time:.4f}s.")
-        output_filename = os.path.join(TEST_RESULTS_DIR, f"e2e_error_{safe_test_name}_{current_job_id}.json")
-        error_info = {
-            "test_name": test_name,
-            "input_identifier": input_identifier,
-            "job_id": current_job_id,
-            "status_for_file": service_result_status_for_file,
-            "final_error_message_from_service_result": service_result_error_message,
-            "raw_error_details_from_service_result": raw_service_result_error_details,
-            "processing_time_seconds": processing_time
+        if output_data.error_message:
+            print(f"Orchestration Error Message: {output_data.error_message}")
+
+        print(f"\n--- Full Processed Images Data ({len(output_data.processed_images_data)} images) ---")
+        # Convert ProcessedImageData to dicts for json.dumps
+        images_data_as_dicts = {
+            img_id: data.model_dump() for img_id, data in output_data.processed_images_data.items()
         }
+        print(json.dumps(images_data_as_dicts, indent=2))
+
+        print(f"\n--- Full Original Content Blocks ({len(output_data.original_content_blocks)}) ---")
+        blocks_as_dicts = [block.model_dump() for block in output_data.original_content_blocks]
+        print(json.dumps(blocks_as_dicts, indent=2))
+
+        # Save to file for easier inspection
+        output_filename = "e2e_test_output.json"
         with open(output_filename, "w", encoding="utf-8") as f:
-            json.dump(error_info, f, indent=2, ensure_ascii=False)
-        print(f"Minimal error info saved to: {output_filename}")
+            full_output_dump = {
+                "service_result_status": service_result.status,
+                "orchestration_output": output_data.model_dump(),
+                "processing_duration_seconds": duration_seconds
+            }
+            json.dump(full_output_dump, f, indent=2)
+        print(f"\nFull OrchestrationOutput (including any errors) saved to: {output_filename}")
 
-    print(f"--- Finished E2E test: {test_name} ---")
-
-async def main():
-    # Create base directory for local test files if it doesn't exist
-    if not os.path.exists(LOCAL_TEST_FILES_DIR):
-        try:
-            os.makedirs(LOCAL_TEST_FILES_DIR)
-            print(f"Created directory for local test files: {LOCAL_TEST_FILES_DIR}")
-        except OSError as e:
-            print(f"Error creating directory {LOCAL_TEST_FILES_DIR}: {e}. Please ensure the base path is writable or create it manually.")
-            return
-    
-    # Define local file paths using LOCAL_TEST_FILES_DIR
-    file_pdf_path = os.path.join(LOCAL_TEST_FILES_DIR, "Embedding-Based Retrieval for Airbnb Search.pdf")
-    file_docx_path = os.path.join(LOCAL_TEST_FILES_DIR, "Fulfillment Planning Deep Research Paper.docx")
-    file_md_path = os.path.join(LOCAL_TEST_FILES_DIR, "Product Requirement Document - Knowledge Card System v3.8.md")
-    file_txt_path = os.path.join(LOCAL_TEST_FILES_DIR, "plain_text_example.txt") 
-    file_csv_unknown_path = os.path.join(LOCAL_TEST_FILES_DIR, "sample_data.csv") 
-    file_py_unknown_path = os.path.join(LOCAL_TEST_FILES_DIR, "some_python_code.py")
-    file_zip_binary_path = os.path.join(LOCAL_TEST_FILES_DIR, "small_archive.zip") 
-    file_no_ext_path = os.path.join(LOCAL_TEST_FILES_DIR, "filewithnoextension")
-
-    test_files_to_create = {
-        file_txt_path: "This is a simple plain text file for testing file acquisition.\nIt has a few lines.",
-        file_csv_unknown_path: "header1,header2\ndata1,data2\ndata3,data4",
-        file_py_unknown_path: "# This is a python file\nprint(\"Hello world\")\ndef some_func():\n  pass",
-        file_no_ext_path: "This is a file with no extension."
-    }
-    for file_path, content in test_files_to_create.items():
-        if not os.path.exists(file_path):
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                print(f"Created dummy file: {file_path}")
-            except IOError as e:
-                print(f"Error creating dummy file {file_path}: {e}. Check permissions and path.")
-    
-    if not os.path.exists(file_zip_binary_path):
-        import zipfile
-        try:
-            with zipfile.ZipFile(file_zip_binary_path, 'w') as zf:
-                zf.writestr("dummy.txt", "dummy content")
-            print(f"Created dummy file: {file_zip_binary_path}")
-        except IOError as e:
-            print(f"Error creating dummy zip file {file_zip_binary_path}: {e}. Check permissions and path.")
-
-    test_cases = [
-        {"name": "URL Medium Article", "input": URL_MEDIUM_ARTICLE},
-        {"name": "URL Direct PDF", "input": URL_DIRECT_PDF},
-        {"name": "Local PDF File", "input": file_pdf_path},
-        {"name": "Local DOCX File", "input": file_docx_path},
-        {"name": "Local MD File", "input": file_md_path},
-        {"name": "Local TXT File", "input": file_txt_path},
-        {"name": "Local CSV (Unknown Ext)", "input": file_csv_unknown_path},
-        {"name": "Local PY (Unknown Ext)", "input": file_py_unknown_path},
-        {"name": "Local ZIP (Binary Unknown Ext)", "input": file_zip_binary_path},
-        {"name": "Local File No Extension", "input": file_no_ext_path},
-    ]
-
-    runnable_test_cases = []
-    for tc in test_cases:
-        if tc["input"].startswith("http://") or tc["input"].startswith("https://"):
-            runnable_test_cases.append(tc)
-        elif os.path.exists(tc["input"]):
-            runnable_test_cases.append(tc)
-        else:
-            print(f"Skipping test '{tc['name']}' because input file not found: {tc['input']}")
-
-    for test_case in runnable_test_cases:
-        await run_single_test(test_case["input"], test_case["name"])
-        print("-----------------------------------------------------")
-        await asyncio.sleep(1)
+    else: # ServiceResult status is 'error'
+        print(f"Orchestration Failed (ServiceResult status: {service_result.status}).")
+        print(f"Error Message: {service_result.error_message}")
+        if service_result.error_details:
+            print(f"Error Details (JSON):\n{json.dumps(service_result.error_details, indent=2)}")
+            output_filename = "e2e_test_error_output.json"
+            with open(output_filename, "w", encoding="utf-8") as f:
+                 json.dump(service_result.error_details, f, indent=2)
+            print(f"Error details saved to: {output_filename}")
 
 if __name__ == "__main__":
+    # Ensure you have a test file at the specified path if testing local files.
+    # For URL tests, ensure the URL is accessible.
     asyncio.run(main()) 

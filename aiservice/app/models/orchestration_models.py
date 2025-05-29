@@ -2,9 +2,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
 class OrchestrationInput(BaseModel):
-    source_type: str = Field(..., examples=["url", "pdf", "docx", "txt", "md"])
     source_identifier: str = Field(..., description="URL or filepath")
+    source_type: Optional[str] = Field(default=None, examples=["url", "pdf", "docx", "txt", "md"])
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"])
+    job_id: Optional[str] = Field(default=None, description="Unique job identifier")
+    user_id: Optional[str] = Field(default=None, description="User identifier")
+    output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
 
 class ContentBlock(BaseModel):
     # This is a generic content block, actual structure might vary slightly

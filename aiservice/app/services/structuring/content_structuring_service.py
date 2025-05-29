@@ -59,6 +59,7 @@ class ContentStructuringService(BaseService):
     async def execute(self, service_input: ContentStructuringServiceInput) -> ServiceResult[List[ContentBlock]]:
         start_time = time.time()
         final_content_blocks: List[ContentBlock] = []
+        crew_output_blocks: List[StructuredContentBlock] = [] # Initialize consistently
 
         if not service_input.raw_text_content and not service_input.processed_images:
             return ServiceResult.success(data=[]) # Nothing to structure
@@ -92,14 +93,39 @@ class ContentStructuringService(BaseService):
             print(f"ContentStructuringService: RAW CREW RUN OUTPUT Type: {type(raw_crew_run_output_for_log)}")
             print(f"ContentStructuringService: RAW CREW RUN OUTPUT Content: {raw_crew_run_output_for_log!r}")
 
-            # Now, assume/check if it's the expected List[StructuredContentBlock]
-            # The run method of MinimalLLMCrew is now designed to always return a list (empty on error)
+            # Enhanced handling of crew output
             if isinstance(raw_crew_run_output_for_log, list):
-                crew_output_blocks: List[StructuredContentBlock] = raw_crew_run_output_for_log
+                # Assuming list elements are compatible or will be validated by StructuredContentBlock constructor if directly assigned
+                # For safety, one might iterate and validate each item if type hints from crew.run() are not strict enough.
+                # For now, direct assignment if list, with mapping occurring later.
+                # We also need to ensure these are StructuredContentBlock, not just any dict.
+                # MinimalLLMCrew.run is now typed to return List[StructuredContentBlock]
+                crew_output_blocks = raw_crew_run_output_for_log
+            elif isinstance(raw_crew_run_output_for_log, str):
+                try:
+                    parsed_json = json.loads(raw_crew_run_output_for_log)
+                    if isinstance(parsed_json, list):
+                        # Now we need to convert list of dicts to list of StructuredContentBlock
+                        temp_blocks = []
+                        for item_dict in parsed_json:
+                            if isinstance(item_dict, dict):
+                                try:
+                                    temp_blocks.append(StructuredContentBlock(**item_dict))
+                                except Exception as e_model_val:
+                                    print(f"ContentStructuringService: WARNING - Failed to validate item as StructuredContentBlock from parsed JSON string: {item_dict}. Error: {e_model_val}. Skipping item.")
+                            else:
+                                print(f"ContentStructuringService: WARNING - Item in parsed JSON list is not a dict: {item_dict}. Skipping item.")
+                        crew_output_blocks = temp_blocks
+                        print(f"ContentStructuringService: Crew output parsed from JSON string. Got {len(crew_output_blocks)} blocks.")
+                    else:
+                        print(f"ContentStructuringService: WARNING - Crew output was a string, parsed to JSON, but the result was not a list. Type: {type(parsed_json)}. Falling back to empty list.")
+                        crew_output_blocks = []
+                except json.JSONDecodeError as e_json_decode:
+                    print(f"ContentStructuringService: WARNING - Crew output was a string but failed to parse as JSON: {e_json_decode}. Falling back to empty list.")
+                    crew_output_blocks = []
             else:
-                # This case should ideally not be hit if MinimalLLMCrew.run adheres to its return type
-                print(f"ContentStructuringService: WARNING - Output from MinimalLLMCrew.run was not a list as expected. Got: {type(raw_crew_run_output_for_log)}. Falling back to empty list.")
-                crew_output_blocks: List[StructuredContentBlock] = []
+                print(f"ContentStructuringService: WARNING - Output from MinimalLLMCrew.run was not a list or parsable JSON string. Got: {type(raw_crew_run_output_for_log)}. Falling back to empty list.")
+                crew_output_blocks = []
 
         except Exception as e_crew_run: # Catch exceptions from running the crew itself
             fallback_content = service_input.raw_text_content or "Error during content structuring crew execution."
@@ -111,12 +137,12 @@ class ContentStructuringService(BaseService):
             )
 
         if not crew_output_blocks:
-            log_message = "Content structuring crew returned no blocks."
+            log_message = "Content structuring crew returned no valid blocks."
             if service_input.raw_text_content:
                 final_content_blocks.append(ContentBlock(type="text", content=service_input.raw_text_content))
-                print(f"ContentStructuringService: WARNING - {log_message} Using raw text as fallback.")
+                print(f"ContentStructuringService: INFO - {log_message} Using raw text as fallback.") # Changed from WARNING to INFO
             else: 
-                log_message = "Content structuring crew returned no blocks and no initial text was provided."
+                log_message = "Content structuring crew returned no valid blocks and no initial text was provided."
                 final_content_blocks.append(ContentBlock(type="text", content=f"[{log_message}]"))
                 print(f"ContentStructuringService: INFO - {log_message}")
             # If returning an empty list is acceptable for "no content", this is success.

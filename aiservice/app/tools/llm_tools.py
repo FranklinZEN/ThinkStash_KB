@@ -140,7 +140,7 @@ class ImageAnalysisLLMTool: # Not inheriting from Langchain BaseTool for this di
             response = self.openai_vision_client.chat.completions.create(
                 model=self.vision_model_name, # Use the determined model name
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_messages_content}],
-                max_tokens=1024, # Increased max_tokens from 450 to 1024
+                max_tokens=2048, # Increased max_tokens from 1024 to 2048
                 response_format={"type": "json_object"})
             
             if not response.choices or not response.choices[0].message or response.choices[0].message.content is None:
@@ -276,42 +276,66 @@ class ContentStructuringLLMHelper:
         try:
             print(f"ContentStructuringLLMHelper: Calling OpenAI LLM ({self.llm_instance.model_name}) for direct structuring...")
             response = self.llm_instance.invoke(messages, tools=[llm_tool_schema_for_call], tool_choice={"type": "function", "function": {"name": "format_content_blocks"}})
+            print(f"ContentStructuringLLMHelper: DEBUG - Full LLM Response object: {response!r}") # DEBUG
+
+            tool_args_dict = None
+            function_name = None
+
+            # Attempt to get tool calls from additional_kwargs first, as it seems more reliable from logs
+            potential_tool_calls = None
+            if hasattr(response, 'additional_kwargs') and isinstance(response.additional_kwargs, dict):
+                potential_tool_calls = response.additional_kwargs.get('tool_calls')
             
-            if hasattr(response, 'tool_calls') and response.tool_calls and isinstance(response.tool_calls, list) and len(response.tool_calls) > 0:
-                first_tool_call = response.tool_calls[0]
-                tool_args_dict = None
-                function_name = None
-                tool_args_str = None # Initialize tool_args_str to None here
+            if not potential_tool_calls and hasattr(response, 'tool_calls'): # Fallback to response.tool_calls
+                potential_tool_calls = response.tool_calls
 
-                # Langchain with OpenAI client might return a dict-like or object-like structure for tool_calls
-                # when using Gemini compatibility, it seems to be a dict.
-                if isinstance(first_tool_call, dict):
-                    # Assuming the structure is {'id': '...', 'type': 'function', 'function': {'name': '...', 'arguments': '...'}}
-                    function_call_details = first_tool_call.get('function')
-                    if isinstance(function_call_details, dict):
-                        function_name = function_call_details.get('name')
-                        tool_args_str = function_call_details.get('arguments')
-                elif hasattr(first_tool_call, 'name') and hasattr(first_tool_call, 'args'): # More OpenAI-like structure
-                    function_name = first_tool_call.name
-                    tool_args_str = first_tool_call.args
-                # Removed the bare else that only had a comment, ensure tool_args_str remains None if no other condition met.
-                # else:
-                    # Fallback or unknown structure - tool_args_str remains None as initialized
-                    # if hasattr(first_tool_call, 'args'): # Attempt to get args if possible
-                         # tool_args_str = first_tool_call.args # This was problematic as it could leave function_name as None
+            print(f"ContentStructuringLLMHelper: DEBUG - Potential tool_calls from LLM response (type {type(potential_tool_calls)}): {potential_tool_calls!r}")
 
-                if isinstance(tool_args_str, str):
-                    try: tool_args_dict = json.loads(tool_args_str)
-                    except json.JSONDecodeError: 
-                        print(f"ContentStructuringLLMHelper: WARNING - Failed to JSON decode tool_args_str: {tool_args_str[:500]}...")
-                        pass # Keep tool_args_dict as None
-                elif isinstance(tool_args_str, dict):
-                    tool_args_dict = tool_args_str
+            if isinstance(potential_tool_calls, list) and len(potential_tool_calls) > 0:
+                # Iterate through tool calls to find the first valid format_content_blocks
+                for tool_call_item in potential_tool_calls:
+                    print(f"ContentStructuringLLMHelper: DEBUG - Processing tool_call_item: {tool_call_item!r}")
+                    current_tool_args_str = None
+                    current_function_name = None
 
-                if tool_args_dict and function_name == "format_content_blocks":
-                    validated_output = ContentStructuringOutput(**tool_args_dict)
-                    print(f"ContentStructuringLLMHelper: OpenAI LLM function call successful, {len(validated_output.blocks)} blocks structured.")
-                    return validated_output.model_dump()
+                    if isinstance(tool_call_item, dict):
+                        # This is the structure seen in additional_kwargs: {'id': '', 'function': {'arguments': '...', 'name': '...'}, 'type': 'function'}
+                        function_call_details = tool_call_item.get('function')
+                        if isinstance(function_call_details, dict):
+                            current_function_name = function_call_details.get('name')
+                            current_tool_args_str = function_call_details.get('arguments')
+                            print(f"ContentStructuringLLMHelper: DEBUG - Extracted from tool_call_item (dict path): function_name='{current_function_name}', args_str_type={type(current_tool_args_str)}")
+                    
+                    # Fallback if not the dict structure above, try attribute access (less likely for additional_kwargs)
+                    elif hasattr(tool_call_item, 'name') and hasattr(tool_call_item, 'args'):
+                        current_function_name = tool_call_item.name
+                        current_tool_args_str = tool_call_item.args # This might be a dict or str
+                        print(f"ContentStructuringLLMHelper: DEBUG - Extracted from tool_call_item (attr path): function_name='{current_function_name}', args_type={type(current_tool_args_str)}")
+
+                    if current_function_name == "format_content_blocks" and current_tool_args_str:
+                        temp_tool_args_dict = None
+                        if isinstance(current_tool_args_str, str):
+                            try: 
+                                temp_tool_args_dict = json.loads(current_tool_args_str)
+                                print(f"ContentStructuringLLMHelper: DEBUG - Successfully parsed current_tool_args_str to dict for '{current_function_name}'.")
+                            except json.JSONDecodeError as e_json:
+                                print(f"ContentStructuringLLMHelper: WARNING - Failed to JSON decode current_tool_args_str for '{current_function_name}': {current_tool_args_str[:200]}... Error: {e_json}")
+                                continue # Try next tool call if parsing fails
+                        elif isinstance(current_tool_args_str, dict):
+                            temp_tool_args_dict = current_tool_args_str
+                            print(f"ContentStructuringLLMHelper: DEBUG - current_tool_args was already a dict for '{current_function_name}'.")
+                        
+                        if temp_tool_args_dict: # If we successfully got a dictionary
+                            function_name = current_function_name
+                            tool_args_dict = temp_tool_args_dict
+                            print(f"ContentStructuringLLMHelper: DEBUG - Successfully processed tool call for function: {function_name}")
+                            break # Found and processed the first valid format_content_blocks call
+            
+            print(f"ContentStructuringLLMHelper: DEBUG - Final check after loop: function_name='{function_name}', tool_args_dict is None: {tool_args_dict is None}")
+            if tool_args_dict and function_name == "format_content_blocks":
+                validated_output = ContentStructuringOutput(**tool_args_dict)
+                print(f"ContentStructuringLLMHelper: OpenAI LLM function call successful, {len(validated_output.blocks)} blocks structured.")
+                return validated_output.model_dump()
             
             error_msg = "OpenAI LLM did not use 'format_content_blocks' as expected or parsing failed."
             print(f"ContentStructuringLLMHelper: {error_msg} Full Response: {response!r}")
