@@ -181,11 +181,12 @@ class PDFAcquisitionService(BaseService):
                 for block_to_refine in page_specific_prelim_blocks:
                     if block_to_refine.type == "text":
                         lines = block_to_refine.text_content.split('\\n') 
+                        current_refined_parts = [] # Temporary list for parts of this block
                         non_list_text_parts = []
-                        # Restoring full regex with reordered alternatives
                         list_marker_pattern = re.compile(r"^(\s*(?:[a-zA-Z][.)]|[*•\-]|\d+[.)])\s+)")
                         is_ordered_list_type = False
                         block_had_list_items = False
+
                         for line_idx, line_text in enumerate(lines):
                             match = list_marker_pattern.match(line_text)
                             if match:
@@ -195,19 +196,22 @@ class PDFAcquisitionService(BaseService):
                                 if not item_text: 
                                     non_list_text_parts.append(line_text)
                                     continue
+                                
                                 is_ordered_list_type = False 
                                 if marker[-1] == '.' or marker[-1] == ')':
                                     marker_content = marker[:-1].strip()
                                     if marker_content.isdigit() or (len(marker_content) == 1 and marker_content.isalpha()):
                                         is_ordered_list_type = True
+                                
                                 if non_list_text_parts: 
-                                    refined_page_blocks.append(PreliminaryBlock(
+                                    current_refined_parts.append(PreliminaryBlock(
                                         block_id=f"{block_to_refine.block_id}_txt_pre_li{line_idx}", type="text",
                                         text_content="\n".join(non_list_text_parts).strip(),
                                         page_number=block_to_refine.page_number, bbox=block_to_refine.bbox, order=-1
                                     ))
                                     non_list_text_parts = []
-                                refined_page_blocks.append(PreliminaryBlock(
+                                
+                                current_refined_parts.append(PreliminaryBlock(
                                     block_id=f"{block_to_refine.block_id}_li{line_idx}", type="list_item",
                                     text_content=item_text, page_number=block_to_refine.page_number, bbox=block_to_refine.bbox, order=-1,
                                     list_item_data=item_text, list_level=0, list_ordered=is_ordered_list_type
@@ -215,19 +219,20 @@ class PDFAcquisitionService(BaseService):
                             else:
                                 non_list_text_parts.append(line_text)
                         
-                        # After processing all lines in the block_to_refine:
-                        if non_list_text_parts: # Any remaining text after the last list item or if no list items
-                            refined_page_blocks.append(PreliminaryBlock(
-                                block_id=f"{block_to_refine.block_id}_txt_post_li", type="text",
-                                text_content="\n".join(non_list_text_parts).strip(),
-                                page_number=block_to_refine.page_number, bbox=block_to_refine.bbox, order=-1
-                            ))
-                        
-                        # If the block_to_refine had no list items at all, it means its original form is what we want.
-                        # If it did have list items, its content has been broken down into list_items and potentially txt_pre/post_li parts.
-                        # So, only add the original block_to_refine if it wasn't processed for lists.
-                        if not block_had_list_items:
-                             refined_page_blocks.append(block_to_refine)
+                        if block_had_list_items:
+                            if non_list_text_parts: # Any remaining text after the last list item
+                                current_refined_parts.append(PreliminaryBlock(
+                                    block_id=f"{block_to_refine.block_id}_txt_post_li", type="text",
+                                    text_content="\n".join(non_list_text_parts).strip(),
+                                    page_number=block_to_refine.page_number, bbox=block_to_refine.bbox, order=-1
+                                ))
+                            refined_page_blocks.extend(current_refined_parts) # Add all processed parts
+                        else:
+                            # If no list items were found, add the original block as is.
+                            # The non_list_text_parts would contain the entire block's content if no lists were found,
+                            # but we prefer adding the original block_to_refine to preserve its original ID and any other attributes.
+                            refined_page_blocks.append(block_to_refine)
+                            
                     else: # If block_to_refine is not of type "text" (e.g., already a heading), add it as is.
                         refined_page_blocks.append(block_to_refine)
                 preliminary_blocks.extend(refined_page_blocks) # Add processed blocks for this page to the main list

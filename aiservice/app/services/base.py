@@ -18,6 +18,10 @@ class ServiceResult(BaseModel, Generic[T]):
     def failure(cls, error_message: str, error_details: Optional[Any] = None) -> 'ServiceResult[T]':
         return cls(status='error', error_message=error_message, error_details=error_details)
 
+    def is_success(self) -> bool:
+        """Check if the service operation was successful."""
+        return self.status == 'success'
+
 class BaseService(ABC):
     """
     Abstract base class for all services in the Thinkstash AI Service.

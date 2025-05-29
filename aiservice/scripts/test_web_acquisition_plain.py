@@ -26,7 +26,31 @@ async def run_web_acquisition_test(url: str, job_id: str, processing_level: str 
 
     service_result: ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]] = await service.execute(service_input)
 
-    if service_result.success and service_result.data and len(service_result.data) == 3:
+    # --- DEBUG PRINTS START ---
+    # print(f"  DEBUG: Raw service_result object: {service_result!r}")
+    if service_result:
+        print(f"  DEBUG: service_result.success: {service_result.success}")
+        if service_result.data and isinstance(service_result.data, tuple) and len(service_result.data) == 3:
+            prelim_blocks, doc_meta, raw_imgs = service_result.data
+            print(f"  DEBUG: service_result.data: (")
+            print(f"    PreliminaryBlocks (count: {len(prelim_blocks) if prelim_blocks else 0}),")
+            print(f"    DocumentMetadata: {doc_meta!r},")
+            print(f"    RawImageInputs (count: {len(raw_imgs) if raw_imgs else 0}): [")
+            if raw_imgs:
+                for idx, img_input in enumerate(raw_imgs):
+                    print(f"      Image {idx}: id={img_input.image_id}, filename={img_input.original_filename}, image_bytes_present={'Yes' if img_input.image_bytes else 'No'}")
+            print(f"    ]")
+            print(f"  )")
+        else:
+            print(f"  DEBUG: service_result.data: {service_result.data!r}")
+        print(f"  DEBUG: service_result.error_message: {service_result.error_message}")
+        # print(f"  DEBUG: service_result.error_details: {service_result.error_details!r}") # Can be verbose
+    # --- DEBUG PRINTS END ---
+
+    actual_success_status = service_result.is_success()
+    print(f"  DEBUG: service_result.is_success() returned: {actual_success_status!r} (type: {type(actual_success_status)})")
+
+    if actual_success_status == True and service_result.data and len(service_result.data) == 3:
         preliminary_blocks, doc_metadata, raw_images = service_result.data
 
         print(f"  Status: Success")
@@ -90,7 +114,7 @@ async def run_web_acquisition_test(url: str, job_id: str, processing_level: str 
             print(f"      Caption: {img_input.caption}")
             # print(f"      GCS Path Components: job_id='{img_input.job_id_for_gcs_path}', source_type='{img_input.source_type_for_gcs_path}', original_source='{img_input.original_source_identifier_for_gcs_path}/{img_input.original_filename}'")
 
-    elif not service_result.success :
+    elif actual_success_status == False: # Explicitly check for False
         print(f"  Status: Failed")
         print(f"  Error Message: {service_result.error_message}")
         if service_result.error_details and isinstance(service_result.error_details, dict):
@@ -117,31 +141,10 @@ async def run_web_acquisition_test(url: str, job_id: str, processing_level: str 
 async def main():
     test_urls = [
 
-        
-        # --- PDF Test Cases ---
-        # Direct PDF link - should now be routed to PDFAcquisitionService
-        "https://arxiv.org/pdf/1501.05039", 
-        # Chrome extension URL embedding a fetchable PDF - tests normalization and routing
-        "chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://arxiv.org/pdf/2310.06825", # Another arxiv paper for variety
-        # Test a PDF that might have more complex structures (if available)
-        # "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", # Simple test PDF
-        # Invalid URL - should fail gracefully during normalization
-        "justsometextnoschemenodomain",
-        # Chrome extension URL that does NOT embed a fetchable http/https URL (e.g., local file viewer)
-        # This should fail as it's not directly fetchable. The service should identify it cannot be processed.
-        "chrome-extension://oemmndcbldboiebfnladdacbdfmadadm/file:///C:/Users/Test/Desktop/localfile.pdf",
-
-        # --- HTML Structure & Content Test Cases ---
-        # Test a page that is known to be paywalled
-        "https://www.wsj.com/articles/tariff-ruling-raises-uncertainty-and-costs-for-u-s-importers-3206d468?mod=business_lead_pos3", # Expect paywall detection
-        
-        # --- Robustness & Edge Cases ---
-        # A URL that should result in an error (e.g., non-existent domain, but with scheme)
-        "http://domainthatshouldnotexist123456789.com",
         # Medium article (check for paywall/content extraction)
-        "https://medium.com/@netflixtechblog/lessons-learnt-from-consolidating-ml-models-in-a-large-scale-recommendation-system-870c5ea5eb4a",
+        "https://arxiv.org/pdf/1501.05039",
         # Another Medium article - was malformed in previous list, now corrected
-        "https://medium.com/the-memoirist/confessions-of-a-sweatshop-inspector-5d400752c408"
+    
     ]
 
     for url in test_urls:
