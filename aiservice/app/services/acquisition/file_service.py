@@ -394,23 +394,23 @@ class FileAcquisitionService(BaseService):
 
         try:
             if file_type == "docx":
-                call_error_message = await self._process_docx(
-                    file_path, job_id, file_input.processing_level, file_type,
-                    document_metadata, preliminary_blocks, raw_images
-                )
+                    call_error_message = await self._process_docx(
+                        file_path, job_id, file_input.processing_level, file_type,
+                        document_metadata, preliminary_blocks, raw_images
+                    )
             elif file_type == "md":
-                call_error_message = await self._process_markdown(
-                    file_path, job_id, file_input.processing_level, file_type,
-                    document_metadata, preliminary_blocks, raw_images
-                )
+                    call_error_message = await self._process_markdown(
+                        file_path, job_id, file_input.processing_level, file_type,
+                        document_metadata, preliminary_blocks, raw_images
+                    )
             elif file_type == "txt":
-                call_error_message = await self._process_txt(
-                    file_path, job_id, document_metadata, preliminary_blocks
-                )
+                    call_error_message = await self._process_txt(
+                        file_path, job_id, document_metadata, preliminary_blocks
+                    )
             # Fallback for file_ext_... can be removed if RoutingService handles this better,
             # or adapted if truly needed here. For now, focusing on specified types.
             else:
-                call_error_message = f"Unsupported file type: {file_type}"
+                    call_error_message = f"Unsupported file type: {file_type}"
             
             if call_error_message: # If any _process method sets an error or unhandled type
                  return ServiceResult.failure(error_message=call_error_message)

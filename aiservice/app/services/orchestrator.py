@@ -1,19 +1,21 @@
 import asyncio
 import time
 import uuid
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, Any, Dict, List, Union, Tuple
+import sys
 
 from aiservice.app.config.settings import Settings # Import the specific Settings class
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, EnrichedImageMetadata
 # Remove the old WebAcquisitionInput import from models
 # from aiservice.app.models.web_acquisition_models import WebAcquisitionInput 
+from aiservice.app.models.pipeline_models import EnrichedImageMetadata, DocumentMetadata, PreliminaryBlock, RawImageInput
 from aiservice.app.services.base import BaseService, ServiceResult
-from aiservice.app.services.routing_service import RoutingService, RoutingInput, RoutingOutput
+from aiservice.app.services.routing_service import RoutingService, RoutingInput
 # Import the correct WebAcquisitionServiceInput from the service file
-from aiservice.app.services.acquisition.web_service import WebAcquisitionService, WebAcquisitionServiceOutput, ProcessedWebImage, WebAcquisitionServiceInput
-from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput, PDFAcquisitionServiceOutput, ProcessedPDFImage
-from aiservice.app.services.acquisition.file_service import FileAcquisitionService, FileAcquisitionServiceInput, FileAcquisitionServiceOutput, ProcessedFileImage
-from aiservice.app.services.processing.image_processing_service import ImageProcessingService, ImageProcessingServiceInput, RawImageInput
+from aiservice.app.services.acquisition.web_service import WebAcquisitionService, WebAcquisitionServiceInput
+from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput
+from aiservice.app.services.acquisition.file_service import FileAcquisitionService, FileAcquisitionServiceInput
+from aiservice.app.services.processing.image_processing_service import ImageProcessingService, ImageProcessingServiceInput
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService, ContentStructuringServiceInput
 
 # Placeholder for actual settings, data_store, and monitor when implemented
@@ -46,311 +48,184 @@ class ParallelOrchestrator(BaseService):
         # self.data_store = get_data_store(settings) # Pass settings if data_store needs it
         # self.monitor = PerformanceMonitor(settings) # Pass settings if monitor needs it
 
-    def _map_to_raw_image_input(self, acq_output: Any, job_id: str, source_identifier: str, source_type: str) -> List[RawImageInput]:
-        raw_image_inputs: List[RawImageInput] = []
-        images_from_acq: List[Union[ProcessedWebImage, ProcessedPDFImage, ProcessedFileImage]] = []
-
-        if isinstance(acq_output, WebAcquisitionServiceOutput):
-            images_from_acq = acq_output.images or []
-        elif isinstance(acq_output, PDFAcquisitionServiceOutput):
-            images_from_acq = acq_output.images or []
-        elif isinstance(acq_output, FileAcquisitionServiceOutput):
-            images_from_acq = acq_output.images or []
-
-        for img in images_from_acq:
-            img_bytes = getattr(img, 'image_bytes', None)
-            src_url = None
-            if isinstance(img, ProcessedWebImage):
-                src_url = str(img.image_url) if img.image_url else None # Ensure str if HttpUrl
-            else: # For ProcessedPDFImage, ProcessedFileImage
-                src_url = str(getattr(img, 'source_url', None)) if getattr(img, 'source_url', None) else None
-
-            raw_image_inputs.append(RawImageInput(
-                image_id=img.image_id,
-                image_bytes=img_bytes,
-                source_url=src_url, # Now expects Optional[str]
-                alt_text=getattr(img, 'alt_text', None),
-                caption=getattr(img, 'caption', None),
-                original_source_identifier_for_gcs_path=source_identifier, # Map source_identifier
-                source_type_for_gcs_path=source_type,
-                job_id_for_gcs_path=job_id,
-                # New fields for RawImageInput from pipeline_models
-                source_document_id=source_identifier, # Use the source_identifier from method args
-                original_filename=getattr(img, 'original_filename', getattr(img, 'filename', None)), # Try 'original_filename' then 'filename'
-                page_number=getattr(img, 'page_number', None),
-                bbox=getattr(img, 'bbox', None),
-                mime_type=getattr(img, 'mime_type', None)
-            ))
-        print(f"Orchestrator._map_to_raw_image_input: Mapped {len(raw_image_inputs)} images for ImageProcessingService.")
-        return raw_image_inputs
-
     # @monitor.track_operation() # Add when monitor is implemented
     async def process(self, orchestrator_input: OrchestrationInput) -> ServiceResult[OrchestrationOutput]:
         """
         Main processing method for the orchestrator.
         """
         start_time = time.time()
-        job_id = f"job_{uuid.uuid4().hex[:8]}" # Generate a unique job ID for this run
+        job_id = orchestrator_input.job_id or f"job_{uuid.uuid4().hex[:8]}"
 
-        extracted_text: Optional[str] = None
-        page_title: Optional[str] = orchestrator_input.source_identifier # Default to source_id
+        # Variables to hold data through the pipeline
+        preliminary_blocks: List[PreliminaryBlock] = []
+        document_metadata_obj: Optional[DocumentMetadata] = None
+        raw_images_from_acquisition: List[RawImageInput] = []
+        
+        enriched_images_list: List[EnrichedImageMetadata] = []
         processed_images_data_dict: Dict[str, EnrichedImageMetadata] = {}
         final_content_blocks: List[ContentBlock] = []
-        final_status_code = "failure_orchestration"
-        error_message: Optional[str] = None
-        final_url: Optional[str] = orchestrator_input.source_identifier
         
-        acquisition_service_output_data: Any = None # To hold data from the called acquisition service
-        raw_images_for_processing: List[RawImageInput] = []
-        determined_final_source_type: Optional[str] = None # ADDED: To store the actual source type
+        # final_status_code will be updated based on outcomes. Start with assumption of overall success until a failure.
+        # Let specific failure points set specific failure codes.
+        # If all main steps (acq, img, struct) complete, it's 'success'.
+        # If a non-critical step like image processing fails but others succeed, it will be a partial success.
+        final_status_code = "success" # Initialize to success, will be changed on any failure
+        error_message: Optional[str] = None
+        accumulated_warnings: List[str] = [] # To store non-critical error messages
+        
+        # Initial values from input or defaults
+        page_title: Optional[str] = orchestrator_input.source_identifier 
+        final_url: Optional[str] = orchestrator_input.source_identifier
+        determined_final_source_type: Optional[str] = orchestrator_input.source_type
 
         # 1. Routing
-        # Determine initial routing based on the primary identifier (URL or file path)
-        # The source_type in orchestrator_input can be a hint or None
         initial_source_type_for_routing = orchestrator_input.source_type or RoutingService.get_source_type(orchestrator_input.source_identifier)
-        determined_final_source_type = initial_source_type_for_routing # Initialize with routing input type
+        if not determined_final_source_type: # If not provided in input, use routed one initially
+            determined_final_source_type = initial_source_type_for_routing
         
         routing_input_obj = RoutingInput(
             source_identifier=orchestrator_input.source_identifier,
-            source_type=initial_source_type_for_routing # Use the determined/hinted type
+            source_type=initial_source_type_for_routing
         )
         routing_result = await self.routing_service.execute(routing_input_obj)
 
-        if routing_result.status == 'error' or not routing_result.data:
+        if not routing_result.is_success() or not routing_result.data:
             error_message = f"Routing failed: {routing_result.error_message}"
             final_status_code = "failure_routing"
-            # Early exit if routing fails
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, None) # MODIFIED
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj)
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
-        # If RoutingOutput includes the determined source type, prefer that.
-        # For now, we'll infer based on service or explicitly set it, e.g., for PDF redirect.
-        # Example: determined_final_source_type = routing_result.data.source_type_used_for_routing
 
         # 2. Acquisition
+        # All acquisition services now return ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]
+        acq_result: Optional[ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]] = None
+
         if determined_service_name == "WebAcquisitionService":
-            # Use the correct WebAcquisitionServiceInput from web_service.py
             web_acq_input = WebAcquisitionServiceInput(
                 url=orchestrator_input.source_identifier,
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id
             )
             acq_result = await self.web_acquisition_service.execute(web_acq_input)
-            if acq_result.data: acquisition_service_output_data = acq_result.data
         elif determined_service_name == "PDFAcquisitionService":
-            determined_final_source_type = 'pdf' # Set based on service
             pdf_acq_input = PDFAcquisitionServiceInput(
-                file_path=orchestrator_input.source_identifier,
+                file_path=orchestrator_input.source_identifier, # Can be path or URL if service handles downloads
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id
             )
             acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input)
-            if acq_result.data: acquisition_service_output_data = acq_result.data
         elif determined_service_name == "FileAcquisitionService":
-            # For FileAcquisitionService, source_type might be more specific (e.g., "docx", "txt")
-            # We will use initial_source_type_for_routing for now, but ideally, FileAcquisitionServiceOutput
-            # could provide a more precise 'file_type_processed'.
-            determined_final_source_type = initial_source_type_for_routing # Or a more specific type from FileAcquisitionService if available
             file_acq_input = FileAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier,
-                source_content_type=orchestrator_input.source_type, # Assuming source_type maps correctly
+                source_content_type=initial_source_type_for_routing, # file service might refine this
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id
             )
             acq_result = await self.file_acquisition_service.execute(file_acq_input)
-            if acq_result.data: acquisition_service_output_data = acq_result.data
         else:
             error_message = f"Unknown or unsupported service determined by router: {determined_service_name}"
             final_status_code = "failure_routing"
-            acq_result = ServiceResult.failure(error_message=error_message)
+            acq_result = ServiceResult.failure(error_message=error_message) # type: ignore
 
         # Process Acquisition Result
-        if acq_result.status == 'error' or not acquisition_service_output_data:
-            error_message = f"{determined_service_name} failed: {acq_result.error_message or 'Unknown error'}"
+        if not acq_result or not acq_result.is_success() or not acq_result.data:
+            error_message = f"{determined_service_name} failed: {acq_result.error_message if acq_result else 'Acquisition service not called'}"
             final_status_code = "failure_acquisition"
-        elif acquisition_service_output_data.status.startswith("error"): # Check status within the data model
-            error_message = f"{determined_service_name} issue: {acquisition_service_output_data.status} - {acquisition_service_output_data.error_message or 'No specific message'}"
-            final_status_code = f"failure_{acquisition_service_output_data.status.replace('error_', '')}" # e.g. failure_paywall
-            if acquisition_service_output_data.status == "error_unsupported_content_type": final_status_code = "unsupported_type"
+            # Try to get DocumentMetadata even on failure if it's available in error_details
+            if acq_result and acq_result.error_details and isinstance(acq_result.error_details, dict):
+                original_data_on_fail = acq_result.error_details.get("original_data")
+                if isinstance(original_data_on_fail, tuple) and len(original_data_on_fail) == 3 and isinstance(original_data_on_fail[1], DocumentMetadata):
+                    document_metadata_obj = original_data_on_fail[1]
+                    page_title = document_metadata_obj.title or page_title
+                    final_url = document_metadata_obj.final_url or final_url
+                    determined_final_source_type = document_metadata_obj.source_type or determined_final_source_type
+                    
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj)
+            return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
+        
+        # Successfully got data from acquisition service
+        preliminary_blocks, document_metadata_obj, raw_images_from_acquisition = acq_result.data
+        
+        # Update orchestrator's view of metadata based on what acquisition returned
+        page_title = document_metadata_obj.title or page_title
+        final_url = document_metadata_obj.final_url or final_url
+        determined_final_source_type = document_metadata_obj.source_type # This is the most authoritative source_type
 
-        # PDF Redirection Logic (New)
-        elif isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput) and \
-             acquisition_service_output_data.status == "pdf_content_detected" and \
-             acquisition_service_output_data.pdf_content_bytes:
-            
-            print(f"Orchestrator: PDF content detected from URL {acquisition_service_output_data.final_url}. Redirecting to PDFAcquisitionService.")
-            determined_final_source_type = 'pdf' # MODIFIED: Crucial update for PDF redirect
-            # Original URL/final URL from web acquisition becomes the identifier for PDF processing
-            pdf_identifier = acquisition_service_output_data.final_url or orchestrator_input.source_identifier
+        # 3. Image Processing (if images were acquired)
+        if raw_images_from_acquisition:
+            img_processing_input = ImageProcessingServiceInput(images_to_process=raw_images_from_acquisition)
+            img_processing_result = await self.image_processing_service.execute(img_processing_input)
 
-            pdf_acq_input_redirect = PDFAcquisitionServiceInput(
-                file_path=pdf_identifier, # Use URL as identifier, bytes are primary
-                pdf_bytes=acquisition_service_output_data.pdf_content_bytes,
-                processing_level=orchestrator_input.processing_level,
-                job_id=job_id,
-                # Pass original URL to PDFAcquisitionService if needed for context or ID generation.
-                # This might require adding a field to PDFAcquisitionServiceInput if not already present.
-                # For now, file_path (which is the URL here) serves as the main identifier.
-            )
-            # Overwrite acq_result and acquisition_service_output_data with PDF service results
-            acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input_redirect)
-            determined_service_name = "PDFAcquisitionService (redirected)" # Update for logging
-
-            if acq_result.status == 'error' or not acq_result.data:
-                error_message = f"{determined_service_name} failed after redirect: {acq_result.error_message or 'Unknown error'}"
-                final_status_code = "failure_acquisition_pdf_redirect"
-                acquisition_service_output_data = None # Ensure it's None so subsequent steps don't use stale web data
-            elif acq_result.data.status.startswith("error"): # Check status within the PDF service output data model
-                error_message = f"{determined_service_name} issue after redirect: {acq_result.data.status} - {acq_result.data.error_message or 'No specific message'}"
-                final_status_code = f"failure_acquisition_pdf_redirect_{acq_result.data.status.replace('error_', '')}"
-                acquisition_service_output_data = None
+            if not img_processing_result.is_success() or not img_processing_result.data:
+                warning_msg = f"ImageProcessingService failed: {img_processing_result.error_message}"
+                accumulated_warnings.append(warning_msg)
+                print(f"Orchestrator Warning: {warning_msg}") # Or use self.logger
+                if final_status_code == "success": 
+                    final_status_code = "partial_success_image_processing_failed"
             else:
-                acquisition_service_output_data = acq_result.data # Successfully processed by PDF service
-                # Now, proceed as if it was a PDF from the start
-                page_title = getattr(acquisition_service_output_data, 'page_title', page_title) or page_title
-                extracted_text = getattr(acquisition_service_output_data, 'extracted_text', None)
-                raw_images_for_processing = self._map_to_raw_image_input(
-                    acquisition_service_output_data, 
-                    job_id, 
-                    pdf_identifier, # Use the URL as the source identifier for GCS path
-                    determined_final_source_type # MODIFIED: Use the updated type
-                )
-                final_status_code = "success" # Tentative success after PDF redirect and processing
+                enriched_images_list = img_processing_result.data
+                processed_images_data_dict = {img.image_id: img for img in enriched_images_list}
+        
+        # 4. Content Structuring
+        if not self.content_structuring_service:
+            # This case should ideally not happen if DI is correct and service is mandatory.
+            print("ERROR Orchestrator: self.content_structuring_service IS NONE.", file=sys.stderr) # Keep this critical error log
+            output_obj = self._prepare_final_output(orchestrator_input, "failure_system_configuration", page_title, final_content_blocks, processed_images_data_dict, "ContentStructuringService not available", final_url, determined_final_source_type, document_metadata_obj)
+            return ServiceResult.failure(error_message="ContentStructuringService not available", error_details=output_obj.model_dump())
 
-        # Original success path for non-redirected acquisition services
-        elif acquisition_service_output_data: # Ensure it's not None from a failed PDF redirect
-            page_title = getattr(acquisition_service_output_data, 'page_title', page_title) or page_title
-            final_url = getattr(acquisition_service_output_data, 'final_url', final_url) or final_url # For web
-            extracted_text = getattr(acquisition_service_output_data, 'extracted_text', None)
-            
-            # Determine source_type for GCS path based on the service that successfully ran
-            # AND update determined_final_source_type for the OrchestrationOutput
-            source_type_for_gcs = initial_source_type_for_routing # Default
-            if isinstance(acquisition_service_output_data, PDFAcquisitionServiceOutput):
-                source_type_for_gcs = 'pdf'
-                determined_final_source_type = 'pdf'
-            elif isinstance(acquisition_service_output_data, FileAcquisitionServiceOutput):
-                # Assuming FileAcquisitionServiceOutput might have a more specific file_type if available
-                source_type_for_gcs = getattr(acquisition_service_output_data, 'file_type', initial_source_type_for_routing)
-                determined_final_source_type = source_type_for_gcs # Update with potentially more specific type
-            elif isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput):
-                source_type_for_gcs = 'url' # Web content is type 'url' for GCS path
-                determined_final_source_type = 'url'
-
-            raw_images_for_processing = self._map_to_raw_image_input(
-                acquisition_service_output_data, 
-                job_id, 
-                orchestrator_input.source_identifier, # Original identifier for GCS path consistency
-                source_type_for_gcs
-            )
-            final_status_code = "success" # Tentative success after acquisition
-        # This else should ideally not be reached if all prior conditions (error, PDF redirect, success) are handled.
-        # It implies acquisition_service_output_data is None without a prior error status being set.
-        else: 
-            if not error_message: # If no error message was set by previous specific checks
-                 error_message = f"Acquisition resulted in no data from {determined_service_name}."
-            final_status_code = "failure_acquisition_no_data"
-
-        # Debug print for raw images before further processing (moved from inside the if/else block)
-        print(f"Orchestrator.process: Number of raw images for processing (post-acquisition/redirect): {len(raw_images_for_processing)}")
-        for i, raw_img in enumerate(raw_images_for_processing):
-            print(f"Orchestrator.process: Raw image {i+1} for IPS: ID={raw_img.image_id}, HasBytes={bool(raw_img.image_bytes)}, URL={raw_img.source_url}")
-
-        # If acquisition failed or resulted in a state that stops processing
-        if final_status_code.startswith("failure") or final_status_code == "unsupported_type":
-            if extracted_text and not final_content_blocks : final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-            # Use determined_final_source_type, defaulting to initial if somehow not set
-            output_source_type = determined_final_source_type if determined_final_source_type else initial_source_type_for_routing
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, output_source_type, None) # MODIFIED
-            if final_status_code.startswith("failure"):
-                return ServiceResult.failure(error_message=error_message or "Orchestration failed at acquisition.", error_details=output_obj.model_dump())
-            return ServiceResult.success(data=output_obj) # e.g. for unsupported_type or pdf_unhandled
-
-        # 3. Parallel Processing: Image Processing and Content Structuring
-        image_processing_service_input = ImageProcessingServiceInput(images_to_process=raw_images_for_processing)
-        image_processing_task = self.image_processing_service.execute(image_processing_service_input)
-        processed_images_from_service: List[EnrichedImageMetadata] = []
-
-        try:
-            image_processing_result: ServiceResult[List[EnrichedImageMetadata]] = await image_processing_task
-            
-            if image_processing_result.status == 'error' or not image_processing_result.data:
-                error_message_img = f"ImageProcessingService failed: {image_processing_result.error_message}"
-                print(f"Orchestrator: {error_message_img}") # Log this error
-                if not error_message: error_message = error_message_img # Store if no primary error yet
-                # Consider if this should change final_status_code to "partial_success" or similar
-            
-            if image_processing_result.data:
-                processed_images_data_dict = {
-                    img_data.image_id: img_data for img_data in image_processing_result.data
-                }
-                print(f"Orchestrator.process: Successfully processed {len(processed_images_data_dict)} images according to ImageProcessingService.") # DEBUG PRINT
-            else:
-                print("Orchestrator.process: No data returned from ImageProcessingService or it failed.") # DEBUG PRINT
-
-            # Debug: Check extracted_text before passing to content structuring
-            print(f"ParallelOrchestrator: Text length before structuring: {len(extracted_text) if extracted_text else 0}")
-            if extracted_text:
-                print(f"ParallelOrchestrator: Text snippet before structuring: {extracted_text[:200]}...")
-
-            content_structuring_service_input = ContentStructuringServiceInput(
-                raw_text_content=extracted_text,
-                processed_images=processed_images_from_service, 
-                job_id=job_id
-            )
-            content_structuring_result: ServiceResult[List[ContentBlock]] = await self.content_structuring_service.execute(content_structuring_service_input)
-
-            if content_structuring_result.status == 'error' or not content_structuring_result.data:
-                error_message_struct = f"ContentStructuringService failed: {content_structuring_result.error_message}"
-                print(f"Orchestrator: {error_message_struct}")
-                if not error_message: error_message = error_message_struct
-                final_status_code = "failure_structuring"
-                if not final_content_blocks and extracted_text: # Keep raw text if structuring fails
-                    final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-            else:
-                final_content_blocks = content_structuring_result.data
-                if not final_content_blocks and extracted_text : # If structuring returned empty but text existed
-                    final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-
-
-        except Exception as e_processing_phase: # Should not happen if services handle their exceptions
-            error_message_struct = f"Critical error during processing phase: {str(e_processing_phase)}"
-            print(f"Orchestrator: {error_message_struct}")
-            if not error_message: error_message = error_message_struct
-            final_status_code = "failure_processing_critical"
-            if not final_content_blocks and extracted_text: final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-
-
-        # Final status refinement
-        if final_status_code == "success" and error_message:
-            final_status_code = "partial_success"
-        elif final_status_code == "success" and not final_content_blocks and not processed_images_data_dict:
-             if extracted_text : # If there was text but nothing came out of structuring
-                 final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
-             else: # No input text and no images/blocks
-                 final_status_code = "success_empty_output"
-
-
-        # 4. Aggregate Output & Finalize
-        # Ensure determined_final_source_type has a value. Fallback to initial_source_type_for_routing if it's somehow None.
-        output_source_type = determined_final_source_type if determined_final_source_type else initial_source_type_for_routing
-        if not output_source_type: # Absolute fallback if initial routing type was also None (should not happen with current logic)
-            print("Orchestrator WARNING: output_source_type is None before calling _prepare_final_output. Defaulting to 'unknown'.")
-            output_source_type = "unknown"
-
-        final_output_obj = self._prepare_final_output(
-            orchestrator_input, final_status_code, page_title, final_content_blocks, 
-            processed_images_data_dict, error_message, final_url, output_source_type, None # MODIFIED: Pass the determined type
+        structuring_input = ContentStructuringServiceInput(
+            preliminary_blocks=preliminary_blocks,
+            enriched_images=enriched_images_list, 
+            document_metadata=document_metadata_obj,
+            job_id=job_id
         )
 
-        end_time = time.time()
-        print(f"Orchestrator processing time: {end_time - start_time:.2f} seconds. Final status: {final_status_code}")
+        structuring_result = await self.content_structuring_service.execute(structuring_input)
 
-        if final_status_code.startswith("failure"):
-            return ServiceResult.failure(error_message=error_message or "Orchestration failed.", error_details=final_output_obj.model_dump())
+        if not structuring_result.is_success() or not structuring_result.data:
+            error_message = f"ContentStructuringService failed: {structuring_result.error_message}" 
+            final_status_code = "failure_structuring"
+            # Even if structuring fails, we might have partial data (e.g., metadata, images)
+            # So, we still prepare output but mark as failure.
+        else:
+            final_content_blocks = structuring_result.data
+            # If structuring succeeded, final_status_code remains what it was before this step
+            # (e.g., "success" or "partial_success_image_processing_failed")
+            pass # No change to final_status_code if it was already success or partial_success
+
+        # Consolidate error_message for the final output if it was from a warning (partial success)
+        if final_status_code.startswith("partial_success") and not error_message and accumulated_warnings:
+            error_message = "; ".join(accumulated_warnings)
+
+        # If acquisition had an issue but we tried to proceed, ensure status reflects that if no other critical error occurred
+        # This check is a bit redundant now with how final_status_code is managed but kept for safety.
+        # if final_status_code == "success" and acq_result and not acq_result.is_success():
+        # final_status_code = "partial_success_acquisition_had_issues"
+
+
+        # 5. Prepare Final Output
+        duration = time.time() - start_time
+        print(f"Orchestrator: Job {job_id} completed in {duration:.2f}s with status: {final_status_code}")
+
+        output_obj = self._prepare_final_output(
+            orchestrator_input, 
+            final_status_code, 
+            page_title, 
+            final_content_blocks, 
+            processed_images_data_dict, 
+            error_message, 
+            final_url, 
+            determined_final_source_type,
+            document_metadata_obj # Pass the complete DocumentMetadata object
+        )
         
-        return ServiceResult.success(data=final_output_obj)
+        if final_status_code == "success" or final_status_code.startswith("partial_success"):
+            return ServiceResult.success(data=output_obj)
+        else:
+            # For critical failures, error_message should already be set.
+            # The output_obj contains all data gathered up to the point of failure.
+            return ServiceResult.failure(error_message=error_message or "Orchestration failed with no specific message.", error_details=output_obj.model_dump())
     
     def _prepare_final_output(self, 
                               inp: OrchestrationInput, 
@@ -361,29 +236,29 @@ class ParallelOrchestrator(BaseService):
                               err_msg: Optional[str],
                               final_url_val: Optional[str],
                               actual_source_type: Optional[str],
-                              doc_meta: Optional[Any] # Placeholder for DocumentMetadata
-                              ) -> OrchestrationOutput: # MODIFIED: Add actual_source_type
-        """
-        Helper method to construct the OrchestrationOutput object.
-        """
-        # Ensure actual_source_type has a fallback if it's None, though it should be set by `process`
-        # The OrchestrationOutput model requires a string for source_type.
-        final_source_type_for_output = actual_source_type or inp.source_type or "unknown"
-        if not actual_source_type and inp.source_type is None:
-             print(f"Orchestrator._prepare_final_output WARNING: actual_source_type and inp.source_type are None. Using '{final_source_type_for_output}'. Input source: {inp.source_identifier}")
-
+                              doc_meta: Optional[DocumentMetadata] # Ensure this is DocumentMetadata
+                              ) -> OrchestrationOutput:
+        
+        # Ensure doc_meta is used if available, otherwise construct a minimal one
+        # This part might need refinement if doc_meta from acquisition is guaranteed on success
+        # and a placeholder is needed on acquisition failure.
+        
+        # If doc_meta is provided (i.e., acquisition was at least partially successful to yield it), use it.
+        # Otherwise, the OrchestrationOutput.document_metadata will be None or a minimal default.
+        # The current structure passes document_metadata_obj which could be None if acquisition fully failed early.
 
         return OrchestrationOutput(
             status_code=status,
-            source_identifier=final_url_val or inp.source_identifier, 
-            source_type=final_source_type_for_output, # MODIFIED: Use the passed or determined type
+            source_identifier=inp.source_identifier,
+            # Use actual_source_type if available, otherwise fallback or keep as is from input
+            source_type=actual_source_type or inp.source_type or "unknown", 
             processing_level_used=inp.processing_level,
             extracted_title=title,
-            is_long_article=False, # Placeholder, determine actual value if needed
+            is_long_article=False, # Placeholder: Implement logic if needed
             original_content_blocks=blocks,
             processed_images_data=images_data,
-            error_message=err_msg,
-            document_metadata=doc_meta # Pass doc_meta here
+            document_metadata=doc_meta, # Pass the full DocumentMetadata object
+            error_message=err_msg
         )
 
     async def execute(self, *args: Any, **kwargs: Any) -> ServiceResult[Any]:
@@ -395,8 +270,4 @@ class ParallelOrchestrator(BaseService):
             return await self.process(args[0])
         return ServiceResult.failure(error_message="Invalid input for ParallelOrchestrator.execute. Use process() method with OrchestrationInput.")
 
-# Need to add import for uuid at the top of the file
-# import uuid # Removed redundant import
-
-# Added here, should be at the top
-import uuid # Added here, should be at the top 
+# Removed redundant import uuid that was here 

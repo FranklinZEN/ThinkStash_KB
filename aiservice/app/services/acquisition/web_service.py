@@ -68,6 +68,45 @@ PAYWALL_HTML_SELECTORS: List[str] = [
     "[data-testid*='paywall']", "[class*='tp-container']"
 ]
 
+BOILERPLATE_SELECTORS: List[str] = [
+    "nav", "footer", "header", "aside",
+    "[role='navigation']", "[role='banner']", "[role='complementary']", "[role='contentinfo']",
+    ".cookie", "#cookie", "[class*='cookie']", "[id*='cookie']",
+    ".sidebar", "#sidebar", "[class*='sidebar']", "[id*='sidebar']",
+    ".menu", "#menu", "[class*='menu']", "[id*='menu']",
+    ".nav", "#nav", "[class*='nav']", "[id*='nav']",
+    ".advertisement", ".ad", "[class*='advertisement']", "[class*='ad-']", "[id*='ad-']",
+    ".modal", "#modal", "[class*='modal']", "[id*='modal']", # Common for pop-ups
+    ".comments", "#comments",
+    ".related-posts", ".related-articles",
+    ".social-links", ".share-buttons",
+    "form[action*='subscribe']",
+    # Added for more specific boilerplate removal based on user feedback
+    ".site-header", # Common class for main site headers
+    ".site-footer", # Common class for main site footers
+    "[class*='language-selector']", # For language selection elements
+    "[class*='social-share']", # For social media sharing bars/widgets
+    "[class*='signup-prompt']", # For newsletter/account signup prompts
+    "[class*='cookie-banner']", # More specific targeting for cookie consent banners
+    ".nav-primary", # Often used for primary navigation menus
+    ".nav-secondary", # Often used for secondary or utility navigation
+    ".global-header", # Common pattern for site-wide headers
+    ".global-footer",  # Common pattern for site-wide footers
+    # More additions based on specific user feedback for Uber blog
+    "a[data-baseweb='button'][href*='m.uber.com/looking']", # Specific 'Request a ride' buttons
+    "div.bd.ed.n0.bu.bv.iy.n1.fs.fr.n2", # Specific class for author/meta block on Uber blog
+    "[class*='author-bio']", # Generic author bio sections
+    "[class*='post-meta']",  # Generic post metadata sections (often includes date, author, cats)
+    "[class*='entry-meta']", # Another common pattern for entry metadata
+    "[class*='byline']",     # For author bylines
+    # Speculative additions for top banners
+    "div[role='banner']",
+    "div[data-testid='banner']",
+    "div[class*='site-banner']",
+    "div[class*='top-banner']",
+    "div[id*='banner']"
+]
+
 # PDF processing library (PyMuPDF) - fitz import is no longer needed here if _parse_pdf_content_to_preliminary_blocks is removed
 # import fitz # PyMuPDF # This can be removed if not used elsewhere in this file.
 
@@ -76,6 +115,27 @@ class WebAcquisitionService(BaseService):
     Asynchronous service to fetch, parse, and extract content from web URLs.
     Outputs PreliminaryBlock, DocumentMetadata, and RawImageInput.
     """
+
+    # Define selectors for main content identification
+    MAIN_CONTENT_SELECTORS: List[str] = [
+        "article",
+        "main",
+        "[role='main']",
+        "#main",
+        "#content",
+        ".content",
+        "#main-content", # Common ID
+        ".main-content", # Common class
+        "#primary", # Common ID in WordPress
+        ".post", # Common class for blog posts
+        ".entry", # Common class for entries
+        ".page-content", # Common class
+        "#article", ".article", # Common for articles
+        "#article-body", ".article-body",
+        ".post-content", ".entry-content",
+        ".blog-post", # Common class
+        ".text" # Sometimes used for main text container
+    ]
 
     def __init__(self, settings: Optional[Any] = None):
         super().__init__(settings)
@@ -114,7 +174,7 @@ class WebAcquisitionService(BaseService):
 
         MIN_DIMENSION = 50
         MIN_AREA = 5000
-        MAX_ASPECT_RATIO_DEVIATION = 4.0
+        MAX_ASPECT_RATIO_DEVIATION = 4.0 
 
         IRRELEVANT_ALT_STRINGS_EXACT = [
             "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
@@ -261,7 +321,9 @@ class WebAcquisitionService(BaseService):
 
     async def _parse_and_structure_html(
         self, 
-        html_content: str, 
+        html_to_parse: str, # This will be either Trafilatura's snippet or full HTML
+        is_trafilatura_content: bool, # Flag to indicate the source of html_to_parse
+        full_html_content_for_metadata_and_images: str, # Always the original full HTML
         final_url: str, 
         job_id: Optional[str], 
         processing_level: str
@@ -270,22 +332,94 @@ class WebAcquisitionService(BaseService):
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images_list: List[RawImageInput] = []
         
-        soup = BeautifulSoup(html_content, 'lxml')
+        # Full page soup for metadata and image extraction - always from original full HTML
+        soup_full_page = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
         
-        # --- 1. Populate DocumentMetadata ---
+        isolated_main_content_html: Optional[str] = None # Will be set if not using Trafilatura content
+        main_content_element_found: Optional[Tag] = None # Will be set if not using Trafilatura content
+        soup_for_structuring: Optional[Union[BeautifulSoup, Tag]] = None # Can be the whole doc or a specific tag
+
+        if is_trafilatura_content and html_to_parse:
+            print("DEBUG WebAcquisitionService: Using Trafilatura's extracted HTML snippet for structuring.") # Keep this high-level debug
+            temp_soup = BeautifulSoup(html_to_parse, 'lxml')
+            main_tag_in_snippet = temp_soup.find('main')
+            if main_tag_in_snippet:
+                soup_for_structuring = main_tag_in_snippet 
+            elif temp_soup.find('doc'): # Trafilatura often uses <doc>
+                doc_tag_in_snippet = temp_soup.find('doc')
+                soup_for_structuring = doc_tag_in_snippet
+            else:
+                soup_for_structuring = temp_soup 
+        else:
+            print("DEBUG WebAcquisitionService: Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.") # Keep high-level
+            # --- Start Fallback Main Content Isolation using BeautifulSoup Selectors ---
+            main_content_element_found: Optional[Tag] = None
+            for selector in self.MAIN_CONTENT_SELECTORS:
+                try:
+                    candidate_element = soup_full_page.select_one(selector)
+                    if candidate_element:
+                        if candidate_element.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']) and len(candidate_element.get_text(strip=True)) > 200:
+                            main_content_element_found = candidate_element
+                            log_snippet_raw = str(main_content_element_found)[:500]
+                            log_snippet_clean = log_snippet_raw.replace('\n', ' ')
+                            print(f"DEBUG: (Fallback) ==> SELECTED main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}") # DEBUG
+                            break
+                except Exception as e_select:
+                    print(f"WARNING: (Fallback) Selector error ('{selector}') during main content isolation: {e_select}") # DEBUG
+                    pass
+            print("--- Finished Main Content Isolation (Fallback BS4) ---") # DEBUG
+
+            if main_content_element_found:
+                log_isolated_snippet_raw = str(main_content_element_found)[:500]
+                log_isolated_snippet_clean = log_isolated_snippet_raw.replace('\n', ' ')
+                print(f"DEBUG: (Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}") # DEBUG
+                isolated_main_content_html = str(main_content_element_found)
+                soup_for_structuring = BeautifulSoup(isolated_main_content_html, 'lxml')
+            else:
+                print("DEBUG: (Fallback) No specific main content container found by BS4, using full body/page for structuring.") # DEBUG
+                if soup_full_page.body:
+                    soup_for_structuring = BeautifulSoup(str(soup_full_page.body), 'lxml')
+                else:
+                    soup_for_structuring = soup_full_page
+        
+        # --- 0.B Remove Boilerplate Content (from the selected soup_for_structuring) ---
+        # This runs whether content is from Trafilatura or BS4 fallback
+        print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
+        for selector_idx, selector in enumerate(BOILERPLATE_SELECTORS):
+            try:
+                # Ensure soup_for_structuring is not None before calling .select()
+                if soup_for_structuring:
+                    print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
+                    elements_found = soup_for_structuring.select(selector)
+                    print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
+                    
+                    for i, element in enumerate(elements_found):
+                        if element:
+                            if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"):
+                                print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
+                            element.decompose()
+                else:
+                    print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
+            except Exception as e_decompose:
+                # self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Optional logging
+                print(f"WARNING: Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Use print for debugging
+                pass
+        print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
+        
+        # --- 1. Populate DocumentMetadata (using soup_full_page for broader context like <head>) ---
         doc_title: Optional[str] = None
-        if soup.title and soup.title.string:
-            doc_title = soup.title.string.strip()
+        if soup_full_page.title and soup_full_page.title.string:
+            doc_title = soup_full_page.title.string.strip()
         
-        og_title_tag = soup.find('meta', property='og:title')
+        og_title_tag = soup_full_page.find('meta', property='og:title')
         if og_title_tag and isinstance(og_title_tag, Tag) and og_title_tag.get('content'):
             og_title = str(og_title_tag['content']).strip()
             if og_title: doc_title = og_title
 
-        og_description_tag = soup.find('meta', property='og:description')
+        og_description_tag = soup_full_page.find('meta', property='og:description')
         og_description = str(og_description_tag['content']).strip() if og_description_tag and isinstance(og_description_tag, Tag) and og_description_tag.get('content') else None
         
-        meta_description_tag = soup.find('meta', attrs={'name': 'description'})
+        meta_description_tag = soup_full_page.find('meta', attrs={'name': 'description'})
         meta_description = str(meta_description_tag['content']).strip() if meta_description_tag and isinstance(meta_description_tag, Tag) and meta_description_tag.get('content') else None
         
         description = og_description or meta_description
@@ -305,245 +439,276 @@ class WebAcquisitionService(BaseService):
         )
 
         # --- 2. Extract RawImageInput objects (if full_content) ---
+        # Always use the original full HTML for image extraction
         if processing_level == "full_content":
             raw_images_list = await self._extract_images_from_html(
-                html_content_str=html_content, 
+                html_content_str=full_html_content_for_metadata_and_images, 
                 base_url=final_url, 
                 job_id=doc_job_id,
                 original_source_identifier_for_gcs_path=source_identifier_for_gcs,
                 source_type_for_gcs_path=source_type_for_gcs
             )
 
-        # --- 3. Extract PreliminaryBlocks ---
-        block_order_counter = 0 # Use a single counter for global order
-        
-        # Map image URLs from RawImageInput to their IDs for quick lookup
-        # This is useful if we encounter images during main content parsing (e.g. within <figure>)
-        # and want to link them to an already created RawImageInput.
-        # However, _extract_images_from_html should already find most renderable images.
-        # Image placeholders will be created based on raw_images_list *after* main content parsing
-        # to try and interleave them correctly based on their DOM position relative to text.
+        # Ensure soup_for_structuring is not None before iterating
+        iterable_elements = []
+        if soup_for_structuring:
+            iterable_elements = soup_for_structuring.find_all(True, recursive=True) 
+        else:
+            print("ERROR WebAcquisitionService: soup_for_structuring is None before block extraction loop. No blocks will be generated.")
 
-        # For now, we'll first parse text/structure, then insert image placeholders.
-        # A more advanced approach might involve a single pass through the DOM.
+        processed_elements = set() 
+        block_order = 0 
 
-        body = soup.body
-        if not body: # Fallback if no body tag
-            body = soup 
+        # Variables for block data - initialize outside loop for clarity if needed for complex types
+        heading_level_val: Optional[int] = None
+        list_item_data_val: Optional[Any] = None
+        list_level_val: Optional[int] = None
+        list_ordered_val: Optional[bool] = None
+        code_content_val: Optional[str] = None
+        code_language_val: Optional[str] = None
+        table_html_content_val: Optional[str] = None
+        image_id_ref_val: Optional[str] = None
 
-        # Define tags to process and their handlers
-        # This is a simplified approach. Real-world HTML can be much more complex.
-        # We are looking for common block-level semantic tags.
-
-        processed_elements = set() # To avoid processing the same element multiple times if nested
-
-        for element in body.find_all(True, recursive=True): # Find all tags
-            if element in processed_elements or not element.name:
+        for element_idx, element in enumerate(iterable_elements):
+            print(f"\nDEBUG WebAcquisitionService: --- Element Loop Start [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
+            
+            if element in processed_elements:
+                print(f"DEBUG WebAcquisitionService: Element <{element.name}> already processed. Skipping.")
+                continue
+            if not element.name:
+                print(f"DEBUG WebAcquisitionService: Element has no name. Skipping.")
                 continue
 
-            # Skip script, style, meta, link, noscript, and other non-content tags early
-            if element.name in ['script', 'style', 'meta', 'link', 'noscript', 'header', 'footer', 'nav', 'aside', 'form', 'button', 'input', 'select', 'textarea', 'label', 'option']:
-                # Mark element and its children as processed to avoid redundant checks
-                for child in element.find_all(True, recursive=True):
-                    processed_elements.add(child)
+            tags_to_skip_directly = ['script', 'style', 'meta', 'link', 'noscript', 'header', 'footer', 'nav', 'aside', 'form', 'button', 'input', 'select', 'textarea', 'label', 'option', 'doc', 'main']
+            if element.name in tags_to_skip_directly:
+                print(f"DEBUG WebAcquisitionService: Element <{element.name}> is in direct skip list. Skipping.")
+                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
                 processed_elements.add(element)
                 continue
-            
-            # Check if parent is already processed to handle elements that generate multiple blocks (like lists)
-            # or to ensure we're not double-counting text.
-            # If a parent generated a block (e.g., <ul> created a series of list_item blocks),
-            # we don't want its children (e.g. text nodes directly under <ul>) to create separate text blocks.
-            # If a parent generated a block (e.g., <ul> created a series of list_item blocks),
-            # we don't want its children (e.g. text nodes directly under <ul>) to create separate text blocks.
-            parent_processed = False
-            current_parent = element.parent
-            while current_parent:
-                if current_parent in processed_elements:
-                    parent_processed = True
-                    break
-                current_parent = current_parent.parent
-            if parent_processed and element.name not in ['li']: # Allow li to be processed even if ul/ol parent was
-                 processed_elements.add(element)
-                 continue
 
+            block_type: Optional[str] = None
+            text_content: Optional[str] = None
+            # Reset specific attributes for each element
+            heading_level_val = None; list_item_data_val = None; list_level_val = None; list_ordered_val = None; code_content_val = None; code_language_val = None; table_html_content_val = None; image_id_ref_val = None
 
-            block_id_base = f"{doc_job_id}_elem_{block_order_counter}"
-            text_content = None
-            block_type = None
-            heading_level = None
-            code_language = None
-            list_item_data = None
-            list_level = 0
-            list_ordered = None
-            custom_attrs = {}
+            current_element_text_content = element.get_text(separator=' ', strip=True)
+            print(f"DEBUG WebAcquisitionService: Element <{element.name}> extracted text (first 100 chars): '{current_element_text_content[:100]}'")
 
-            # Headings
-            if element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-                block_type = "heading"
-                text_content = element.get_text(separator=' ', strip=True)
-                heading_level = int(element.name[1:])
-            
-            # Paragraphs
-            elif element.name == 'p':
-                block_type = "text"
-                text_content = element.get_text(separator=' ', strip=True)
-
-            # Lists (ul, ol) and List Items (li)
-            elif element.name in ['ul', 'ol']:
-                list_ordered = (element.name == 'ol')
-                # Determine list level by counting ancestor ul/ol tags
-                current_level = 0
-                parent = element.parent
-                while parent:
-                    if parent.name in ['ul', 'ol']:
-                        current_level += 1
-                    parent = parent.parent
-                
-                for li_idx, li_element in enumerate(element.find_all('li', recursive=False)): # Only direct children li
-                    if li_element in processed_elements: continue
-                    
-                    li_text = li_element.get_text(separator=' ', strip=True)
-                    if li_text:
-                        preliminary_blocks.append(PreliminaryBlock(
-                            block_id=f"{block_id_base}_li_{li_idx}",
-                            type="list_item",
-                            text_content=li_text, # Storing text content directly
-                            order=block_order_counter,
-                            list_level=current_level,
-                            list_ordered=list_ordered
-                        ))
-                        block_order_counter += 1
-                    processed_elements.add(li_element) # Mark li as processed
-                block_type = None # Handled by li items
-                processed_elements.add(element) # Mark ul/ol as processed
-
-            # Code Blocks (pre > code)
+            if element.name == 'p':
+                block_type = "text"; text_content = current_element_text_content
+            elif element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                block_type = "heading"; text_content = current_element_text_content
+                heading_level_val = int(element.name[1:])
             elif element.name == 'pre':
-                code_tag = element.find('code')
-                target_code_element = code_tag if code_tag else element
-                
-                # Try to get language from class (e.g., class="language-python")
-                lang_class = target_code_element.get('class', [])
-                for cls in lang_class:
-                    if cls.startswith('language-'):
-                        code_language = cls.replace('language-', '')
-                        break
-                    elif cls.startswith('lang-'):
-                        code_language = cls.replace('lang-', '')
-                        break
-                
                 block_type = "code_snippet"
-                code_content = target_code_element.get_text() # Keep original formatting as much as possible
-                custom_attrs["raw_code_element_html"] = str(target_code_element) # Store raw html of code element
-
-                # Add the preliminary block for code
-                preliminary_blocks.append(PreliminaryBlock(
-                    block_id=f"{block_id_base}_code",
-                    type=block_type,
-                    code_content=code_content,
-                    code_language=code_language,
-                    order=block_order_counter,
-                    custom_attributes=custom_attrs
-                ))
-                block_order_counter += 1
-                processed_elements.add(element) # Mark pre as processed
-                if code_tag: processed_elements.add(code_tag)
-                block_type = None # Reset block_type as it's handled
-
-
-            # Tables
+                code_tag = element.find('code')
+                code_content_val = code_tag.get_text(strip=True) if code_tag else current_element_text_content
+                # Basic language detection from class (can be improved)
+                lang_class = element.get('class', []) + (code_tag.get('class', []) if code_tag else [])
+                for cls in lang_class:
+                    if cls.startswith('language-'): code_language_val = cls.replace('language-', ''); break
+                    if cls.startswith('lang-'): code_language_val = cls.replace('lang-', ''); break
             elif element.name == 'table':
-                block_type = "table_placeholder"
-                # Store the outer HTML of the table
-                custom_attrs["html_content"] = str(element)
-                # Could add more sophisticated table parsing here if needed in future
-                # For now, just placeholder and raw HTML
-
-            # Image handling (<img> within the flow, primarily for ordering)
-            # This is tricky because _extract_images_from_html already found images.
-            # We need to place placeholders for them in the correct order.
-            # This simplified loop processes elements sequentially.
-            # We will insert all image placeholders collected earlier, sorted by their original DOM position if possible,
-            # or simply append them if DOM position is hard to get reliably for all cases.
-            # For now, let's add image placeholders derived from raw_images_list *after* this loop.
-            # This element-by-element loop focuses on text and structure.
-
-            # Default text extraction for other block-ish tags if not handled above
-            # (e.g., div, article, section if they contain direct text not in p, h, etc.)
-            # This needs to be careful not to extract text from already processed containers (like lists)
-            # Only extract if the element itself has meaningful direct text content.
-            elif element.name in ['div', 'span', 'article', 'section', 'main', 'blockquote', 'details', 'summary'] and not block_type:
-                # Heuristic: only create a text block if it has direct text children
-                # and is not just a container for other block elements we've already processed.
-                # Also, check if the text is substantial.
-                element_text_content = element.get_text(separator=' ', strip=True)
-                is_container_only = any(child.name in ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'pre', 'table', 'img', 'figure'] for child in element.find_all(recursive=False))
-                
-                if element_text_content and not is_container_only and len(element_text_content) > 20: # Arbitrary length check
-                    block_type = "text"
-                    text_content = element_text_content
+                block_type = "table_placeholder"; table_html_content_val = str(element)
+            elif element.name == 'li':
+                block_type = "list_item"; text_content = current_element_text_content
+                list_item_data_val = current_element_text_content
+                parent_list = element.find_parent(['ul', 'ol'])
+                list_ordered_val = parent_list.name == 'ol' if parent_list else False
+                list_level_val = sum(1 for _ in element.find_parents(['ul', 'ol']))
+            elif element.name in ['ul', 'ol']:
+                print(f"DEBUG WebAcquisitionService: Element <{element.name}> is list container. Individual <li> will be processed. Skipping direct block for <{element.name}>.")
+                # Mark children as processed to avoid creating blocks from them AND their parent list tag
+                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
+                processed_elements.add(element) # Mark the list tag itself as processed
+                continue # Explicitly skip creating a block for <ul>/<ol> itself
             
-            if block_type and text_content: # For text-based blocks (text, heading)
-                preliminary_blocks.append(PreliminaryBlock(
-                    block_id=block_id_base,
-                    type=block_type,
-                    text_content=text_content,
-                    heading_level=heading_level,
-                    order=block_order_counter
-                ))
-                block_order_counter += 1
-                processed_elements.add(element)
-            elif block_type == "table_placeholder": # For table
-                preliminary_blocks.append(PreliminaryBlock(
-                    block_id=block_id_base,
-                    type=block_type,
-                    order=block_order_counter,
-                    custom_attributes=custom_attrs
-                ))
-                block_order_counter += 1
-                processed_elements.add(element)
+            # Fallback: if it has significant text and isn't one of the above structural tags AND not a container of them
+            elif current_element_text_content and len(current_element_text_content) > 20: # Min length for fallback text block
+                is_container_of_handled_types = False
+                for child in element.children:
+                    if isinstance(child, Tag) and child.name in ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol', 'li']:
+                        is_container_of_handled_types = True; break
+                if not is_container_of_handled_types:
+                    block_type = "text"; text_content = current_element_text_content
+                    print(f"DEBUG WebAcquisitionService: Element <{element.name}> processed by FALLBACK text logic.")
+                else:
+                    print(f"DEBUG WebAcquisitionService: Element <{element.name}> has text but is a container of other handled types. Skipping direct block creation.")
+            
+            print(f"DEBUG WebAcquisitionService: After type decision for <{element.name}>: block_type='{block_type}', text_content present: {text_content is not None}")
 
-        # Now, add image placeholders from the raw_images_list.
-        # This is a simplification; ideally, these would be interleaved correctly based on DOM position.
-        # For now, we append them. A more robust solution would involve a single-pass DOM traversal
-        # that identifies text, structure, AND images in order.
-        for img_input in raw_images_list:
-            placeholder_block_id = f"{doc_job_id}_img_placeholder_{block_order_counter}"
+            if block_type and (text_content or list_item_data_val or code_content_val or table_html_content_val or block_type == 'image_placeholder'):
+                block_id = f"{job_id if job_id else 'doc'}_b{block_order}"
+                prelim_block_data = {
+                    "block_id": block_id, "type": block_type, "order": block_order,
+                    "text_content": text_content, "page_number": None, "bbox": None,
+                    "heading_level": heading_level_val, "list_item_data": list_item_data_val,
+                    "list_level": list_level_val, "list_ordered": list_ordered_val,
+                    "code_content": code_content_val, "code_language": code_language_val,
+                    "custom_attributes": {"html_content": table_html_content_val} if table_html_content_val else None,
+                    "image_id_ref": image_id_ref_val
+                }
+                # Filter out None values before passing to Pydantic model
+                final_prelim_block_data = {k: v for k, v in prelim_block_data.items() if v is not None}
+                
+                try:
+                    preliminary_blocks.append(PreliminaryBlock(**final_prelim_block_data))
+                    block_order += 1
+                    print(f"DEBUG WebAcquisitionService: CREATED PreliminaryBlock for <{element.name}>: ID {block_id}, Type '{block_type}', Order {block_order-1}. Total blocks: {len(preliminary_blocks)}.")
+                except Exception as e_create_block:
+                    print(f"ERROR WebAcquisitionService: Failed to create PreliminaryBlock for element <{element.name}>. Error: {e_create_block}. Data: {final_prelim_block_data}")
+                processed_elements.add(element)
+            elif block_type:
+                print(f"DEBUG WebAcquisitionService: Element <{element.name}> had block_type '{block_type}' but no qualifying content. Not creating block.")
+            else:
+                print(f"DEBUG WebAcquisitionService: Element <{element.name}> did not resolve to any block_type. Not creating block.")
+            
+            print(f"DEBUG WebAcquisitionService: --- Element Loop End [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
+
+        # After loop, add image placeholders based on raw_images_list (extracted from full HTML)
+        # This assumes raw_images_list is populated correctly by _extract_images_from_html
+        if raw_images_list:
+            print(f"DEBUG WebAcquisitionService: Adding {len(raw_images_list)} image placeholders as PreliminaryBlocks.")
+        for img_raw_input in raw_images_list:
+            block_id = f"{job_id if job_id else 'doc'}_img_b{block_order}"
             preliminary_blocks.append(PreliminaryBlock(
-                block_id=placeholder_block_id,
+                block_id=block_id,
                 type="image_placeholder",
-                image_id_ref=img_input.image_id,
-                order=block_order_counter,
-                # page_number and bbox are None for web typically
+                image_id_ref=img_raw_input.image_id,
+                order=block_order,
+                page_number=img_raw_input.page_number, # Will be None for web
+                bbox=img_raw_input.bbox # Will be None for web
+                # alt_text and caption from RawImageInput are not directly part of PreliminaryBlock for image_placeholder
+                # They are associated via EnrichedImageMetadata later.
             ))
-            # image_id_to_block_map[img_input.image_id] = placeholder_block_id # Not currently used but good for future linking
-            block_order_counter += 1
-        
-        # Remove the old trafilatura fallback if we have blocks from BeautifulSoup
-        # If BeautifulSoup parsing yields no blocks, trafilatura could be a fallback.
-        # For now, if preliminary_blocks is empty and trafilatura was enabled:
-        if not preliminary_blocks: # If BS4 parsing yielded nothing substantial
-            loop = asyncio.get_event_loop()
-            try:
-                main_content_text = await loop.run_in_executor(
-                    None, 
-                    functools.partial(trafilatura.extract, html_content, url=final_url, output_format='txt', include_comments=False, include_tables=True) # include_tables might give some table text
-                )
-                if main_content_text:
-                    preliminary_blocks.append(PreliminaryBlock(
-                        block_id=f"{doc_job_id}_txt_main_trafilatura_{block_order_counter}",
-                        type="text",
-                        text_content=main_content_text.strip(),
-                        order=block_order_counter
-                    ))
-                    block_order_counter += 1
-            except Exception as e:
-                # self.logger.warning(f\"Trafilatura extraction failed for {final_url}: {e}\") # Optional logging
-                pass 
+            block_order += 1
+            print(f"DEBUG WebAcquisitionService: CREATED image_placeholder PreliminaryBlock: ID {block_id}, ImageRef {img_raw_input.image_id}, Order {block_order-1}.")
 
-        preliminary_blocks.sort(key=lambda b: b.order) # Ensure final sort by order
+        print(f"DEBUG WebAcquisitionService: _parse_and_structure_html finished. Total PreliminaryBlocks created: {len(preliminary_blocks)} (incl. images).")
+        # Ensure preliminary_blocks are sorted by order before returning
+        preliminary_blocks.sort(key=lambda b: b.order)
         
+        # Filter boilerplate text blocks AFTER all blocks (including images) have been ordered
+        if preliminary_blocks: # Only filter if there are any blocks
+            print(f"DEBUG WebAcquisitionService: Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks)} blocks.")
+            preliminary_blocks = self._filter_boilerplate_preliminary_blocks(preliminary_blocks, final_url)
+            print(f"DEBUG WebAcquisitionService: After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks)} blocks remaining.")
+
         return preliminary_blocks, document_metadata_obj, raw_images_list
+
+    def _filter_boilerplate_preliminary_blocks(self, blocks: List[PreliminaryBlock], source_url_for_logging: str) -> List[PreliminaryBlock]:
+        """
+        Filters a list of PreliminaryBlocks to remove common boilerplate content.
+        Operates on text content after initial block creation.
+        """
+        # More comprehensive list of keywords often found in boilerplate footers, headers, navs.
+        # Prioritize multi-word phrases where possible to reduce false positives.
+        BOILERPLATE_KEYWORDS_PHRASES = {
+            # Common Links & Sections
+            "about us", "contact us", "privacy policy", "terms of service", "terms and conditions",
+            "cookie policy", "cookie settings", "do not sell or share my personal information", 
+            "accessibility", "sitemap", "help center", "support", "faq", "careers", "investors", 
+            "newsroom", "press", "blog", "media", "legal", "security",
+            # Actions & Navigation
+            "sign in", "log in", "sign up", "register", "my account", "view cart", "checkout",
+            "search", "home", "products", "services", "solutions", "features", "pricing", "download",
+            # Social Media & Sharing (individual words are tricky, so keep them minimal or use with context)
+            "facebook", "twitter", "linkedin", "instagram", "youtube", "pinterest", "share this",
+            # Copyright & Company Info
+            "all rights reserved", "inc.", "llc", "ltd.", "technologies inc.", 
+            # Common menu items / categories that might be part of a global nav extracted as a single block
+            "our offerings", "gift cards", "global citizenship", "safety", "sustainability",
+            "travel", "reserve", "airports", "cities",
+            # Specific to Uber example but can be generalized
+            "visit help center", "google data policy", "company", "products", "ride", "drive", "deliver", "eat",
+            "uber for business", "uber freight", "english", "location marker" 
+            # Words that often appear in cookie consent / privacy banners if they become a text block
+            "cookies", "privacy", "accept", "decline", "manage settings", "consent"
+        }
+        # Short, standalone boilerplate lines that if a block primarily consists of, it's likely boilerplate.
+        STANDALONE_BOILERPLATE_LINES = {
+            "select language", "choose country", "follow us", "get the app",
+            "download on the app store", "get it on google play",
+            "request a ride" # If it becomes a text block despite button removal
+        }
+
+        MIN_WORDS_FOR_KEYWORD_ANALYSIS = 5 # Don't analyze very short blocks with keyword ratio
+        BOILERPLATE_KEYWORD_RATIO_THRESHOLD = 0.6 # If >60% of words are keywords (for medium blocks)
+        MAX_WORDS_FOR_HIGH_KEYWORD_RATIO_BLOCK = 70 # Increased from 30 to 70
+
+        filtered_blocks: List[PreliminaryBlock] = []
+        for block in blocks:
+            if block.type != "text" or not block.text_content:
+                filtered_blocks.append(block)
+                continue
+
+            text_to_check = block.text_content.lower().strip()
+            
+            # Check for standalone boilerplate lines
+            if text_to_check in STANDALONE_BOILERPLATE_LINES:
+                print(f"DEBUG WebAcquisitionService: Filtering out block (standalone line) from {source_url_for_logging}: '{block.text_content[:100]}...'")
+                continue
+
+            words = text_to_check.split()
+            word_count = len(words)
+
+            if word_count == 0:
+                filtered_blocks.append(block) # Keep empty blocks? Or filter? For now, keep.
+                continue
+
+            # Check for keyword ratio in moderately short blocks
+            if MIN_WORDS_FOR_KEYWORD_ANALYSIS <= word_count <= MAX_WORDS_FOR_HIGH_KEYWORD_RATIO_BLOCK:
+                keyword_hits = 0
+                # Check for multi-word phrases first
+                temp_text_for_phrase_check = " " + text_to_check + " " # Pad for easier phrase matching
+                for phrase in BOILERPLATE_KEYWORDS_PHRASES:
+                    if " " in phrase: # It's a multi-word phrase
+                        if phrase in temp_text_for_phrase_check:
+                             # Count words in phrase, consider overlap carefully if needed, simple count for now
+                            keyword_hits += len(phrase.split()) 
+                
+                # Check for single keywords (those not part of matched phrases yet)
+                # This is a simplified hit count; more advanced would be unique word matches.
+                for word in words:
+                    if word in BOILERPLATE_KEYWORDS_PHRASES: # Check against the set
+                        keyword_hits +=1
+                
+                # Heuristic: if a significant portion of the words are keywords
+                if word_count > 0 and (keyword_hits / word_count) >= BOILERPLATE_KEYWORD_RATIO_THRESHOLD:
+                    print(f"DEBUG WebAcquisitionService: Filtering out block (keyword ratio) from {source_url_for_logging}: '{block.text_content[:100]}...'")
+                    continue
+            
+            # Specific check for the problematic Uber string structure: many terms, one long block.
+            # This targets blocks that are just a long list of terms often found in footers/fat footers.
+            # The example was ~50 words.
+            if 20 < word_count < 100: # If it's a fairly long concatenated block
+                # Renamed and expanded this set for better general applicability
+                AGGREGATED_FOOTER_KEYWORDS = {
+                    # Original Uber specific plus more generic terms often found in aggregated footers
+                    "uber", "visit", "help", "center", "google", "data", "policy", "company", 
+                    "offerings", "newsroom", "investors", "blog", "careers", "gift", "cards", 
+                    "ride", "drive", "deliver", "eat", "business", "freight", "global", 
+                    "citizenship", "safety", "sustainability", "travel", "reserve", "airports", 
+                    "cities", "facebook", "twitter", "youtube", "linkedin", "instagram", "globe", 
+                    "english", "location", "marker", "jersey", "technologies", "inc", "privacy", 
+                    "accessibility", "terms", "about", "contact", "support", "sitemap", "legal", 
+                    "cookies", "security", "press", "media", "copyright", "©", "rights", "reserved",
+                    "select", "country", "region", "language", "all", "share", "information", "personal",
+                    "apps", "download", "app store", "google play", "follow", "us"
+                    # Add common single-word links if they contribute to these long strings
+                }
+                match_count = 0
+                for word in words:
+                    if word in AGGREGATED_FOOTER_KEYWORDS:
+                        match_count += 1
+                # Lowered threshold slightly
+                if (match_count / word_count) > 0.70: # Lowered from 0.75, using more generic keyword set
+                    print(f"DEBUG WebAcquisitionService: Filtering out block (Aggregated Footer Keyword Ratio) from {source_url_for_logging}: '{block.text_content[:100]}...'")
+                    continue
+            
+            filtered_blocks.append(block)
+            
+        return filtered_blocks
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
         start_time = time.time()
@@ -626,8 +791,8 @@ class WebAcquisitionService(BaseService):
                             return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
 
                         content_type = response.headers.get('Content-Type', '').lower()
-                        html_content_str: Optional[str] = None 
-                        pdf_bytes_val: Optional[bytes] = None 
+                        html_content_str: Optional[str] = None
+                        pdf_bytes_val: Optional[bytes] = None
 
                         if 'application/pdf' in content_type:
                             pdf_bytes_val = await response.read()
@@ -699,25 +864,65 @@ class WebAcquisitionService(BaseService):
                 # --- End Routing to PDFAcquisitionService ---
 
             elif html_content_str and final_url_val:
+                # --- Start Trafilatura Integration ---
+                main_content_html_snippet_by_trafilatura: Optional[str] = None
+                is_trafilatura_content_available = False
+                loop = asyncio.get_event_loop()
+                try:
+                    print(f"DEBUG: Attempting main content HTML extraction with Trafilatura for {final_url_val}")
+                    # Use run_in_executor for the synchronous trafilatura call
+                    main_content_html_snippet_by_trafilatura = await loop.run_in_executor(
+                        None, # Default thread pool executor
+                        functools.partial(
+                            trafilatura.extract,
+                            html_content_str,
+                            url=final_url_val,
+                            output_format='xml', # Get structured HTML/XML
+                            include_tables=True,
+                            include_comments=False,
+                            deduplicate=False # Adjust as needed
+                        )
+                    )
+                    if main_content_html_snippet_by_trafilatura and len(main_content_html_snippet_by_trafilatura.strip()) >= 100: # Check if snippet is substantial
+                        print(f"DEBUG: Trafilatura successfully extracted HTML snippet (length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
+                        is_trafilatura_content_available = True
+                    else:
+                        print(f"DEBUG: Trafilatura returned very small or empty snippet (length: {len(main_content_html_snippet_by_trafilatura or '')}). Will use BS4 fallback.")
+                        main_content_html_snippet_by_trafilatura = None # Ensure it's None if not substantial
+                except Exception as e_traf:
+                    print(f"ERROR: Trafilatura extraction failed for {final_url_val}: {e_traf}")
+                    main_content_html_snippet_by_trafilatura = None # Ensure it's None on error
+                # --- End Trafilatura Integration ---
+
+                # Paywall check should still happen on original full HTML
                 soup_for_paywall_check = BeautifulSoup(html_content_str, 'lxml')
                 is_paywalled = False
-                if self._check_domain_in_set(self._get_domain(final_url_val), VERY_STRICT_PAYWALL_DOMAINS):
+                if self._check_domain_in_set(self._get_domain(final_url_val), VERY_STRICT_PAYWALL_DOMAINS): # Use final_url_val
                     is_paywalled = True 
                 else:
                     for selector in PAYWALL_HTML_SELECTORS:
-                        if soup_for_paywall_check.select_one(selector):
+                        if soup_for_paywall_check.select_one(selector): # Use soup_for_paywall_check
                             is_paywalled = True; break
                     if not is_paywalled:
-                        text_lower = html_content_str.lower()
-                        if any(keyword in text_lower for keyword in PAYWALL_KEYWORDS):
+                        text_lower_for_paywall = html_content_str.lower() # Use html_content_str
+                        if any(keyword in text_lower_for_paywall for keyword in PAYWALL_KEYWORDS): # Use text_lower_for_paywall
                             is_paywalled = True
                 
                 if is_paywalled and document_metadata_obj:
                     document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
                     document_metadata_obj.custom_fields["paywall_detected"] = True
+                
+                # Determine what HTML to pass for parsing
+                html_for_parsing: str
+                if is_trafilatura_content_available and main_content_html_snippet_by_trafilatura:
+                    html_for_parsing = main_content_html_snippet_by_trafilatura
+                else:
+                    html_for_parsing = html_content_str # Fallback to full original HTML
 
                 preliminary_blocks_list, document_metadata_obj, raw_images_list = await self._parse_and_structure_html(
-                    html_content=html_content_str,
+                    html_to_parse=html_for_parsing,
+                    is_trafilatura_content=is_trafilatura_content_available, # Pass the flag
+                    full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
                     job_id=job_id,
                     processing_level=web_input.processing_level
@@ -760,4 +965,4 @@ class WebAcquisitionService(BaseService):
                     os.remove(temp_pdf_file_path)
                 except Exception as e_remove:
                     # self.logger.warning(f"Could not remove temporary PDF file {temp_pdf_file_path}: {e_remove}") # Optional logging
-                    pass 
+                    pass

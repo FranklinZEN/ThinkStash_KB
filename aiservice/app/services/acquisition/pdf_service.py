@@ -39,23 +39,19 @@ class PDFAcquisitionService(BaseService):
 
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images: List[RawImageInput] = []
-        document_metadata: Optional[DocumentMetadata] = None 
+        document_metadata: Optional[DocumentMetadata] = None
+        doc: Optional[fitz.Document] = None
+        loop = asyncio.get_event_loop()
 
         if not os.path.exists(pdf_input.file_path):
-            duration = time.time() - start_time
-            # Simpler error return
+            # No duration calculation here as it's an early exit
             return ServiceResult.failure(
-                error_message=f"File not found: {pdf_input.file_path}",
-                # No detailed error model needed here as per new design for simple failures
+                error_message=f"File not found: {pdf_input.file_path}"
             )
-
-        loop = asyncio.get_event_loop()
-        doc: Optional[fitz.Document] = None # Define doc here to ensure it's in scope for finally
 
         try:
             doc = await loop.run_in_executor(None, fitz.open, pdf_input.file_path)
             
-            # Populate DocumentMetadata
             pdf_meta = await loop.run_in_executor(None, getattr, doc, 'metadata')
             creation_dt = None
             modification_dt = None
@@ -85,16 +81,14 @@ class PDFAcquisitionService(BaseService):
                 keywords=pdf_meta.get('keywords').split(' ') if pdf_meta and pdf_meta.get('keywords') else [],
                 creation_date=creation_dt,
                 modification_date=modification_dt,
-                extracted_at=datetime.utcnow(), # Ensure this is set
+                extracted_at=datetime.utcnow(),
                 total_pages=len(doc),
                 language_detected=None,
             )
 
-            # --- Page iteration and content extraction logic ---
             for page_num in range(len(doc)):
                 page: fitz.Page = await loop.run_in_executor(None, doc.load_page, page_num)
                 
-                # Corrected call to page.get_text using functools.partial
                 get_text_dict_sorted = functools.partial(page.get_text, "dict", sort=True)
                 page_text_dict = await loop.run_in_executor(None, get_text_dict_sorted)
 
@@ -111,8 +105,7 @@ class PDFAcquisitionService(BaseService):
                     body_text_style = max(font_styles, key=font_styles.get)
 
                 current_block_idx = 0
-
-                page_specific_prelim_blocks = [] # Accumulate blocks for this page first
+                page_specific_prelim_blocks = []
 
                 for block_dict_item in page_text_dict.get("blocks", []) :
                     if block_dict_item["type"] == 0: # Text block
@@ -155,6 +148,7 @@ class PDFAcquisitionService(BaseService):
                                 block_text_content += " "
                              block_text_content = block_text_content.strip()
                              if not block_text_content: continue
+                        
                         block_bbox = block_dict_item["bbox"] 
                         if span_bboxes_list:
                             min_x0 = min(b[0] for b in span_bboxes_list)
@@ -162,11 +156,13 @@ class PDFAcquisitionService(BaseService):
                             max_x1 = max(b[2] for b in span_bboxes_list)
                             max_y1 = max(b[3] for b in span_bboxes_list)
                             block_bbox = [min_x0, min_y0, max_x1, max_y1]
+                        
                         block_type = "text"
                         prelim_block_specific_fields = {"text_content": block_text_content}
                         if is_heading_candidate and heading_level_candidate is not None:
                             block_type = "heading"
                             prelim_block_specific_fields = {"text_content": block_text_content, "heading_level": heading_level_candidate}
+                        
                         page_specific_prelim_blocks.append(PreliminaryBlock(
                             block_id=f"{job_id}_p{page_num + 1}_b{current_block_idx}", type=block_type,
                             page_number=page_num + 1, bbox=block_bbox, order=-1, 
@@ -174,36 +170,44 @@ class PDFAcquisitionService(BaseService):
                         ))
                         current_block_idx += 1
                     elif block_dict_item["type"] == 1 and pdf_input.processing_level == "full_content": 
+                        # This was 'image' block from get_text('dict'), often less reliable than get_images()
+                        # We rely on get_images() later for robust image extraction.
                         pass 
                 
-                # Refine page_specific_prelim_blocks for list items
                 refined_page_blocks = []
                 for block_to_refine in page_specific_prelim_blocks:
-                    if block_to_refine.type == "text":
-                        lines = block_to_refine.text_content.split('\\n') 
-                        current_refined_parts = [] # Temporary list for parts of this block
+                    if block_to_refine.type == "text" and block_to_refine.text_content:
+                        lines = block_to_refine.text_content.split('\n') 
+                        current_refined_parts = [] 
                         non_list_text_parts = []
-                        list_marker_pattern = re.compile(r"^(\s*(?:[a-zA-Z][.)]|[*•\-]|\d+[.)])\s+)")
-                        is_ordered_list_type = False
+                        list_marker_pattern = re.compile(r"^(?:\s*(?:[a-zA-Z][.)]|[*•\-]|\d+[.)])\s+)")
                         block_had_list_items = False
 
                         for line_idx, line_text in enumerate(lines):
+                            if not isinstance(line_text, str):
+                                non_list_text_parts.append(str(line_text))
+                                continue
+
                             match = list_marker_pattern.match(line_text)
                             if match:
                                 block_had_list_items = True
-                                marker = match.group(1).strip()
-                                item_text = line_text[len(match.group(0)):].strip()
+                                marker_full = match.group(0)
+                                marker_content = marker_full.strip()
+                                item_text = line_text[len(marker_full):].strip()
+                                
                                 if not item_text: 
                                     non_list_text_parts.append(line_text)
                                     continue
                                 
                                 is_ordered_list_type = False 
-                                if marker[-1] == '.' or marker[-1] == ')':
-                                    marker_content = marker[:-1].strip()
-                                    if marker_content.isdigit() or (len(marker_content) == 1 and marker_content.isalpha()):
+                                if marker_content.endswith(('.', ')')):
+                                    check_marker = marker_content[:-1].strip()
+                                    if check_marker.isdigit() or (len(check_marker) == 1 and check_marker.isalpha()):
                                         is_ordered_list_type = True
+                                elif marker_content.isdigit():
+                                    is_ordered_list_type = True
                                 
-                                if non_list_text_parts: 
+                                if non_list_text_parts:
                                     current_refined_parts.append(PreliminaryBlock(
                                         block_id=f"{block_to_refine.block_id}_txt_pre_li{line_idx}", type="text",
                                         text_content="\n".join(non_list_text_parts).strip(),
@@ -220,90 +224,131 @@ class PDFAcquisitionService(BaseService):
                                 non_list_text_parts.append(line_text)
                         
                         if block_had_list_items:
-                            if non_list_text_parts: # Any remaining text after the last list item
+                            if non_list_text_parts:
                                 current_refined_parts.append(PreliminaryBlock(
                                     block_id=f"{block_to_refine.block_id}_txt_post_li", type="text",
                                     text_content="\n".join(non_list_text_parts).strip(),
                                     page_number=block_to_refine.page_number, bbox=block_to_refine.bbox, order=-1
                                 ))
-                            refined_page_blocks.extend(current_refined_parts) # Add all processed parts
+                            refined_page_blocks.extend(current_refined_parts) 
                         else:
-                            # If no list items were found, add the original block as is.
-                            # The non_list_text_parts would contain the entire block's content if no lists were found,
-                            # but we prefer adding the original block_to_refine to preserve its original ID and any other attributes.
                             refined_page_blocks.append(block_to_refine)
-                            
-                    else: # If block_to_refine is not of type "text" (e.g., already a heading), add it as is.
+                    else: 
                         refined_page_blocks.append(block_to_refine)
-                preliminary_blocks.extend(refined_page_blocks) # Add processed blocks for this page to the main list
+                preliminary_blocks.extend(refined_page_blocks)
 
-                # Image Extraction (ensure block_id for image placeholders is unique)
                 if pdf_input.processing_level == "full_content":
                     image_list_infos = await loop.run_in_executor(None, page.get_images, True)
                     for img_idx, img_info in enumerate(image_list_infos):
                         xref = img_info[0]
                         try:
                             base_image_dict = await loop.run_in_executor(None, doc.extract_image, xref)
-                            if not base_image_dict: continue
-                            image_bytes = base_image_dict["image"]
-                            img_extension = base_image_dict["ext"]
+                            if not base_image_dict: 
+                                continue
+                            
+                            image_bytes = base_image_dict.get("image")
+                            img_extension = base_image_dict.get("ext")
+
+                            if not image_bytes or not img_extension:
+                                continue
+
                             raw_image_id = f"img_{job_id}_p{page_num + 1}_xref{xref}_idx{img_idx}"
+                            mime_type = f"image/{img_extension.lower()}"
+                            if img_extension.lower() == 'jpx': mime_type = 'image/jp2'
+
+                            raw_img_obj = RawImageInput(
+                                image_id=raw_image_id,
+                                image_bytes=image_bytes,
+                                source_document_id=job_id, 
+                                original_filename=pdf_filename,
+                                page_number=page_num + 1,
+                                bbox=None, 
+                                mime_type=mime_type,
+                                original_source_identifier_for_gcs_path=pdf_input.file_path,
+                                source_type_for_gcs_path="pdf",
+                                job_id_for_gcs_path=job_id
+                            )
+                            raw_images.append(raw_img_obj)
+
+                            placeholder_block_id = f"{job_id}_p{page_num + 1}_imgplaceholder_{img_idx}"
                             img_bbox_on_page = None
                             try:
-                                bbox_or_rects = await loop.run_in_executor(None, page.get_image_bbox, img_info)
-                                if isinstance(bbox_or_rects, list) and len(bbox_or_rects) > 0 and isinstance(bbox_or_rects[0], fitz.Rect):
-                                    img_bbox_on_page = list(bbox_or_rects[0])
-                                elif isinstance(bbox_or_rects, fitz.Rect):
-                                    img_bbox_on_page = list(bbox_or_rects)
-                            except AttributeError as e_bbox_attr: 
-                                print(f"PDFAcquisitionService: Info - page.get_image_bbox attribute error for image xref {xref} on page {page_num+1}: {e_bbox_attr}")
-                            except Exception as e_bbox: 
-                                print(f"PDFAcquisitionService: Warning - Error getting bbox for image xref {xref} on page {page_num+1}: {e_bbox}")
-                            raw_images.append(RawImageInput(
-                                image_id=raw_image_id, image_bytes=image_bytes, source_url=None,
-                                original_filename=f"image_p{page_num+1}_{xref}.{img_extension}",
-                                source_document_id=job_id, page_number=page_num + 1, bbox=img_bbox_on_page,
-                                mime_type=f"image/{img_extension}", alt_text=None, caption=None,
-                                original_source_identifier_for_gcs_path=pdf_input.file_path,
-                                source_type_for_gcs_path="pdf", job_id_for_gcs_path=job_id
-                            ))
-                            preliminary_blocks.append(PreliminaryBlock( # Add image placeholder to the main list directly
-                                block_id=f"{job_id}_p{page_num + 1}_img{img_idx}", type="image_placeholder", # Uses img_idx now
-                                image_id_ref=raw_image_id, page_number=page_num + 1, bbox=img_bbox_on_page,
-                                order=-1
-                            ))
-                        except Exception as e_img_extract:
-                            print(f"PDFAcquisitionService: Error extracting/processing image xref {xref} on page {page_num+1}: {e_img_extract}")            
-            # --- End of Page Iteration ---
+                                img_bboxes_on_page = await loop.run_in_executor(None, page.get_image_bboxes, img_info, transform=False)
+                                if img_bboxes_on_page:
+                                    img_bbox_on_page = list(img_bboxes_on_page[0])
+                            except Exception as e_bbox:
+                                print(f"PDFAcquisitionService: INFO - Could not get bbox for image xref {xref} on page {page_num + 1}: {e_bbox}")
 
-            # Sort all PreliminaryBlocks from all pages and assign final order
-            def sort_key(block: PreliminaryBlock):
-                y_coord = block.bbox[1] if block.bbox and len(block.bbox) > 1 else 0
-                x_coord = block.bbox[0] if block.bbox and len(block.bbox) > 0 else 0
-                return (block.page_number or 0, y_coord, x_coord)
+                            preliminary_blocks.append(PreliminaryBlock(
+                                block_id=placeholder_block_id,
+                                type="image_placeholder",
+                                image_id_ref=raw_image_id,
+                                page_number=page_num + 1,
+                                bbox=img_bbox_on_page,
+                                order=-1,
+                                custom_attributes={"original_img_xref": xref}
+                            ))
+                        except Exception as e_img:
+                            print(f"PDFAcquisitionService: Error processing image xref {xref} on page {page_num + 1}: {e_img}")
+                            continue
             
+            def sort_key(block: PreliminaryBlock):
+                page_val = block.page_number if block.page_number is not None else float('inf')
+                y0_val = float('inf')
+                if block.bbox and isinstance(block.bbox, (list, tuple)) and len(block.bbox) >= 2:
+                    y0_val = block.bbox[1] 
+                x0_val = float('inf')
+                if block.bbox and isinstance(block.bbox, (list, tuple)) and len(block.bbox) >= 1:
+                    x0_val = block.bbox[0]
+                return (page_val, y0_val, x0_val)
+
             preliminary_blocks.sort(key=sort_key)
             for i, block in enumerate(preliminary_blocks):
                 block.order = i
             
-            return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
-
-        except Exception as e:
-            # Ensure doc is closed if opened and an error occurs after opening
-            # This is complex because 'doc' might not be assigned if fitz.open itself fails.
-            # A more robust solution would be a try/finally within the executor for fitz.open and close.
-            # For now, this is a general catch.
-            print(f"PDFAcquisitionService: Error processing PDF '{pdf_filename}': {str(e)}")
-            # Attempt to close doc if it exists (and fitz.open was successful)
-            # This might still fail if doc is not in a closable state or fitz.open itself failed.
-            if 'doc' in locals() and doc and hasattr(doc, 'close') and not doc.is_closed:
-                 try:
-                     await loop.run_in_executor(None, doc.close)
-                     print(f"PDFAcquisitionService: Closed document '{pdf_filename}' after exception.")
-                 except Exception as e_close:
-                     print(f"PDFAcquisitionService: Error closing document '{pdf_filename}' after exception: {e_close}")
+            if document_metadata is None: 
+                print("PDFAcquisitionService: ERROR - DocumentMetadata was not initialized!")
+                document_metadata = DocumentMetadata(
+                    document_id=job_id, 
+                    source_identifier=pdf_input.file_path, 
+                    source_type="pdf",
+                    title=pdf_filename,
+                    extracted_at=datetime.utcnow(),
+                    total_pages=len(doc) if doc else 0
+                )
             
             duration = time.time() - start_time
+            print(f"PDFAcquisitionService: Completed for {pdf_filename} in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}") # Keep this for success logging
+            return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
+
+        except FileNotFoundError:
+            # duration not applicable as it's an early check or OS error
+            return ServiceResult.failure(
+                error_message=f"File not found: {pdf_input.file_path}"
+            )
+        except fitz.fitz.TraitError as e_fitz_trait:
+            duration = time.time() - start_time
+            error_msg = f"PyMuPDF TraitError processing PDF '{pdf_filename}': {str(e_fitz_trait)}. Document might be malformed or password-protected."
+            print(f"PDFAcquisitionService: {error_msg}")
+            return ServiceResult.failure(error_message=error_msg)
+        except fitz.fitz.FileDataError as e_fitz_data:
+            duration = time.time() - start_time
+            error_msg = f"PyMuPDF FileDataError processing PDF '{pdf_filename}': {str(e_fitz_data)}. Document might be corrupted, empty, or not a valid PDF."
+            print(f"PDFAcquisitionService: {error_msg}")
+            return ServiceResult.failure(error_message=error_msg)
+        except RuntimeError as e_runtime: 
+            duration = time.time() - start_time
+            error_msg = f"Runtime error processing PDF '{pdf_filename}': {str(e_runtime)}. Check if PDF is password-protected."
+            if "password" in str(e_runtime).lower():
+                 error_msg = f"PDF '{pdf_filename}' is password-protected and cannot be opened."
+            print(f"PDFAcquisitionService: {error_msg}")
+            return ServiceResult.failure(error_message=error_msg)
+        except Exception as e:
+            duration = time.time() - start_time
+            error_msg = f"Unexpected error processing PDF '{pdf_filename}': {str(e)}"
+            print(f"PDFAcquisitionService: {error_msg}") 
+            import traceback
+            traceback.print_exc()
             return ServiceResult.failure(
                 error_message=f"Error parsing PDF '{pdf_filename}': {str(e)}",
             )
@@ -311,10 +356,9 @@ class PDFAcquisitionService(BaseService):
             if doc:
                 try:
                     await loop.run_in_executor(None, doc.close)
-                    print(f"PDFAcquisitionService: Closed document '{pdf_filename}' in finally block.")
-                except Exception as e_close_final:
-                    print(f"PDFAcquisitionService: Error closing document '{pdf_filename}' in finally block: {e_close_final}")
-        
+                except Exception as e_close:
+                     print(f"PDFAcquisitionService: Error closing document '{pdf_filename}' after processing: {e_close}")
+
         # The old way of constructing PDFAcquisitionServiceOutput and returning ServiceResult
         # is replaced by direct construction of the Tuple for success, or simple failure message.
         # The detailed status strings like "success_text_only" are less critical now,
