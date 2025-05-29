@@ -100,9 +100,13 @@ class ParallelOrchestrator(BaseService):
         raw_images_for_processing: List[RawImageInput] = []
 
         # 1. Routing
+        # Determine initial routing based on the primary identifier (URL or file path)
+        # The source_type in orchestrator_input can be a hint or None
+        initial_source_type_for_routing = orchestrator_input.source_type or RoutingService.get_source_type(orchestrator_input.source_identifier)
+        
         routing_input_obj = RoutingInput(
             source_identifier=orchestrator_input.source_identifier,
-            source_type=orchestrator_input.source_type
+            source_type=initial_source_type_for_routing # Use the determined/hinted type
         )
         routing_result = await self.routing_service.execute(routing_input_obj)
 
@@ -156,37 +160,86 @@ class ParallelOrchestrator(BaseService):
             final_status_code = f"failure_{acquisition_service_output_data.status.replace('error_', '')}" # e.g. failure_paywall
             if acquisition_service_output_data.status == "error_unsupported_content_type": final_status_code = "unsupported_type"
 
-        else: # Acquisition was successful or returned a non-error status like pdf_content_detected
+        # PDF Redirection Logic (New)
+        elif isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput) and \
+             acquisition_service_output_data.status == "pdf_content_detected" and \
+             acquisition_service_output_data.pdf_content_bytes:
+            
+            print(f"Orchestrator: PDF content detected from URL {acquisition_service_output_data.final_url}. Redirecting to PDFAcquisitionService.")
+            # Original URL/final URL from web acquisition becomes the identifier for PDF processing
+            pdf_identifier = acquisition_service_output_data.final_url or orchestrator_input.source_identifier
+
+            pdf_acq_input_redirect = PDFAcquisitionServiceInput(
+                file_path=pdf_identifier, # Use URL as identifier, bytes are primary
+                pdf_bytes=acquisition_service_output_data.pdf_content_bytes,
+                processing_level=orchestrator_input.processing_level,
+                job_id=job_id,
+                # Pass original URL to PDFAcquisitionService if needed for context or ID generation.
+                # This might require adding a field to PDFAcquisitionServiceInput if not already present.
+                # For now, file_path (which is the URL here) serves as the main identifier.
+            )
+            # Overwrite acq_result and acquisition_service_output_data with PDF service results
+            acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input_redirect)
+            determined_service_name = "PDFAcquisitionService (redirected)" # Update for logging
+
+            if acq_result.status == 'error' or not acq_result.data:
+                error_message = f"{determined_service_name} failed after redirect: {acq_result.error_message or 'Unknown error'}"
+                final_status_code = "failure_acquisition_pdf_redirect"
+                acquisition_service_output_data = None # Ensure it's None so subsequent steps don't use stale web data
+            elif acq_result.data.status.startswith("error"): # Check status within the PDF service output data model
+                error_message = f"{determined_service_name} issue after redirect: {acq_result.data.status} - {acq_result.data.error_message or 'No specific message'}"
+                final_status_code = f"failure_acquisition_pdf_redirect_{acq_result.data.status.replace('error_', '')}"
+                acquisition_service_output_data = None
+            else:
+                acquisition_service_output_data = acq_result.data # Successfully processed by PDF service
+                # Now, proceed as if it was a PDF from the start
+                page_title = getattr(acquisition_service_output_data, 'page_title', page_title) or page_title
+                extracted_text = getattr(acquisition_service_output_data, 'extracted_text', None)
+                raw_images_for_processing = self._map_to_raw_image_input(
+                    acquisition_service_output_data, 
+                    job_id, 
+                    pdf_identifier, # Use the URL as the source identifier for GCS path
+                    'pdf' # Source type is now effectively PDF
+                )
+                final_status_code = "success" # Tentative success after PDF redirect and processing
+
+        # Original success path for non-redirected acquisition services
+        elif acquisition_service_output_data: # Ensure it's not None from a failed PDF redirect
             page_title = getattr(acquisition_service_output_data, 'page_title', page_title) or page_title
             final_url = getattr(acquisition_service_output_data, 'final_url', final_url) or final_url # For web
             extracted_text = getattr(acquisition_service_output_data, 'extracted_text', None)
             
+            # Determine source_type for GCS path based on the service that successfully ran
+            source_type_for_gcs = initial_source_type_for_routing
+            if isinstance(acquisition_service_output_data, PDFAcquisitionServiceOutput):
+                source_type_for_gcs = 'pdf'
+            elif isinstance(acquisition_service_output_data, FileAcquisitionServiceOutput):
+                # Assuming FileAcquisitionServiceOutput might have a more specific file_type if available
+                source_type_for_gcs = getattr(acquisition_service_output_data, 'file_type', initial_source_type_for_routing)
+            elif isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput):
+                source_type_for_gcs = 'url' # Web content is type 'url' for GCS path
+
             raw_images_for_processing = self._map_to_raw_image_input(
                 acquisition_service_output_data, 
                 job_id, 
-                orchestrator_input.source_identifier, 
-                orchestrator_input.source_type
+                orchestrator_input.source_identifier, # Original identifier for GCS path consistency
+                source_type_for_gcs
             )
+            final_status_code = "success" # Tentative success after acquisition
+        # This else should ideally not be reached if all prior conditions (error, PDF redirect, success) are handled.
+        # It implies acquisition_service_output_data is None without a prior error status being set.
+        else: 
+            if not error_message: # If no error message was set by previous specific checks
+                 error_message = f"Acquisition resulted in no data from {determined_service_name}."
+            final_status_code = "failure_acquisition_no_data"
 
-            if isinstance(acquisition_service_output_data, WebAcquisitionServiceOutput) and \
-               acquisition_service_output_data.status == "pdf_content_detected" and \
-               acquisition_service_output_data.pdf_content_bytes:
-                # TODO: This PDF content from web needs to be routed to PDFAcquisitionService.
-                # This scenario requires either the router to be smarter or a loop here.
-                # For now, marking as unhandled, similar to placeholder.
-                if not extracted_text: extracted_text = "[PDF Content Extracted via Web - Requires PDF Processing Path]"
-                final_status_code = "success_pdf_redirect_unhandled" 
-                # No images from this path yet, PDFAcquisitionService would extract them.
-                raw_images_for_processing = [] 
-            else:
-                 final_status_code = "success" # Tentative success after acquisition
-
-            print(f"Orchestrator.process: Number of raw images from acquisition for processing: {len(raw_images_for_processing)}") # DEBUG PRINT
-            for i, raw_img in enumerate(raw_images_for_processing):
-                print(f"Orchestrator.process: Raw image {i+1} for IPS: ID={raw_img.image_id}, HasBytes={bool(raw_img.image_bytes)}, URL={raw_img.source_url}")
+        # Debug print for raw images before further processing (moved from inside the if/else block)
+        print(f"Orchestrator.process: Number of raw images for processing (post-acquisition/redirect): {len(raw_images_for_processing)}")
+        for i, raw_img in enumerate(raw_images_for_processing):
+            print(f"Orchestrator.process: Raw image {i+1} for IPS: ID={raw_img.image_id}, HasBytes={bool(raw_img.image_bytes)}, URL={raw_img.source_url}")
 
         # If acquisition failed or resulted in a state that stops processing
-        if final_status_code.startswith("failure") or final_status_code == "unsupported_type" or final_status_code == "success_pdf_redirect_unhandled":
+        if final_status_code.startswith("failure") or final_status_code == "unsupported_type":
             if extracted_text and not final_content_blocks : final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
             output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url)
             if final_status_code.startswith("failure"):

@@ -168,23 +168,41 @@ class FileAcquisitionService(BaseService):
                     error_message="File not found", source_content_type_processed=file_type).model_dump()
             )
 
-        result_data: Dict[str, Any] = {"text": None, "images": [], "error": "Unknown processing error"}
+        result_data: Dict[str, Any] = {"text": None, "images": [], "error": None} # Initialize error to None
+        current_status = "success" # Assume success initially
+
         if file_type == "docx":
             result_data = await self._process_docx(file_path, job_id, file_input.processing_level)
         elif file_type == "md":
             result_data = await self._process_markdown(file_path, job_id, file_input.processing_level)
         elif file_type == "txt":
             result_data = await self._process_txt(file_path)
+        elif file_type.startswith("file_ext_"):
+            print(f"FileAcquisitionService: Attempting generic text extraction for unknown extension type: {file_type}")
+            # Attempt to process as a text file as a fallback for unknown extensions
+            result_data = await self._process_txt(file_path)
+            if result_data["error"]:
+                # If _process_txt failed, it might be a binary or truly unreadable file
+                result_data["error"] = f"Failed generic text extraction for {file_type}: {result_data['error']}"
+                current_status = "error_parsing_generic_file" # More specific error status
+            elif not result_data["text"]:
+                result_data["error"] = f"Generic text extraction yielded no content for {file_type}. File might be binary or empty."
+                current_status = "success_empty_generic_extraction" # Status indicates an attempt but no text found
+            # If text was found, status remains "success" (or could be a specific success like "success_generic_text")
         else:
-            result_data["error"] = f"Unsupported file type: {file_type}"
+            result_data["error"] = f"Unsupported file type explicitly routed: {file_type}" # Should ideally be caught by RoutingService first
             current_status = "error_unsupported_type"
 
-        current_status = "success" if result_data["error"] is None else "error_parsing_file"
-        if result_data["error"] and current_status != "error_unsupported_type": # Don't override unsupported type error
-             current_status = "error_parsing_file"
-        elif result_data["error"] is None and not result_data["text"] and not result_data["images"]:
-            current_status = "error_parsing_file" # No content extracted successfully
-            result_data["error"] = "No text or images extracted from file."
+        # Update status based on the outcome of processing functions
+        if result_data.get("error"):
+            # If an error was set by a processing function, current_status might already be set (e.g. for generic files)
+            # Only override if current_status is still "success"
+            if current_status == "success":
+                current_status = "error_parsing_file"
+        elif not result_data.get("text") and not result_data.get("images") and current_status == "success":
+            # If no error, but also no content and status is still success (e.g. for known types like an empty docx)
+            current_status = "success_empty_content" # More specific success status
+            result_data["error"] = "No text or images extracted from file (file might be empty or content not extractable by parser)."
         
         duration = time.time() - start_time
         output = FileAcquisitionServiceOutput(
