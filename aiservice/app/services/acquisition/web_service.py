@@ -8,13 +8,18 @@ from urllib.parse import urljoin, urlparse
 import re
 import os
 import uuid
-from typing import Type, Dict, Optional, Any, List, Union, Set
+from typing import Type, Dict, Optional, Any, List, Union, Set, Tuple
 import functools
 import json
+from datetime import datetime
+import tempfile # Added for temporary file handling
 
 from pydantic import BaseModel, Field, HttpUrl
 
 from aiservice.app.services.base import BaseService, ServiceResult
+from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
+# Import PDFAcquisitionService and its input model
+from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput
 
 # --- Pydantic Models for WebAcquisitionService ---
 
@@ -22,28 +27,6 @@ class WebAcquisitionServiceInput(BaseModel):
     url: str = Field(..., description="The URL to fetch and process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images. 'full_content' enables image extraction.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking or unique ID generation.")
-
-class ProcessedWebImage(BaseModel):
-    image_id: str  # e.g., "WEB_IMG_1"
-    image_url: HttpUrl
-    alt_text: Optional[str] = None
-    caption: Optional[str] = None
-    source_scope: Optional[str] = None # "main_content" or "full_page_heuristic"
-    context_before: Optional[str] = None
-    context_after: Optional[str] = None
-    # Potential future fields: width, height, mime_type if easily available
-
-class WebAcquisitionServiceOutput(BaseModel):
-    status: str = Field(..., examples=["success", "pdf_content_detected", "error_fetch", "error_parsing", "error_paywall", "error_unsupported_content_type", "error_invalid_url"])
-    original_url: str
-    final_url: Optional[str] = None
-    page_title: Optional[str] = None
-    extracted_text: Optional[str] = None
-    images: Optional[List[ProcessedWebImage]] = Field(default_factory=list)
-    pdf_content_bytes: Optional[bytes] = None
-    is_paywalled: Optional[bool] = False
-    error_message: Optional[str] = None
-    processing_duration_seconds: Optional[float] = None
 
 # --- Configuration Data (adapted from WebContentFetcherTool) ---
 UNSUPPORTED_URL_TYPE_DOMAINS: Set[str] = {
@@ -85,10 +68,13 @@ PAYWALL_HTML_SELECTORS: List[str] = [
     "[data-testid*='paywall']", "[class*='tp-container']"
 ]
 
+# PDF processing library (PyMuPDF) - fitz import is no longer needed here if _parse_pdf_content_to_preliminary_blocks is removed
+# import fitz # PyMuPDF # This can be removed if not used elsewhere in this file.
+
 class WebAcquisitionService(BaseService):
     """
     Asynchronous service to fetch, parse, and extract content from web URLs.
-    Adapts logic from V2.4 WebContentFetcherTool and WebURLContentAcquisitionAgent.
+    Outputs PreliminaryBlock, DocumentMetadata, and RawImageInput.
     """
 
     def __init__(self, settings: Optional[Any] = None):
@@ -110,49 +96,50 @@ class WebAcquisitionService(BaseService):
                 return True
         return False
 
-    async def _extract_images_from_html(self, html_content_str: str, base_url: str, job_id: Optional[str]) -> List[ProcessedWebImage]:
+    async def _extract_images_from_html(self, 
+                                        html_content_str: str, 
+                                        base_url: str, 
+                                        job_id: Optional[str],
+                                        original_source_identifier_for_gcs_path: str,
+                                        source_type_for_gcs_path: str
+                                        ) -> List[RawImageInput]:
         """
-        Extracts image URLs from HTML content using various strategies.
-        Enhanced with more robust filtering.
+        Extracts image URLs and metadata from HTML content, creating RawImageInput objects.
+        Does NOT download image bytes.
         """
-        images: List[ProcessedWebImage] = []
+        raw_images: List[RawImageInput] = []
         processed_urls: Set[str] = set()
         soup = BeautifulSoup(html_content_str, 'lxml')
-        image_counter = 0
+        image_counter = 0 # Used for generating image_id if job_id is missing
 
-        MIN_DIMENSION = 50  # Minimum width/height for an image to be considered relevant
-        MIN_AREA = 5000 # Increased min area slightly (e.g. > 70x70)
-        MAX_ASPECT_RATIO_DEVIATION = 4.0 
+        MIN_DIMENSION = 50
+        MIN_AREA = 5000
+        MAX_ASPECT_RATIO_DEVIATION = 4.0
 
         IRRELEVANT_ALT_STRINGS_EXACT = [
             "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
-            "pinterest", "pinterest engineering", "pinterest engineering blog", "walmart global tech blog", # Added specific
+            "pinterest", "pinterest engineering", "pinterest engineering blog", "walmart global tech blog",
             "user", "author", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
-            "figure", "image", "photo", "illustration", "diagram" # Generic terms if alone
+            "figure", "image", "photo", "illustration", "diagram"
         ]
         IRRELEVANT_SUBSTRINGS_IN_ALT = [
             "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
-            "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo" # Added more specific and common phrases
+            "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo"
         ]
         IRRELEVANT_URL_SEGMENTS = [
             "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
             "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
             "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
             "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
-            "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com", "blogger.googleusercontent.com/img/b" # Added more
+            "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com", "blogger.googleusercontent.com/img/b"
         ]
         ALLOWED_CONTENT_PATH_INDICATORS = [ 
             "/content/", "/media/", "/wp-content/uploads/", "/uploads/", "/images/", "/image/",
-            "/wp-content/uploads", "/files/", "/assets/", "/_posts/", "/posts/", "/articles/", "/article/" # Added more
+            "/wp-content/uploads", "/files/", "/assets/", "/_posts/", "/posts/", "/articles/", "/article/"
         ]
 
-        def _create_image_id(index: int) -> str:
-            job_prefix = f"{job_id}_" if job_id else ""
-            # Fallback to hashing part of URL if no job_id and index is not enough for global uniqueness
-            # This part might need access to the image URL itself if we want more unique IDs without job_id
-            # For now, using a simpler counter if no job_id
-            unique_part = str(index + 1)
-            return f"WEB_IMG_{job_prefix}{unique_part}"
+        # Consistent image_id generation
+        doc_id_prefix = hashlib.md5(original_source_identifier_for_gcs_path.encode()).hexdigest()[:8]
 
         # 1. Standard <img> tags
         for idx, img_tag in enumerate(soup.find_all('img')):
@@ -164,616 +151,613 @@ class WebAcquisitionService(BaseService):
                 continue
 
             try:
-                abs_img_url = urljoin(base_url, str(src).strip())
-                if abs_img_url in processed_urls:
+                abs_img_url_str = urljoin(base_url, str(src).strip())
+                if abs_img_url_str in processed_urls:
                     continue
 
-                # --- Start Filtering Logic (Enhanced) ---
-                abs_img_url_lower = abs_img_url.lower()
-
-                # Filter by URL segments
+                # --- Filtering Logic (Enhanced, from existing code) ---
+                abs_img_url_lower = abs_img_url_str.lower()
                 is_url_potentially_irrelevant = any(segment in abs_img_url_lower for segment in IRRELEVANT_URL_SEGMENTS)
                 is_url_explicitly_content = any(indicator in abs_img_url_lower for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
-                
                 if is_url_potentially_irrelevant and not is_url_explicitly_content:
                     continue
 
                 alt_text_raw = img_tag.get('alt', '').strip()
                 alt_text_lower = alt_text_raw.lower()
-
                 if alt_text_lower in IRRELEVANT_ALT_STRINGS_EXACT:
                     continue
-                
-                is_irrelevant_substring = False
-                for substring in IRRELEVANT_SUBSTRINGS_IN_ALT:
-                    if substring in alt_text_lower:
-                        is_irrelevant_substring = True
-                        break
+                is_irrelevant_substring = any(substring in alt_text_lower for substring in IRRELEVANT_SUBSTRINGS_IN_ALT)
                 if is_irrelevant_substring:
                     continue
                 
-                # Dimension and Aspect Ratio Filtering
                 width_str = img_tag.get('width')
                 height_str = img_tag.get('height')
-                width = None
-                height = None
+                width = int(width_str.replace('px','')) if width_str and width_str.replace('px','').isdigit() else None
+                height = int(height_str.replace('px','')) if height_str and height_str.replace('px','').isdigit() else None
 
-                if width_str and width_str.replace('px','').isdigit():
-                    width = int(width_str.replace('px',''))
-                if height_str and height_str.replace('px','').isdigit():
-                    height = int(height_str.replace('px',''))
-
-                if width is not None and width < MIN_DIMENSION:
-                    continue
-                if height is not None and height < MIN_DIMENSION:
-                    continue
-                
+                if width is not None and width < MIN_DIMENSION: continue
+                if height is not None and height < MIN_DIMENSION: continue
                 if width is not None and height is not None:
-                    if width * height < MIN_AREA:
-                        continue
-                    if height > 0 and (width / height > MAX_ASPECT_RATIO_DEVIATION):
-                        continue
-                    if width > 0 and (height / width > MAX_ASPECT_RATIO_DEVIATION):
-                        continue
+                    if width * height < MIN_AREA: continue
+                    if height > 0 and (width / height > MAX_ASPECT_RATIO_DEVIATION): continue
+                    if width > 0 and (height / width > MAX_ASPECT_RATIO_DEVIATION): continue
                 # --- End Filtering Logic ---
 
-                validated_url = HttpUrl(abs_img_url)
-                processed_urls.add(abs_img_url)
+                validated_url = HttpUrl(abs_img_url_str) # Validate URL
+                processed_urls.add(abs_img_url_str)
                 image_counter += 1
                 
-                alt_text = alt_text_raw or None # Use original case for storage, None if empty
+                image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}"
+
+                alt_text = alt_text_raw or None
                 caption_text: Optional[str] = None
                 figure_parent = img_tag.find_parent('figure')
-                context_element = figure_parent if figure_parent else img_tag
-
                 if figure_parent and isinstance(figure_parent, Tag):
                     figcaption = figure_parent.find('figcaption')
                     if figcaption and isinstance(figcaption, Tag): caption_text = figcaption.get_text(strip=True)
-
                 if not caption_text:
                     title_attr = img_tag.get('title','').strip()
                     if title_attr: caption_text = title_attr
-                    elif alt_text and len(alt_text.split()) > 3: caption_text = alt_text
+                    # Removed using alt_text as caption if long, as it's often redundant.
 
-                images.append(ProcessedWebImage(
-                    image_id=_create_image_id(image_counter),
-                    image_url=validated_url,
+                raw_images.append(RawImageInput(
+                    image_id=image_id,
+                    image_bytes=None, # Bytes are not downloaded by acquisition service
+                    source_url=str(validated_url),
+                    original_filename=os.path.basename(urlparse(str(validated_url)).path) or f"image_{image_counter}.png", # Best guess
+                    source_document_id=original_source_identifier_for_gcs_path, # e.g., final_url
+                    page_number=None, # Not applicable for web pages in this context
+                    bbox=None, # Not applicable from typical web <img> tags
+                    mime_type=None, # Could try to infer from URL extension, but often unreliable
                     alt_text=alt_text,
                     caption=caption_text,
-                    source_scope="img_tag",
-                    context_before=await self._get_contextual_text(context_element, "before"),
-                    context_after=await self._get_contextual_text(context_element, "after")
+                    original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
+                    source_type_for_gcs_path=source_type_for_gcs_path, # "url"
+                    job_id_for_gcs_path=job_id if job_id else "unknown_job"
                 ))
             except ValueError: # Pydantic validation error for HttpUrl
                 continue
-            except Exception as e:
-                continue
-
-        # 2. Meta tags (og:image, twitter:image)
-        meta_tags_selectors = {
-            'og:image': 'meta[property="og:image"]',
-            'twitter:image': 'meta[name="twitter:image"]',
-            'twitter:image:src': 'meta[name="twitter:image:src"]',
-            'og:image:secure_url': 'meta[property="og:image:secure_url"]',
-        }
-        for key, selector in meta_tags_selectors.items():
-            for meta_tag in soup.select(selector):
-                if not isinstance(meta_tag, Tag): continue
-                content = meta_tag.get('content')
-                if content and str(content).strip() and not str(content).startswith('data:image'):
-                    try:
-                        abs_meta_url = urljoin(base_url, str(content).strip())
-                        if abs_meta_url in processed_urls:
-                            continue
-                        validated_url = HttpUrl(abs_meta_url)
-                        processed_urls.add(abs_meta_url)
-                        image_counter += 1
-                        # Try to get alt/caption from related meta tags if they exist
-                        og_alt = soup.find('meta', property='og:image:alt')
-                        alt_text_meta = og_alt['content'] if og_alt and isinstance(og_alt, Tag) and og_alt.get('content') else None
-
-                        images.append(ProcessedWebImage(
-                            image_id=_create_image_id(image_counter),
-                            image_url=validated_url,
-                            alt_text=alt_text_meta,
-                            caption=f"Image from meta tag ({key})",
-                            source_scope="meta_tag"
-                        ))
-                    except ValueError:
-                        continue
-                    except Exception as e:
-                        continue
-
-        # 3. JSON-LD scripts
-        for script_tag in soup.find_all('script', type='application/ld+json'):
-            if not isinstance(script_tag, Tag): continue
-            try:
-                json_ld_content = json.loads(script_tag.string if script_tag.string else "{}")
-                if isinstance(json_ld_content, list):
-                    for item in json_ld_content:
-                        if isinstance(item, dict) and item.get("@type") == "ImageObject" and item.get("contentUrl"):
-                            img_url_json = item["contentUrl"]
-                            abs_json_img_url = urljoin(base_url, str(img_url_json).strip())
-                            if abs_json_img_url in processed_urls:
-                                continue
-                            validated_url = HttpUrl(abs_json_img_url)
-                            processed_urls.add(abs_json_img_url)
-                            image_counter += 1
-                            images.append(ProcessedWebImage(
-                                image_id=_create_image_id(image_counter),
-                                image_url=validated_url,
-                                alt_text=item.get("caption") or item.get("name"),
-                                caption=item.get("description") or "Image from JSON-LD",
-                                source_scope="json_ld"
-                            ))
-                elif isinstance(json_ld_content, dict):
-                    if json_ld_content.get("@type") == "ImageObject" and json_ld_content.get("contentUrl"):
-                        img_url_json = json_ld_content["contentUrl"]
-                        abs_json_img_url = urljoin(base_url, str(img_url_json).strip())
-                        if abs_json_img_url not in processed_urls:
-                            validated_url = HttpUrl(abs_json_img_url)
-                            processed_urls.add(abs_json_img_url)
-                            image_counter += 1
-                            images.append(ProcessedWebImage(
-                                image_id=_create_image_id(image_counter),
-                                image_url=validated_url,
-                                alt_text=json_ld_content.get("caption") or json_ld_content.get("name"),
-                                caption=json_ld_content.get("description") or "Image from JSON-LD",
-                                source_scope="json_ld"
-                            ))
-                    elif "image" in json_ld_content: # Common pattern for articles, etc.
-                        image_field = json_ld_content["image"]
-                        potential_urls = []
-                        if isinstance(image_field, str): potential_urls.append(image_field)
-                        elif isinstance(image_field, list):
-                            for item in image_field:
-                                if isinstance(item, str): potential_urls.append(item)
-                                elif isinstance(item, dict) and item.get("url"): potential_urls.append(item["url"])
-                        elif isinstance(image_field, dict) and image_field.get("url"):
-                            potential_urls.append(image_field["url"])
-                        
-                        for img_url_item in potential_urls:
-                            abs_json_img_url = urljoin(base_url, str(img_url_item).strip())
-                            if abs_json_img_url in processed_urls: continue
-                            try:
-                                validated_url = HttpUrl(abs_json_img_url)
-                                processed_urls.add(abs_json_img_url)
-                                image_counter += 1
-                                images.append(ProcessedWebImage(
-                                    image_id=_create_image_id(image_counter),
-                                    image_url=validated_url,
-                                    alt_text=json_ld_content.get("headline") or "Image from JSON-LD",
-                                    caption="Image from JSON-LD structure",
-                                    source_scope="json_ld"
-                                ))
-                            except ValueError:
-                                continue
-            except json.JSONDecodeError:
-                continue
-            except Exception as e:
+            except Exception: # Catch any other error during image processing
+                # self.logger.warning(f"Error processing image tag {img_tag}: {e}", exc_info=True) # Optional logging
                 continue
         
-        # 4. <picture> tags (simplified: taking the first <img> or <source> src)
-        for pic_tag in soup.find_all('picture'):
-            if not isinstance(pic_tag, Tag): continue
-            img_in_picture = pic_tag.find('img')
-            source_in_picture = pic_tag.find('source')
-            pic_src = None
-            if img_in_picture and isinstance(img_in_picture, Tag) and img_in_picture.get('src'):
-                pic_src = img_in_picture.get('src')
-            elif source_in_picture and isinstance(source_in_picture, Tag) and source_in_picture.get('srcset'):
-                # Take the first URL from srcset for simplicity
-                pic_src = str(source_in_picture.get('srcset', '')).split(',')[0].strip().split(' ')[0]
-            
-            if pic_src and str(pic_src).strip() and not str(pic_src).startswith('data:image'):
+        # 2. Consider <meta property="og:image" ...>
+        og_image_tag = soup.find('meta', property='og:image')
+        if og_image_tag and isinstance(og_image_tag, Tag) and og_image_tag.get('content'):
+            og_image_url_str = urljoin(base_url, str(og_image_tag['content']).strip())
+            if og_image_url_str not in processed_urls:
                 try:
-                    abs_pic_url = urljoin(base_url, str(pic_src).strip())
-                    if abs_pic_url in processed_urls:
-                        continue
-                    validated_url = HttpUrl(abs_pic_url)
-                    processed_urls.add(abs_pic_url)
+                    validated_og_url = HttpUrl(og_image_url_str)
+                    processed_urls.add(og_image_url_str)
                     image_counter += 1
-                    alt_text_pic = img_in_picture.get('alt', '').strip() if img_in_picture and isinstance(img_in_picture, Tag) else None
-                    images.append(ProcessedWebImage(
-                        image_id=_create_image_id(image_counter),
-                        image_url=validated_url,
-                        alt_text=alt_text_pic,
-                        caption="Image from <picture> element",
-                        source_scope="picture_tag"
+                    image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}_og"
+                    
+                    og_alt = None
+                    og_image_alt_tag = soup.find('meta', property='og:image:alt')
+                    if og_image_alt_tag and isinstance(og_image_alt_tag, Tag) and og_image_alt_tag.get('content'):
+                        og_alt = str(og_image_alt_tag['content']).strip()
+
+                    raw_images.append(RawImageInput(
+                        image_id=image_id,
+                        image_bytes=None,
+                        source_url=str(validated_og_url),
+                        original_filename=os.path.basename(urlparse(str(validated_og_url)).path) or f"og_image_{image_counter}.png",
+                        source_document_id=original_source_identifier_for_gcs_path,
+                        alt_text=og_alt,
+                        # caption usually not available for og:image
+                        original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
+                        source_type_for_gcs_path=source_type_for_gcs_path,
+                        job_id_for_gcs_path=job_id if job_id else "unknown_job"
                     ))
                 except ValueError:
-                     continue
-                except Exception as e:
-                    continue
+                    pass # Invalid og:image URL
+                except Exception:
+                    pass # Other error with og:image
 
-        return images
+        # 3. Look for images in <figure> tags that might not have been caught
+        # This might be redundant if all relevant images within figures are <img> tags.
 
-    async def _parse_html_content(self, html_content: str, final_url: str, processing_level: str, job_id: Optional[str]) -> Dict[str, Any]:
-        """Helper to parse HTML, extract text and images using BeautifulSoup and Trafilatura."""
-        loop = asyncio.get_event_loop()
+        return raw_images
 
-        # Run BeautifulSoup parsing in executor
-        soup = await loop.run_in_executor(None, BeautifulSoup, html_content, 'lxml')
-        page_title_tag = soup.find('title')
-        page_title_text = page_title_tag.string.strip() if page_title_tag and isinstance(page_title_tag, Tag) else None
-        print(f"WebAcquisitionService._parse_html_content: Page title: {page_title_text}")
-
-        extracted_article_text: Optional[str] = None
-        images_found: List[ProcessedWebImage] = []
-        is_paywalled_after_parse = False
-        paywall_detection_message = ""
-
-        # Common Trafilatura config
-        trafilatura_common_config = {
-            "include_comments": False, 
-            "include_tables": True, 
-            "url": final_url
-        }
-
-        # Attempt 1: Trafilatura with favor_recall=True, output_format='txt'
-        try:
-            print(f"WebAcquisitionService._parse_html_content: Attempting Trafilatura (favor_recall=True) for {final_url}")
-            trafilatura_func_recall = functools.partial(trafilatura.extract, **trafilatura_common_config, favor_recall=True, output_format='txt')
-            text_attempt_1 = await loop.run_in_executor(None, trafilatura_func_recall, html_content)
-            print(f"WebAcquisitionService._parse_html_content: Trafilatura (favor_recall) output length: {len(text_attempt_1) if text_attempt_1 else 0}")
-            if text_attempt_1 and len(text_attempt_1.strip()) > 100:
-                extracted_article_text = text_attempt_1
-        except Exception as e_recall: 
-            print(f"WebAcquisitionService._parse_html_content: Error during Trafilatura (favor_recall): {str(e_recall)}")
-
-        if not extracted_article_text:
-            try:
-                print(f"WebAcquisitionService._parse_html_content: Attempting Trafilatura (favor_precision=True, html output) for {final_url}")
-                trafilatura_func_precision_html = functools.partial(trafilatura.extract, **trafilatura_common_config, favor_precision=True, output_format='html')
-                main_content_html_segment = await loop.run_in_executor(None, trafilatura_func_precision_html, html_content)
-                if main_content_html_segment:
-                    main_content_soup = await loop.run_in_executor(None, BeautifulSoup, main_content_html_segment, 'lxml')
-                    temp_extracted_text = main_content_soup.get_text(separator='\n', strip=True)
-                    print(f"WebAcquisitionService._parse_html_content: Trafilatura (favor_precision, html) extracted text length: {len(temp_extracted_text) if temp_extracted_text else 0}")
-                    if temp_extracted_text and len(temp_extracted_text.strip()) > 100:
-                        extracted_article_text = temp_extracted_text
-            except Exception as e_precision: 
-                print(f"WebAcquisitionService._parse_html_content: Error during Trafilatura (favor_precision, html): {str(e_precision)}")
-
-        if not extracted_article_text:
-            try:
-                print(f"WebAcquisitionService._parse_html_content: Attempting Trafilatura (fallback, txt output) for {final_url}")
-                trafilatura_func_fallback = functools.partial(trafilatura.extract, **trafilatura_common_config, output_format='txt') # Default recall/precision
-                text_attempt_3 = await loop.run_in_executor(None, trafilatura_func_fallback, html_content)
-                print(f"WebAcquisitionService._parse_html_content: Trafilatura (fallback, txt) output length: {len(text_attempt_3) if text_attempt_3 else 0}")
-                if text_attempt_3 and len(text_attempt_3.strip()) > 100:
-                    extracted_article_text = text_attempt_3
-            except Exception as e_fallback:
-                print(f"WebAcquisitionService._parse_html_content: Error during Trafilatura (fallback, txt): {str(e_fallback)}")
+    async def _parse_and_structure_html(
+        self, 
+        html_content: str, 
+        final_url: str, 
+        job_id: Optional[str], 
+        processing_level: str
+    ) -> Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]:
         
-        print(f"WebAcquisitionService._parse_html_content: Final extracted_article_text length: {len(extracted_article_text.strip()) if extracted_article_text and extracted_article_text.strip() else 0}")
+        preliminary_blocks: List[PreliminaryBlock] = []
+        raw_images_list: List[RawImageInput] = []
+        
+        soup = BeautifulSoup(html_content, 'lxml')
+        
+        # --- 1. Populate DocumentMetadata ---
+        doc_title: Optional[str] = None
+        if soup.title and soup.title.string:
+            doc_title = soup.title.string.strip()
+        
+        og_title_tag = soup.find('meta', property='og:title')
+        if og_title_tag and isinstance(og_title_tag, Tag) and og_title_tag.get('content'):
+            og_title = str(og_title_tag['content']).strip()
+            if og_title: doc_title = og_title
 
-        # --- Paywall Check (Post-Extraction) ---
-        html_lower = html_content.lower()
-        for keyword in PAYWALL_KEYWORDS:
-            if keyword in html_lower:
-                is_paywalled_after_parse = True
-                paywall_detection_message = f"Paywall keyword '{keyword}' found in HTML."
-                break
-        if not is_paywalled_after_parse:
-            for selector in PAYWALL_HTML_SELECTORS:
-                if soup.select_one(selector):
-                    is_paywalled_after_parse = True
-                    paywall_detection_message = f"Paywall CSS selector '{selector}' found in HTML."
-                    break
-        if (not extracted_article_text or len(extracted_article_text.strip()) < 300) and is_paywalled_after_parse:
-            pass # Confirmed paywall for output status
-        elif extracted_article_text and is_paywalled_after_parse:
-            pass # Content extracted, but paywall clues present. is_paywalled_after_parse will be true.
+        og_description_tag = soup.find('meta', property='og:description')
+        og_description = str(og_description_tag['content']).strip() if og_description_tag and isinstance(og_description_tag, Tag) and og_description_tag.get('content') else None
+        
+        meta_description_tag = soup.find('meta', attrs={'name': 'description'})
+        meta_description = str(meta_description_tag['content']).strip() if meta_description_tag and isinstance(meta_description_tag, Tag) and meta_description_tag.get('content') else None
+        
+        description = og_description or meta_description
 
-        # --- Image Extraction ---
+        source_identifier_for_gcs = final_url 
+        source_type_for_gcs = "url"
+        doc_job_id = job_id or f"web_{uuid.uuid4().hex[:8]}"
+
+        document_metadata_obj = DocumentMetadata(
+            document_id=doc_job_id, 
+            source_identifier=final_url,
+            source_type="url",
+            final_url=final_url,
+            title=doc_title,
+            custom_fields={"description": description} if description else {},
+            extracted_at=datetime.utcnow()
+        )
+
+        # --- 2. Extract RawImageInput objects (if full_content) ---
         if processing_level == "full_content":
-            # Call the new comprehensive image extraction method
-            try:
-                images_found = await self._extract_images_from_html(html_content, final_url, job_id)
-                print(f"WebAcquisitionService._parse_html_content: Found {len(images_found)} images via _extract_images_from_html.")
-            except Exception as e_img_extract:
-                print(f"WebAcquisitionService._parse_html_content: Error during _extract_images_from_html: {str(e_img_extract)}")
-                images_found = [] # Ensure it's an empty list on error
-        
-        return {
-            "page_title": page_title_text,
-            "extracted_text": extracted_article_text,
-            "images": images_found,
-            "is_paywalled_after_parse": is_paywalled_after_parse,
-            "paywall_detection_message": paywall_detection_message
-        }
-
-    async def _get_contextual_text(self, element, direction="before", max_length=150) -> Optional[str]:
-        # This function can be blocking if element operations are sync.
-        # Consider if it needs run_in_executor or if bs4 is async-friendly enough for simple traversals.
-        # For now, assuming it's quick enough or bs4 handles it.
-        if not element: return None
-        context_snippets = []
-        # Simplified logic from WebContentFetcherTool
-        # ... (implementation detail: for brevity, this complex logic can be refined or adapted from original tool)
-        # This needs careful adaptation to work with BeautifulSoup elements in an async context if complex.
-        # A simpler version for now:
-        current_node = element
-        count = 0
-        if direction == "before":
-            while current_node and count < 2:
-                prev_sibling = current_node.find_previous_sibling(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'])
-                if prev_sibling:
-                    text = prev_sibling.get_text(strip=True)
-                    if text: context_snippets.insert(0, text)
-                    current_node = prev_sibling
-                else:
-                    current_node = current_node.parent if current_node.parent and current_node.parent.name != 'body' else None
-                count +=1
-        else: # after
-             while current_node and count < 1: # Typically one block after is enough
-                next_sibling = current_node.find_next_sibling(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div'])
-                if next_sibling:
-                    text = next_sibling.get_text(strip=True)
-                    if text: context_snippets.append(text)
-                    current_node = next_sibling
-                else:
-                    current_node = current_node.parent if current_node.parent and current_node.parent.name != 'body' else None
-                count +=1
-        
-        full_context = " ".join(context_snippets).strip()
-        return (full_context[:max_length] + "...") if len(full_context) > max_length else full_context
-
-    async def _process_image_tag(self, img_tag, base_url: str, is_full_page_scope: bool, processed_urls: Set[str], index: int, job_id: Optional[str]) -> Optional[ProcessedWebImage]:
-        # This method is now effectively replaced by the logic within _extract_images_from_html
-        # Keeping it here to minimize diff for now, but it's not directly called by the new _parse_html_content flow for image extraction.
-        # If called directly, it would still work for single img tags, but _extract_images_from_html is more comprehensive.
-        src = img_tag.get('src')
-        if not src: src = img_tag.get('data-src')
-        if not src: src = img_tag.get('data-original')
-        if not src or src.startswith('data:image'): return None
-
-        try:
-            abs_img_url_str = urljoin(base_url, src.strip())
-            # Basic filter for very small or ad-like images by URL patterns
-            if re.search(r'/(ads|banner|pixel|spacer|tracker|sidebar|logo|icon|avatar)s?(_|\.|/)', abs_img_url_str, re.I):
-                 if not re.search(r'/content/|/media/|/wp-content/uploads/', abs_img_url_str, re.I): # Allow if it looks like content
-                    return None
-            if '.svg' in abs_img_url_str.lower() and 'icon' in abs_img_str.lower(): return None # Often small icons
-
-            validated_img_url = HttpUrl(abs_img_url_str)
-            if str(validated_img_url) in processed_urls: return None
-        except ValueError: return None # Invalid URL
-
-        # Dimension checks (simplified, can be enhanced if library for image size check is added)
-        min_dimension = 75 if is_full_page_scope else 50 # Stricter for full page
-        try:
-            width = img_tag.get('width')
-            height = img_tag.get('height')
-            if width and width.isdigit() and int(width) < min_dimension: return None
-            if height and height.isdigit() and int(height) < min_dimension: return None
-        except ValueError: pass
-
-
-        alt_text = img_tag.get('alt', '').strip() or None
-        
-        # Caption and context
-        caption_text = None
-        figure_parent = img_tag.find_parent('figure')
-        context_element = figure_parent if figure_parent else img_tag
-
-        if figure_parent:
-            figcaption = figure_parent.find('figcaption')
-            if figcaption: caption_text = figcaption.get_text(strip=True)
-
-        if not caption_text: # Try title attribute or longer alt text as caption
-            title_attr = img_tag.get('title','').strip()
-            if title_attr: caption_text = title_attr
-            elif alt_text and len(alt_text.split()) > 3: caption_text = alt_text
-        
-        # Generate unique image ID
-        job_id_prefix = f"{job_id}_" if job_id else ""
-        # Fallback to hashing part of URL if no job_id and index is not enough for global uniqueness
-        unique_part = hashlib.md5(str(validated_img_url).encode()).hexdigest()[:8] if not job_id else str(index + 1)
-        image_id = f"WEB_IMG_{job_id_prefix}{unique_part}"
-
-        # Correctly await the async method _get_contextual_text
-        context_before = await self._get_contextual_text(context_element, "before")
-        context_after = await self._get_contextual_text(context_element, "after")
-        
-        processed_urls.add(str(validated_img_url))
-        return ProcessedWebImage(
-            image_id=image_id,
-            image_url=validated_img_url,
-            alt_text=alt_text,
-            caption=caption_text,
-            source_scope="full_page_heuristic" if is_full_page_scope else "main_content",
-            context_before=context_before,
-            context_after=context_after
-        )
-
-    async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[WebAcquisitionServiceOutput]:
-        start_time = time.time()
-        original_url = web_input.url
-        job_id = web_input.job_id
-
-        try:
-            # Validate URL early
-            parsed_original_url = urlparse(original_url)
-            if not all([parsed_original_url.scheme, parsed_original_url.netloc]):
-                raise ValueError("Invalid URL scheme or netloc.")
-        except ValueError as ve:
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(
-                status="error_invalid_url", original_url=original_url, error_message=f"Invalid URL format: {ve}",
-                processing_duration_seconds=duration
+            raw_images_list = await self._extract_images_from_html(
+                html_content_str=html_content, 
+                base_url=final_url, 
+                job_id=doc_job_id,
+                original_source_identifier_for_gcs_path=source_identifier_for_gcs,
+                source_type_for_gcs_path=source_type_for_gcs
             )
-            return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
 
-        # --- Initial URL Filtering (Domain/Path/Strict Paywall) ---
-        current_domain = self._get_domain(original_url)
-        current_path = parsed_original_url.path
-
-        if self._check_domain_in_set(current_domain, UNSUPPORTED_URL_TYPE_DOMAINS):
-            is_allowed_social = any(re.search(p, original_url, re.I) for p in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
-            is_unsupported_path = any(re.search(p, current_path, re.I) for p in UNSUPPORTED_URL_PATH_PATTERNS)
-            if not is_allowed_social or (is_allowed_social and is_unsupported_path) : # An allowed social can still have unsupported path
-                 duration = time.time() - start_time
-                 output = WebAcquisitionServiceOutput(status="error_unsupported_content_type", original_url=original_url, error_message="URL points to an unsupported page type (e.g., social media feed, video platform).", processing_duration_seconds=duration)
-                 return ServiceResult.success(data=output)
-
-
-        if self._check_domain_in_set(current_domain, VERY_STRICT_PAYWALL_DOMAINS):
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(status="error_paywall", original_url=original_url, final_url=original_url, is_paywalled=True, error_message="Site is known for a strict paywall; fetching not attempted.", processing_duration_seconds=duration)
-            return ServiceResult.success(data=output)
-
-
-        # --- HTTP Fetching ---
-        final_url_str: Optional[str] = None
-        html_content: Optional[str] = None
-        pdf_bytes: Optional[bytes] = None
-        # response_status_code: Optional[int] = None # Not strictly needed for output if using raise_for_status
+        # --- 3. Extract PreliminaryBlocks ---
+        block_order_counter = 0 # Use a single counter for global order
         
-        try:
-            async with aiohttp.ClientSession(headers={"User-Agent": "ThinkStashBot/1.0 (compatible; Mozilla/5.0; +http://thinkstash.com/bot)"}) as session:
-                async with session.get(original_url, timeout=aiohttp.ClientTimeout(total=20, connect=10), allow_redirects=True) as response:
-                    # response_status_code = response.status # Store if needed before raise_for_status
-                    final_url_str = str(response.url)
-                    response.raise_for_status() # Raises for 4xx/5xx
+        # Map image URLs from RawImageInput to their IDs for quick lookup
+        # This is useful if we encounter images during main content parsing (e.g. within <figure>)
+        # and want to link them to an already created RawImageInput.
+        # However, _extract_images_from_html should already find most renderable images.
+        # Image placeholders will be created based on raw_images_list *after* main content parsing
+        # to try and interleave them correctly based on their DOM position relative to text.
 
-                    content_type = response.headers.get('Content-Type', '').lower()
-                    
-                    if 'application/pdf' in content_type or (final_url_str and final_url_str.lower().endswith('.pdf')):
-                        pdf_bytes = await response.read()
-                        page_title_from_pdf = os.path.basename(urlparse(final_url_str).path)
-                        content_disposition = response.headers.get('Content-Disposition')
-                        if content_disposition:
-                            disp_match = re.search(r"filename\\*?=[\'\\\"]?([^\'\\\"]+)[\'\\\"]?", content_disposition, re.I)
-                            if disp_match: page_title_from_pdf = disp_match.group(1)
-                        
-                        duration = time.time() - start_time
-                        output = WebAcquisitionServiceOutput(
-                            status="pdf_content_detected", original_url=original_url, final_url=final_url_str,
-                            page_title=page_title_from_pdf, pdf_content_bytes=pdf_bytes, processing_duration_seconds=duration
-                        )
-                        return ServiceResult.success(data=output)
+        # For now, we'll first parse text/structure, then insert image placeholders.
+        # A more advanced approach might involve a single pass through the DOM.
 
-                    if not ('text/html' in content_type or 'application/xhtml+xml' in content_type):
-                        duration = time.time() - start_time
-                        output = WebAcquisitionServiceOutput(status="error_unsupported_content_type", original_url=original_url, final_url=final_url_str, error_message=f"Unsupported content type: {content_type}", processing_duration_seconds=duration)
-                        return ServiceResult.success(data=output)
-                    
-                    html_content = await response.text()
+        body = soup.body
+        if not body: # Fallback if no body tag
+            body = soup 
 
-        except aiohttp.ClientResponseError as e:
-            duration = time.time() - start_time
-            error_message = f"HTTP error: {e.status} {e.message}"
-            page_title_on_error = None 
-            # if e.history: final_url_str = str(e.history[-1].url) # final_url_str might be set from successful part of redirect chain
+        # Define tags to process and their handlers
+        # This is a simplified approach. Real-world HTML can be much more complex.
+        # We are looking for common block-level semantic tags.
+
+        processed_elements = set() # To avoid processing the same element multiple times if nested
+
+        for element in body.find_all(True, recursive=True): # Find all tags
+            if element in processed_elements or not element.name:
+                continue
+
+            # Skip script, style, meta, link, noscript, and other non-content tags early
+            if element.name in ['script', 'style', 'meta', 'link', 'noscript', 'header', 'footer', 'nav', 'aside', 'form', 'button', 'input', 'select', 'textarea', 'label', 'option']:
+                # Mark element and its children as processed to avoid redundant checks
+                for child in element.find_all(True, recursive=True):
+                    processed_elements.add(child)
+                processed_elements.add(element)
+                continue
             
-            is_paywall_on_error = False
-            if e.status in [401, 403, 451]: is_paywall_on_error = True
+            # Check if parent is already processed to handle elements that generate multiple blocks (like lists)
+            # or to ensure we're not double-counting text.
+            # If a parent generated a block (e.g., <ul> created a series of list_item blocks),
+            # we don't want its children (e.g. text nodes directly under <ul>) to create separate text blocks.
+            # If a parent generated a block (e.g., <ul> created a series of list_item blocks),
+            # we don't want its children (e.g. text nodes directly under <ul>) to create separate text blocks.
+            parent_processed = False
+            current_parent = element.parent
+            while current_parent:
+                if current_parent in processed_elements:
+                    parent_processed = True
+                    break
+                current_parent = current_parent.parent
+            if parent_processed and element.name not in ['li']: # Allow li to be processed even if ul/ol parent was
+                 processed_elements.add(element)
+                 continue
+
+
+            block_id_base = f"{doc_job_id}_elem_{block_order_counter}"
+            text_content = None
+            block_type = None
+            heading_level = None
+            code_language = None
+            list_item_data = None
+            list_level = 0
+            list_ordered = None
+            custom_attrs = {}
+
+            # Headings
+            if element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                block_type = "heading"
+                text_content = element.get_text(separator=' ', strip=True)
+                heading_level = int(element.name[1:])
+            
+            # Paragraphs
+            elif element.name == 'p':
+                block_type = "text"
+                text_content = element.get_text(separator=' ', strip=True)
+
+            # Lists (ul, ol) and List Items (li)
+            elif element.name in ['ul', 'ol']:
+                list_ordered = (element.name == 'ol')
+                # Determine list level by counting ancestor ul/ol tags
+                current_level = 0
+                parent = element.parent
+                while parent:
+                    if parent.name in ['ul', 'ol']:
+                        current_level += 1
+                    parent = parent.parent
                 
-            output = WebAcquisitionServiceOutput(
-                status="error_paywall" if is_paywall_on_error else "error_fetch",
-                original_url=original_url, final_url=final_url_str or original_url,
-                page_title=page_title_on_error,
-                is_paywalled=is_paywall_on_error,
-                error_message=error_message, processing_duration_seconds=duration
-            )
-            return ServiceResult.success(data=output)
+                for li_idx, li_element in enumerate(element.find_all('li', recursive=False)): # Only direct children li
+                    if li_element in processed_elements: continue
+                    
+                    li_text = li_element.get_text(separator=' ', strip=True)
+                    if li_text:
+                        preliminary_blocks.append(PreliminaryBlock(
+                            block_id=f"{block_id_base}_li_{li_idx}",
+                            type="list_item",
+                            text_content=li_text, # Storing text content directly
+                            order=block_order_counter,
+                            list_level=current_level,
+                            list_ordered=list_ordered
+                        ))
+                        block_order_counter += 1
+                    processed_elements.add(li_element) # Mark li as processed
+                block_type = None # Handled by li items
+                processed_elements.add(element) # Mark ul/ol as processed
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(status="error_fetch", original_url=original_url, final_url=final_url_str, error_message=f"Fetch error: {type(e).__name__} - {str(e)}", processing_duration_seconds=duration)
-            return ServiceResult.success(data=output)
-        except Exception as e:
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(status="error_fetch", original_url=original_url, final_url=final_url_str, error_message=f"Unexpected fetch error: {type(e).__name__} - {str(e)}", processing_duration_seconds=duration)
-            return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
+            # Code Blocks (pre > code)
+            elif element.name == 'pre':
+                code_tag = element.find('code')
+                target_code_element = code_tag if code_tag else element
+                
+                # Try to get language from class (e.g., class="language-python")
+                lang_class = target_code_element.get('class', [])
+                for cls in lang_class:
+                    if cls.startswith('language-'):
+                        code_language = cls.replace('language-', '')
+                        break
+                    elif cls.startswith('lang-'):
+                        code_language = cls.replace('lang-', '')
+                        break
+                
+                block_type = "code_snippet"
+                code_content = target_code_element.get_text() # Keep original formatting as much as possible
+                custom_attrs["raw_code_element_html"] = str(target_code_element) # Store raw html of code element
 
-        if not html_content or not final_url_str:
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(status="error_parsing", original_url=original_url, final_url=final_url_str, error_message="No HTML content fetched.", processing_duration_seconds=duration)
-            return ServiceResult.success(data=output)
+                # Add the preliminary block for code
+                preliminary_blocks.append(PreliminaryBlock(
+                    block_id=f"{block_id_base}_code",
+                    type=block_type,
+                    code_content=code_content,
+                    code_language=code_language,
+                    order=block_order_counter,
+                    custom_attributes=custom_attrs
+                ))
+                block_order_counter += 1
+                processed_elements.add(element) # Mark pre as processed
+                if code_tag: processed_elements.add(code_tag)
+                block_type = None # Reset block_type as it's handled
 
-        # --- HTML Parsing, Text/Image Extraction ---
-        try:
-            # Ensure _parse_html_content uses the job_id from web_input
-            parsed_data = await self._parse_html_content(html_content, final_url_str, web_input.processing_level, web_input.job_id)
-        except Exception as e:
-            duration = time.time() - start_time
-            output = WebAcquisitionServiceOutput(
-                status="error_parsing", original_url=original_url, final_url=final_url_str,
-                error_message=f"Error during HTML parsing: {str(e)}", processing_duration_seconds=duration
-            )
-            return ServiceResult.failure(error_message=output.error_message, error_details=output.model_dump())
 
-        final_status = "success"
-        final_is_paywalled = parsed_data.get("is_paywalled_after_parse", False)
-        extracted_text_final = parsed_data.get("extracted_text")
+            # Tables
+            elif element.name == 'table':
+                block_type = "table_placeholder"
+                # Store the outer HTML of the table
+                custom_attrs["html_content"] = str(element)
+                # Could add more sophisticated table parsing here if needed in future
+                # For now, just placeholder and raw HTML
+
+            # Image handling (<img> within the flow, primarily for ordering)
+            # This is tricky because _extract_images_from_html already found images.
+            # We need to place placeholders for them in the correct order.
+            # This simplified loop processes elements sequentially.
+            # We will insert all image placeholders collected earlier, sorted by their original DOM position if possible,
+            # or simply append them if DOM position is hard to get reliably for all cases.
+            # For now, let's add image placeholders derived from raw_images_list *after* this loop.
+            # This element-by-element loop focuses on text and structure.
+
+            # Default text extraction for other block-ish tags if not handled above
+            # (e.g., div, article, section if they contain direct text not in p, h, etc.)
+            # This needs to be careful not to extract text from already processed containers (like lists)
+            # Only extract if the element itself has meaningful direct text content.
+            elif element.name in ['div', 'span', 'article', 'section', 'main', 'blockquote', 'details', 'summary'] and not block_type:
+                # Heuristic: only create a text block if it has direct text children
+                # and is not just a container for other block elements we've already processed.
+                # Also, check if the text is substantial.
+                element_text_content = element.get_text(separator=' ', strip=True)
+                is_container_only = any(child.name in ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'pre', 'table', 'img', 'figure'] for child in element.find_all(recursive=False))
+                
+                if element_text_content and not is_container_only and len(element_text_content) > 20: # Arbitrary length check
+                    block_type = "text"
+                    text_content = element_text_content
+            
+            if block_type and text_content: # For text-based blocks (text, heading)
+                preliminary_blocks.append(PreliminaryBlock(
+                    block_id=block_id_base,
+                    type=block_type,
+                    text_content=text_content,
+                    heading_level=heading_level,
+                    order=block_order_counter
+                ))
+                block_order_counter += 1
+                processed_elements.add(element)
+            elif block_type == "table_placeholder": # For table
+                preliminary_blocks.append(PreliminaryBlock(
+                    block_id=block_id_base,
+                    type=block_type,
+                    order=block_order_counter,
+                    custom_attributes=custom_attrs
+                ))
+                block_order_counter += 1
+                processed_elements.add(element)
+
+        # Now, add image placeholders from the raw_images_list.
+        # This is a simplification; ideally, these would be interleaved correctly based on DOM position.
+        # For now, we append them. A more robust solution would involve a single-pass DOM traversal
+        # that identifies text, structure, AND images in order.
+        for img_input in raw_images_list:
+            placeholder_block_id = f"{doc_job_id}_img_placeholder_{block_order_counter}"
+            preliminary_blocks.append(PreliminaryBlock(
+                block_id=placeholder_block_id,
+                type="image_placeholder",
+                image_id_ref=img_input.image_id,
+                order=block_order_counter,
+                # page_number and bbox are None for web typically
+            ))
+            # image_id_to_block_map[img_input.image_id] = placeholder_block_id # Not currently used but good for future linking
+            block_order_counter += 1
         
-        if final_is_paywalled and not extracted_text_final:
-            final_status = "error_paywall"
-        elif not extracted_text_final and not parsed_data.get("images"):
-            if final_status != "error_paywall": final_status = "error_parsing"
-            parsed_data["error_message"] = parsed_data.get("error_message", "Could not extract significant text or images.")
+        # Remove the old trafilatura fallback if we have blocks from BeautifulSoup
+        # If BeautifulSoup parsing yields no blocks, trafilatura could be a fallback.
+        # For now, if preliminary_blocks is empty and trafilatura was enabled:
+        if not preliminary_blocks: # If BS4 parsing yielded nothing substantial
+            loop = asyncio.get_event_loop()
+            try:
+                main_content_text = await loop.run_in_executor(
+                    None, 
+                    functools.partial(trafilatura.extract, html_content, url=final_url, output_format='txt', include_comments=False, include_tables=True) # include_tables might give some table text
+                )
+                if main_content_text:
+                    preliminary_blocks.append(PreliminaryBlock(
+                        block_id=f"{doc_job_id}_txt_main_trafilatura_{block_order_counter}",
+                        type="text",
+                        text_content=main_content_text.strip(),
+                        order=block_order_counter
+                    ))
+                    block_order_counter += 1
+            except Exception as e:
+                # self.logger.warning(f\"Trafilatura extraction failed for {final_url}: {e}\") # Optional logging
+                pass 
 
-        duration = time.time() - start_time
-        output = WebAcquisitionServiceOutput(
-            status=final_status,
-            original_url=original_url,
-            final_url=final_url_str,
-            page_title=parsed_data.get("page_title"),
-            extracted_text=extracted_text_final,
-            images=parsed_data.get("images"),
-            is_paywalled=final_is_paywalled,
-            error_message=parsed_data.get("error_message") if final_status != "success" else (parsed_data.get("paywall_detection_message") if final_is_paywalled else None),
-            processing_duration_seconds=duration
+        preliminary_blocks.sort(key=lambda b: b.order) # Ensure final sort by order
+        
+        return preliminary_blocks, document_metadata_obj, raw_images_list
+
+    async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
+        start_time = time.time()
+        job_id = web_input.job_id or f"web_{uuid.uuid4().hex[:12]}"
+
+        preliminary_blocks_list: List[PreliminaryBlock] = []
+        document_metadata_obj: Optional[DocumentMetadata] = None
+        raw_images_list: List[RawImageInput] = []
+        temp_pdf_file_path: Optional[str] = None # Initialize here
+
+        original_url = web_input.url.strip() # Ensure no leading/trailing whitespace
+
+        # --- URL Normalization ---
+        normalized_url = original_url
+        if normalized_url.startswith("chrome-extension://"):
+            # Try to find an embedded http/https URL
+            match = re.search(r"(https?://[^\s]+)", normalized_url)
+            if match:
+                normalized_url = match.group(1)
+            else:
+                # If no http/https URL is found, it's likely a local file, which we can't fetch
+                return ServiceResult.failure(
+                    error_message=f"Cannot fetch local file from chrome-extension URL: {original_url}",
+                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                )
+        
+        parsed_normalized_url = urlparse(normalized_url)
+        if not parsed_normalized_url.scheme:
+            if parsed_normalized_url.netloc or (parsed_normalized_url.path and '.' in parsed_normalized_url.path.split('/')[0]): # Heuristic for domain-like path
+                normalized_url = f"https://{normalized_url}" # Default to HTTPS
+            else:
+                # If it doesn't look like a domain/path that can be made a URL, fail early
+                 return ServiceResult.failure(
+                    error_message=f"Invalid URL format (cannot determine scheme): {original_url}",
+                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                )
+        elif parsed_normalized_url.scheme not in ["http", "https"]:
+            # If it has a scheme but it's not http/https (e.g. file://, ftp:// after initial chrome-ext stripping)
+            return ServiceResult.failure(
+                error_message=f"Unsupported URL scheme '{parsed_normalized_url.scheme}' in URL: {normalized_url}",
+                error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+            )
+        # --- End URL Normalization ---
+        
+        final_url_val: Optional[str] = None
+        
+        document_metadata_obj = DocumentMetadata(
+            document_id=job_id,
+            source_identifier=original_url, # Keep original URL as source_identifier
+            source_type="url",
+            extracted_at=datetime.utcnow()
         )
-        return ServiceResult.success(data=output)
 
-# Example (for local testing if needed)
-async def main_test():
-    service = WebAcquisitionService()
-    # test_url = "https://www.example.com"
-    test_url = "https://www.deeplearning.ai/the-batch/issue-301/"
-    # test_url = "https://www.wsj.com/articles/some-article" # Paywall
-    # test_url = "http://example.com/nonexistent.pdf" # Test PDF link that might 404 or be actual PDF
+        try:
+            # --- URL Validation and Filtering (uses normalized_url) ---
+            parsed_url = urlparse(normalized_url) # Use the cleaned and potentially schemed URL
+            if not all([parsed_url.scheme, parsed_url.netloc]):
+                # This check might be redundant if normalization ensures scheme and netloc for http/https URLs
+                return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+            
+            domain = self._get_domain(normalized_url)
+            if self._check_domain_in_set(domain, UNSUPPORTED_URL_TYPE_DOMAINS):
+                is_allowed_social = any(re.search(pattern, normalized_url, re.IGNORECASE) for pattern in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
+                if not is_allowed_social:
+                    return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
 
-    inp = WebAcquisitionServiceInput(url=test_url, processing_level="full_content", job_id="testjob123")
-    result = await service.execute(inp)
+            # --- Fetching Content (uses normalized_url) ---
+            async with aiohttp.ClientSession() as session:
+                try:
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                    async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response: # Use normalized_url
+                        final_url_val = str(response.url)
+                        if document_metadata_obj: document_metadata_obj.final_url = final_url_val
 
-    if result.status == 'success':
-        print("Service executed successfully!")
-        output_data = result.data
-        if output_data:
-            print(f"Status: {output_data.status}")
-            print(f"Title: {output_data.page_title}")
-            print(f"Final URL: {output_data.final_url}")
-            print(f"Is Paywalled: {output_data.is_paywalled}")
-            # print(f"Text: {output_data.extracted_text[:200] if output_data.extracted_text else 'N/A'}...")
-            if output_data.images:
-                print(f"Found {len(output_data.images)} images.")
-                # for img in output_data.images:
-                #     print(f"  - ID: {img.image_id}, URL: {img.image_url}, Caption: {img.caption}")
-            if output_data.pdf_content_bytes:
-                print(f"PDF content detected, size: {len(output_data.pdf_content_bytes)} bytes")
-            if output_data.error_message:
-                 print(f"Error Message: {output_data.error_message}")
+                        if response.status != 200:
+                            return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
 
-    else:
-        print(f"Service execution failed: {result.error_message}")
-        if result.error_details:
-            print(f"Details: {result.error_details}")
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        html_content_str: Optional[str] = None 
+                        pdf_bytes_val: Optional[bytes] = None 
 
-if __name__ == "__main__":
-    # # To run the test:
-    # # Ensure you have a running event loop or use asyncio.run()
-    # # This might require additional setup if run directly without a framework like FastAPI
-    # try:
-    #     asyncio.run(main_test())
-    # except RuntimeError as e:
-    #     if "There is no current event loop in thread" in str(e):
-    #         print("Cannot run asyncio.run in this context (e.g. Jupyter notebook already has a loop).")
-    #         print("Consider running in a separate Python script or adapting for existing loop.")
-    #     else:
-    #        raise
-    pass 
+                        if 'application/pdf' in content_type:
+                            pdf_bytes_val = await response.read()
+                        elif 'text/html' in content_type or 'application/xhtml+xml' in content_type or not content_type:
+                            html_content_str = await response.text()
+                        else:
+                            return ServiceResult.failure(error_message=f"Unsupported content type: {content_type} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+
+                except aiohttp.ClientError as e:
+                    return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}) # Use normalized_url
+                except asyncio.TimeoutError:
+                     return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}) # Use normalized_url
+            
+            if pdf_bytes_val and final_url_val:
+                # --- Route to PDFAcquisitionService ---
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
+                        tmpfile.write(pdf_bytes_val)
+                        temp_pdf_file_path = tmpfile.name
+                    
+                    pdf_acq_service = PDFAcquisitionService(settings=self.settings) # Assuming settings can be passed
+                    pdf_input_obj = PDFAcquisitionServiceInput(
+                        file_path=temp_pdf_file_path,
+                        job_id=job_id, # Pass along the job_id
+                        processing_level=web_input.processing_level # Pass along processing_level
+                    )
+                    pdf_service_result = await pdf_acq_service.execute(pdf_input_obj)
+
+                    if pdf_service_result.success and pdf_service_result.data:
+                        preliminary_blocks_list, pdf_doc_metadata, raw_images_list = pdf_service_result.data
+                        
+                        # Merge DocumentMetadata: Keep original web URL, update with PDF specific info if valuable
+                        # The document_metadata_obj is already initialized with web source info.
+                        # We can enrich it with PDF-specific metadata if needed.
+                        if document_metadata_obj and pdf_doc_metadata:
+                            document_metadata_obj.title = pdf_doc_metadata.title or document_metadata_obj.title
+                            document_metadata_obj.author = pdf_doc_metadata.author or document_metadata_obj.author
+                            document_metadata_obj.subject = pdf_doc_metadata.subject or document_metadata_obj.subject
+                            document_metadata_obj.keywords = pdf_doc_metadata.keywords or document_metadata_obj.keywords
+                            document_metadata_obj.creation_date = pdf_doc_metadata.creation_date or document_metadata_obj.creation_date
+                            document_metadata_obj.modification_date = pdf_doc_metadata.modification_date or document_metadata_obj.modification_date
+                            document_metadata_obj.total_pages = pdf_doc_metadata.total_pages
+                            # Ensure source_identifier remains the original URL, source_type 'url'
+                            document_metadata_obj.source_type = "pdf_from_url" # Or keep as 'url' and add custom field? Let's mark as pdf_from_url
+                        
+                        # Job ID in PreliminaryBlocks and RawImageInput from PDFAcquisitionService should already be set
+                        # based on the job_id passed to it.
+
+                    else: # PDF service failed
+                        error_msg = f"PDFAcquisitionService failed for PDF from URL {final_url_val}: {pdf_service_result.error_message if pdf_service_result else 'Unknown error'}"
+                        if document_metadata_obj:
+                            document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
+                            document_metadata_obj.custom_fields["pdf_processing_error"] = error_msg
+                        return ServiceResult.failure(error_message=error_msg, error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+
+                except Exception as e_pdf_route:
+                    # self.logger.error(f"Error routing PDF from {final_url_val} to PDFAcquisitionService: {e_pdf_route}", exc_info=True) # Optional logging
+                    if document_metadata_obj:
+                        document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
+                        document_metadata_obj.custom_fields["pdf_processing_error"] = f"Routing/Tempfile error: {str(e_pdf_route)}"
+                    return ServiceResult.failure(error_message=f"Error processing PDF from URL {final_url_val} via PDFAcquisitionService: {str(e_pdf_route)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                finally:
+                    if temp_pdf_file_path and os.path.exists(temp_pdf_file_path):
+                        try:
+                            os.remove(temp_pdf_file_path)
+                        except Exception as e_remove:
+                            # self.logger.warning(f"Could not remove temporary PDF file {temp_pdf_file_path}: {e_remove}") # Optional logging
+                            pass
+                # --- End Routing to PDFAcquisitionService ---
+
+            elif html_content_str and final_url_val:
+                soup_for_paywall_check = BeautifulSoup(html_content_str, 'lxml')
+                is_paywalled = False
+                if self._check_domain_in_set(self._get_domain(final_url_val), VERY_STRICT_PAYWALL_DOMAINS):
+                    is_paywalled = True 
+                else:
+                    for selector in PAYWALL_HTML_SELECTORS:
+                        if soup_for_paywall_check.select_one(selector):
+                            is_paywalled = True; break
+                    if not is_paywalled:
+                        text_lower = html_content_str.lower()
+                        if any(keyword in text_lower for keyword in PAYWALL_KEYWORDS):
+                            is_paywalled = True
+                
+                if is_paywalled and document_metadata_obj:
+                    document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
+                    document_metadata_obj.custom_fields["paywall_detected"] = True
+
+                preliminary_blocks_list, document_metadata_obj, raw_images_list = await self._parse_and_structure_html(
+                    html_content=html_content_str,
+                    final_url=final_url_val,
+                    job_id=job_id,
+                    processing_level=web_input.processing_level
+                )
+            else:
+                # Should not happen if fetching was successful and content type was one of the above
+                return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+
+            processing_duration = time.time() - start_time
+            if document_metadata_obj: # Ensure metadata is not None
+                document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
+                document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
+            
+            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
+
+        except Exception as e:
+            # self.logger.error(f"WebAcquisitionService error for URL {original_url}: {e}", exc_info=True) # Optional logging
+            processing_duration = time.time() - start_time
+            if document_metadata_obj: 
+                 document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
+                 document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
+                 document_metadata_obj.custom_fields["error"] = str(e)
+
+            return ServiceResult.failure(
+                error_message=f"WEB_SERVICE_FATAL_ERROR: {type(e).__name__} for {normalized_url}. Check logs.",
+                error_details={
+                    "original_url": original_url,
+                    "normalized_url_at_failure": normalized_url,
+                    "exception_type": type(e).__name__,
+                    "original_data": (
+                        preliminary_blocks_list if preliminary_blocks_list is not None else [], 
+                        document_metadata_obj, 
+                        raw_images_list if raw_images_list is not None else []
+                    )
+                }
+            )
+        finally:
+            if temp_pdf_file_path and os.path.exists(temp_pdf_file_path):
+                try:
+                    os.remove(temp_pdf_file_path)
+                except Exception as e_remove:
+                    # self.logger.warning(f"Could not remove temporary PDF file {temp_pdf_file_path}: {e_remove}") # Optional logging
+                    pass 

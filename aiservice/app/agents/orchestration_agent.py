@@ -7,7 +7,7 @@ from pydantic import BaseModel
 # Assuming tools are defined elsewhere and passed in, e.g., ContentTypeDetectionTool
 # from app.tools.utility_tools import ContentTypeDetectionTool, DataStoreAccessTool
 
-from app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, ProcessedImageData
+from app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock
 from app.tools.utility_tools import ContentTypeDetectionTool, DataStoreAccessTool # Ensure DataStoreAccessTool is imported if OrchestrationAgent is to use it directly.
 
 class OrchestrationAgent:

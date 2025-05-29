@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
+from .pipeline_models import DocumentMetadata, EnrichedImageMetadata
 
 class OrchestrationInput(BaseModel):
     source_identifier: str = Field(..., description="URL or filepath")
@@ -10,25 +11,38 @@ class OrchestrationInput(BaseModel):
     output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
 
 class ContentBlock(BaseModel):
-    # This is a generic content block, actual structure might vary slightly
-    # depending on 'type' (e.g. text, math, code, image)
-    # For V2.4, image blocks will have specific fields for the gallery
-    type: str
-    content: Optional[str] = None # For text, math, code
-    original_source_identifier: Optional[str] = None # For image blocks, linking to processed_images_data
-    gcs_url: Optional[str] = None # For image blocks
-    alt_text: Optional[str] = None # For image blocks
-    caption: Optional[str] = None # For image blocks
-    llm_description: Optional[str] = None # For image blocks (e.g. from PDF multimodal)
-    # Other image metadata like dimensions, mime_type can be added here or in processed_images_data
+    block_id: str = Field(..., description="Unique ID for this block, inherited from PreliminaryBlock.")
+    type: str = Field(..., description="Type of content (e.g., 'text', 'heading', 'list', 'image', 'code_snippet', 'math_text', 'table').")
+    
+    # Common fields, often populated
+    content: Optional[str] = Field(None, description="Primary text content for types like 'text', 'heading', 'code_snippet', 'math_text', 'table' (e.g., HTML table).")
+    page_number: Optional[int] = Field(None, description="Page number in the original document.")
+    bbox: Optional[List[float]] = Field(None, description="Bounding box [x0, y0, x1, y1] on the page, if applicable.")
 
-class ProcessedImageData(BaseModel):
-    original_source_identifier: str
-    gcs_url: str
-    alt_text: Optional[str] = None
-    caption: Optional[str] = None
-    llm_description: Optional[str] = None
-    # Add other relevant fields: dimensions, mime_type, etc.
+    # Fields specific to type: 'heading'
+    level: Optional[int] = Field(None, description="For 'heading' type, the heading level (1-6).")
+
+    # Fields specific to type: 'code_snippet'
+    language: Optional[str] = Field(None, description="For 'code_snippet' type, the programming language.")
+
+    # Fields specific to type: 'list'
+    items: Optional[List[Union[str, Dict[str, Any]]]] = Field(None, description="For 'list' type, holds list item contents. Items can be simple strings or nested structures for complex/nested lists.")
+    ordered: Optional[bool] = Field(None, description="For 'list' type, true if the list is ordered, false if unordered.")
+    list_start_number: Optional[int] = Field(None, description="For ordered 'list' type, the starting number if not 1.")
+
+    # Fields specific to type: 'image'
+    # These fields are populated by looking up EnrichedImageMetadata using image_id_ref
+    image_id_ref: Optional[str] = Field(None, description="For 'image' type, reference to EnrichedImageMetadata.image_id.")
+    gcs_url: Optional[str] = Field(None, description="For 'image' type, URL of the image in GCS.")
+    alt_text: Optional[str] = Field(None, description="For 'image' type, original or LLM-refined alt text.")
+    caption: Optional[str] = Field(None, description="For 'image' type, original or LLM-refined caption.")
+    llm_description: Optional[str] = Field(None, description="For 'image' type, LLM-generated description of the image content.")
+    width: Optional[int] = Field(None, description="For 'image' type, image width in pixels.")
+    height: Optional[int] = Field(None, description="For 'image' type, image height in pixels.")
+    
+    # Ensure no old image fields like original_source_identifier are lingering if they are now part of EnrichedImageMetadata
+    # The plan was to have ContentStructuringService create 'image' ContentBlock by finding matching EnrichedImageMetadata.
+    # So, ContentBlock itself stores the resolved image details.
 
 class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])
@@ -38,5 +52,6 @@ class OrchestrationOutput(BaseModel):
     extracted_title: Optional[str] = None
     is_long_article: bool = False
     original_content_blocks: List[ContentBlock] = []
-    processed_images_data: Dict[str, ProcessedImageData] = Field(default_factory=dict, description="Dictionary mapping original_source_identifier to image metadata")
+    processed_images_data: Dict[str, EnrichedImageMetadata] = Field(default_factory=dict, description="Dictionary mapping image_id to EnrichedImageMetadata.")
+    document_metadata: Optional[DocumentMetadata] = Field(None, description="Comprehensive metadata about the processed document.")
     error_message: Optional[str] = None 

@@ -16,7 +16,10 @@ from app.tools.utility_tools import DataStoreAccessTool
 
 # Model Imports
 from app.models.pdf_acquisition_models import PDFAcquisitionInput, PDFAcquisitionOutput, RawPDFImageWithID
-from app.models.orchestration_models import ProcessedImageData # For type hinting if used directly
+# If ProcessedImageData was only for type hinting, we can just remove it.
+# If other models from orchestration_models are needed by this agent, they should remain.
+# For example, if ContentBlock is used:
+# from app.models.orchestration_models import ContentBlock 
 
 class PDFAcquisitionAgent:
     """Extracts content from PDF files according to V2.4 specifications using a tiered approach."""

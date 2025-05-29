@@ -6,9 +6,13 @@ import json # Added, as crew.run() might return a string that needs parsing
 from pydantic import BaseModel, Field
 
 from aiservice.app.services.base import BaseService, ServiceResult
-from aiservice.app.models.orchestration_models import ProcessedImageData, ContentBlock # Final output block model
+from aiservice.app.models.orchestration_models import ContentBlock # Final output block model
 from aiservice.app.crews.minimal_crew import MinimalLLMCrew # Import MinimalLLMCrew and its expected output type (StructuredContentBlock from llm_tools)
 from aiservice.app.tools.llm_tools import StructuredContentBlock # This is what MinimalLLMCrew.run() should yield
+
+from aiservice.app.config.settings import Settings
+# from aiservice.app.core.data_store import DataStore, get_data_store # If using DataStore
+from aiservice.app.models.content_structuring_models import ContentStructuringInput, ContentStructuringOutput
 
 # --- Input Model for ContentStructuringService ---
 class ContentStructuringServiceInput(BaseModel):

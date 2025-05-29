@@ -26,7 +26,8 @@ python-magic==0.4.27
 pdf2image==1.17.0
 Pillow==11.2.1
 pdfminer.six # Was 20250327, likely a date-based versioning, let pip pick latest if possible
-Markdown # Let pip pick latest
+Markdown
+markdown-it-py # Let pip pick latest
 
 # OpenAI SDK (pinned as it's generally stable)
 openai==1.75.0 

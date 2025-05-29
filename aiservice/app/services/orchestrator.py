@@ -4,7 +4,7 @@ import uuid
 from typing import Optional, Any, Dict, List, Union
 
 from aiservice.app.config.settings import Settings # Import the specific Settings class
-from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, ProcessedImageData
+from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, EnrichedImageMetadata
 # Remove the old WebAcquisitionInput import from models
 # from aiservice.app.models.web_acquisition_models import WebAcquisitionInput 
 from aiservice.app.services.base import BaseService, ServiceResult
@@ -58,26 +58,30 @@ class ParallelOrchestrator(BaseService):
             images_from_acq = acq_output.images or []
 
         for img in images_from_acq:
-            # Correctly access image_url for ProcessedWebImage
-            # For PDF/File images, image_bytes should be present if extraction was successful
             img_bytes = getattr(img, 'image_bytes', None)
             src_url = None
             if isinstance(img, ProcessedWebImage):
-                src_url = img.image_url # ProcessedWebImage has image_url
+                src_url = str(img.image_url) if img.image_url else None # Ensure str if HttpUrl
             else: # For ProcessedPDFImage, ProcessedFileImage
-                src_url = getattr(img, 'source_url', None) # File images might have a source_url too
+                src_url = str(getattr(img, 'source_url', None)) if getattr(img, 'source_url', None) else None
 
             raw_image_inputs.append(RawImageInput(
                 image_id=img.image_id,
                 image_bytes=img_bytes,
-                source_url=src_url,
+                source_url=src_url, # Now expects Optional[str]
                 alt_text=getattr(img, 'alt_text', None),
                 caption=getattr(img, 'caption', None),
-                original_source_identifier_for_gcs_path=source_identifier,
+                original_source_identifier_for_gcs_path=source_identifier, # Map source_identifier
                 source_type_for_gcs_path=source_type,
-                job_id_for_gcs_path=job_id
+                job_id_for_gcs_path=job_id,
+                # New fields for RawImageInput from pipeline_models
+                source_document_id=source_identifier, # Use the source_identifier from method args
+                original_filename=getattr(img, 'original_filename', getattr(img, 'filename', None)), # Try 'original_filename' then 'filename'
+                page_number=getattr(img, 'page_number', None),
+                bbox=getattr(img, 'bbox', None),
+                mime_type=getattr(img, 'mime_type', None)
             ))
-        print(f"Orchestrator._map_to_raw_image_input: Mapped {len(raw_image_inputs)} images for ImageProcessingService.") # DEBUG PRINT
+        print(f"Orchestrator._map_to_raw_image_input: Mapped {len(raw_image_inputs)} images for ImageProcessingService.")
         return raw_image_inputs
 
     # @monitor.track_operation() # Add when monitor is implemented
@@ -90,7 +94,7 @@ class ParallelOrchestrator(BaseService):
 
         extracted_text: Optional[str] = None
         page_title: Optional[str] = orchestrator_input.source_identifier # Default to source_id
-        processed_images_data_dict: Dict[str, ProcessedImageData] = {}
+        processed_images_data_dict: Dict[str, EnrichedImageMetadata] = {}
         final_content_blocks: List[ContentBlock] = []
         final_status_code = "failure_orchestration"
         error_message: Optional[str] = None
@@ -116,7 +120,7 @@ class ParallelOrchestrator(BaseService):
             error_message = f"Routing failed: {routing_result.error_message}"
             final_status_code = "failure_routing"
             # Early exit if routing fails
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type) # MODIFIED
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, None) # MODIFIED
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
@@ -258,7 +262,7 @@ class ParallelOrchestrator(BaseService):
             if extracted_text and not final_content_blocks : final_content_blocks.append(ContentBlock(type="text", content=extracted_text))
             # Use determined_final_source_type, defaulting to initial if somehow not set
             output_source_type = determined_final_source_type if determined_final_source_type else initial_source_type_for_routing
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, output_source_type) # MODIFIED
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, output_source_type, None) # MODIFIED
             if final_status_code.startswith("failure"):
                 return ServiceResult.failure(error_message=error_message or "Orchestration failed at acquisition.", error_details=output_obj.model_dump())
             return ServiceResult.success(data=output_obj) # e.g. for unsupported_type or pdf_unhandled
@@ -266,10 +270,10 @@ class ParallelOrchestrator(BaseService):
         # 3. Parallel Processing: Image Processing and Content Structuring
         image_processing_service_input = ImageProcessingServiceInput(images_to_process=raw_images_for_processing)
         image_processing_task = self.image_processing_service.execute(image_processing_service_input)
-        processed_images_from_service: List[ProcessedImageData] = []
+        processed_images_from_service: List[EnrichedImageMetadata] = []
 
         try:
-            image_processing_result: ServiceResult[List[ProcessedImageData]] = await image_processing_task
+            image_processing_result: ServiceResult[List[EnrichedImageMetadata]] = await image_processing_task
             
             if image_processing_result.status == 'error' or not image_processing_result.data:
                 error_message_img = f"ImageProcessingService failed: {image_processing_result.error_message}"
@@ -279,14 +283,7 @@ class ParallelOrchestrator(BaseService):
             
             if image_processing_result.data:
                 processed_images_data_dict = {
-                    img_data.original_source_identifier: ProcessedImageData(
-                        original_source_identifier=img_data.original_source_identifier,
-                        gcs_url=img_data.gcs_url,
-                        alt_text=img_data.alt_text,
-                        caption=img_data.caption,
-                        llm_description=img_data.llm_description
-                        # Map other fields as necessary
-                    ) for img_data in image_processing_result.data
+                    img_data.image_id: img_data for img_data in image_processing_result.data
                 }
                 print(f"Orchestrator.process: Successfully processed {len(processed_images_data_dict)} images according to ImageProcessingService.") # DEBUG PRINT
             else:
@@ -344,7 +341,7 @@ class ParallelOrchestrator(BaseService):
 
         final_output_obj = self._prepare_final_output(
             orchestrator_input, final_status_code, page_title, final_content_blocks, 
-            processed_images_data_dict, error_message, final_url, output_source_type # MODIFIED: Pass the determined type
+            processed_images_data_dict, error_message, final_url, output_source_type, None # MODIFIED: Pass the determined type
         )
 
         end_time = time.time()
@@ -360,10 +357,12 @@ class ParallelOrchestrator(BaseService):
                               status: str, 
                               title: Optional[str],
                               blocks: List[ContentBlock],
-                              images_data: Dict[str, ProcessedImageData],
+                              images_data: Dict[str, EnrichedImageMetadata],
                               err_msg: Optional[str],
                               final_url_val: Optional[str],
-                              actual_source_type: Optional[str]) -> OrchestrationOutput: # MODIFIED: Add actual_source_type
+                              actual_source_type: Optional[str],
+                              doc_meta: Optional[Any] # Placeholder for DocumentMetadata
+                              ) -> OrchestrationOutput: # MODIFIED: Add actual_source_type
         """
         Helper method to construct the OrchestrationOutput object.
         """
@@ -383,7 +382,8 @@ class ParallelOrchestrator(BaseService):
             is_long_article=False, # Placeholder, determine actual value if needed
             original_content_blocks=blocks,
             processed_images_data=images_data,
-            error_message=err_msg
+            error_message=err_msg,
+            document_metadata=doc_meta # Pass doc_meta here
         )
 
     async def execute(self, *args: Any, **kwargs: Any) -> ServiceResult[Any]:
