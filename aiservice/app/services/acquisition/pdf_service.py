@@ -248,64 +248,82 @@ class PDFAcquisitionService(BaseService):
                             
                             image_bytes = base_image_dict.get("image")
                             img_extension = base_image_dict.get("ext")
-
-                            if not image_bytes or not img_extension:
+                            
+                            if not image_bytes:
+                                print(f"PDFAcquisitionService: Warning - Could not extract image bytes for xref {xref} on page {page_num + 1}.")
                                 continue
 
-                            raw_image_id = f"img_{job_id}_p{page_num + 1}_xref{xref}_idx{img_idx}"
-                            mime_type = f"image/{img_extension.lower()}"
-                            if img_extension.lower() == 'jpx': mime_type = 'image/jp2'
-
-                            raw_img_obj = RawImageInput(
-                                image_id=raw_image_id,
+                            image_id = f"{job_id}_p{page_num + 1}_img{img_idx}"
+                            
+                            # Attempt to get bounding box from image info itself if available
+                            # PyMuPDF's get_images(full=True) provides (xref, smask, width, height, bpc, colorspace, ...)
+                            # The bounding box of the *image usage* on the page is more complex.
+                            # We will use a placeholder bbox or try to find it via page.get_image_rects()
+                            # This part might need refinement if precise image bbox on page is critical.
+                            img_bbox_on_page = None
+                            try:
+                                # Directly call page.get_image_bbox with img_info and transform=False (as the third positional arg)
+                                bbox_or_rects = await loop.run_in_executor(None, page.get_image_bbox, img_info, False)
+                                
+                                if isinstance(bbox_or_rects, fitz.Rect) and bbox_or_rects.is_valid and not bbox_or_rects.is_empty:
+                                    img_bbox_on_page = list(bbox_or_rects)
+                            except Exception as e_img_bbox:
+                                print(f"PDFAcquisitionService: Warning - Could not get image bbox for xref {xref} on page {page_num + 1}: {e_img_bbox}")
+                            
+                            raw_image_obj = RawImageInput(
+                                image_id=image_id,
                                 image_bytes=image_bytes,
-                                source_document_id=job_id, 
-                                original_filename=pdf_filename,
+                                source_document_id=pdf_input.file_path,
+                                original_filename=f"image_{xref}.{img_extension}",
                                 page_number=page_num + 1,
-                                bbox=None, 
-                                mime_type=mime_type,
-                                original_source_identifier_for_gcs_path=pdf_input.file_path,
+                                bbox=img_bbox_on_page, # Bounding box on the page
+                                mime_type=f"image/{img_extension}",
+                                alt_text=None, # PDFs don't usually have alt text in a standard way
+                                caption=None,  # Captions would need separate logic to find nearby text
+                                original_source_identifier_for_gcs_path=pdf_input.file_path, # or a cleaner identifier
                                 source_type_for_gcs_path="pdf",
                                 job_id_for_gcs_path=job_id
                             )
-                            raw_images.append(raw_img_obj)
+                            raw_images.append(raw_image_obj)
 
-                            placeholder_block_id = f"{job_id}_p{page_num + 1}_imgplaceholder_{img_idx}"
-                            img_bbox_on_page = None
-                            try:
-                                img_bboxes_on_page = await loop.run_in_executor(None, page.get_image_bboxes, img_info, transform=False)
-                                if img_bboxes_on_page:
-                                    img_bbox_on_page = list(img_bboxes_on_page[0])
-                            except Exception as e_bbox:
-                                print(f"PDFAcquisitionService: INFO - Could not get bbox for image xref {xref} on page {page_num + 1}: {e_bbox}")
-
+                            # Create an image placeholder block
+                            # The order of this placeholder relative to text blocks needs to be determined.
+                            # For now, we add it after all text blocks for the page, then sort globally.
                             preliminary_blocks.append(PreliminaryBlock(
-                                block_id=placeholder_block_id,
+                                block_id=f"{job_id}_p{page_num + 1}_imgph{img_idx}",
                                 type="image_placeholder",
-                                image_id_ref=raw_image_id,
+                                image_id_ref=image_id,
                                 page_number=page_num + 1,
-                                bbox=img_bbox_on_page,
-                                order=-1,
-                                custom_attributes={"original_img_xref": xref}
+                                bbox=img_bbox_on_page, # Use the same bbox as the raw image input
+                                order=-1, # Will be sorted later
+                                custom_attributes={"original_xref": xref}
                             ))
-                        except Exception as e_img:
-                            print(f"PDFAcquisitionService: Error processing image xref {xref} on page {page_num + 1}: {e_img}")
-                            continue
+                        except Exception as e_img_extract:
+                            print(f"PDFAcquisitionService: Error extracting image xref {xref} on page {page_num+1}: {e_img_extract}")
+                            # Optionally, log this error more formally
             
+            # Sort all preliminary blocks by page number, then by an estimated vertical position (y0 of bbox)
+            # and for images/placeholders that might not have a reliable y0 initially, use a secondary key or ensure order is stable.
             def sort_key(block: PreliminaryBlock):
-                page_val = block.page_number if block.page_number is not None else float('inf')
-                y0_val = float('inf')
-                if block.bbox and isinstance(block.bbox, (list, tuple)) and len(block.bbox) >= 2:
-                    y0_val = block.bbox[1] 
-                x0_val = float('inf')
-                if block.bbox and isinstance(block.bbox, (list, tuple)) and len(block.bbox) >= 1:
-                    x0_val = block.bbox[0]
-                return (page_val, y0_val, x0_val)
+                primary_sort = block.page_number if block.page_number is not None else float('inf')
+                
+                secondary_sort_val = float('inf') # Default for items without a bbox or with unusual bbox
+                if block.bbox and len(block.bbox) >= 2:
+                    secondary_sort_val = block.bbox[1] # y0 - vertical position
+                    if block.type == "image_placeholder" and block.bbox[1] == 0.0 and block.bbox[0] == 0.0: # Potentially unplaced image
+                         # Attempt to place them after text blocks on the same page if y0 is 0.0 (often a sign of unplaced)
+                         # This is a heuristic. A more robust way would be to interleave based on original document structure.
+                         secondary_sort_val = float('inf') # Put at end of page if bbox is [0,0,0,0] or similar
+                
+                # Ensure stable sort for items with same page and y0, using block_id as tie-breaker
+                return (primary_sort, secondary_sort_val, block.block_id)
 
             preliminary_blocks.sort(key=sort_key)
+            
+            # Assign final order based on the sort
             for i, block in enumerate(preliminary_blocks):
                 block.order = i
-            
+
             if document_metadata is None: 
                 print("PDFAcquisitionService: ERROR - DocumentMetadata was not initialized!")
                 document_metadata = DocumentMetadata(
@@ -321,45 +339,111 @@ class PDFAcquisitionService(BaseService):
             print(f"PDFAcquisitionService: Completed for {pdf_filename} in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}") # Keep this for success logging
             return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
 
-        except FileNotFoundError:
-            # duration not applicable as it's an early check or OS error
-            return ServiceResult.failure(
-                error_message=f"File not found: {pdf_input.file_path}"
-            )
-        except fitz.fitz.TraitError as e_fitz_trait:
-            duration = time.time() - start_time
-            error_msg = f"PyMuPDF TraitError processing PDF '{pdf_filename}': {str(e_fitz_trait)}. Document might be malformed or password-protected."
-            print(f"PDFAcquisitionService: {error_msg}")
-            return ServiceResult.failure(error_message=error_msg)
-        except fitz.fitz.FileDataError as e_fitz_data:
-            duration = time.time() - start_time
-            error_msg = f"PyMuPDF FileDataError processing PDF '{pdf_filename}': {str(e_fitz_data)}. Document might be corrupted, empty, or not a valid PDF."
-            print(f"PDFAcquisitionService: {error_msg}")
-            return ServiceResult.failure(error_message=error_msg)
-        except RuntimeError as e_runtime: 
-            duration = time.time() - start_time
-            error_msg = f"Runtime error processing PDF '{pdf_filename}': {str(e_runtime)}. Check if PDF is password-protected."
-            if "password" in str(e_runtime).lower():
-                 error_msg = f"PDF '{pdf_filename}' is password-protected and cannot be opened."
-            print(f"PDFAcquisitionService: {error_msg}")
-            return ServiceResult.failure(error_message=error_msg)
+        except fitz.fitz.EmptyFileError:
+            # No duration calculation here as it's an early exit
+            return ServiceResult.failure(error_message=f"File is empty or corrupted: {pdf_input.file_path}")
         except Exception as e:
-            duration = time.time() - start_time
-            error_msg = f"Unexpected error processing PDF '{pdf_filename}': {str(e)}"
-            print(f"PDFAcquisitionService: {error_msg}") 
-            import traceback
-            traceback.print_exc()
+            # Ensure duration is calculated even in case of general exception
+            duration_ms = (time.time() - start_time) * 1000
+            self.logger.error(f"PDFAcquisitionService: Error processing {pdf_input.file_path}. Duration: {duration_ms:.2f}ms. Error: {e}", exc_info=True)
             return ServiceResult.failure(
-                error_message=f"Error parsing PDF '{pdf_filename}': {str(e)}",
+                error_message=f"Error processing PDF {pdf_input.file_path}: {e}",
+                details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration_ms}
             )
         finally:
             if doc:
-                try:
-                    await loop.run_in_executor(None, doc.close)
-                except Exception as e_close:
-                     print(f"PDFAcquisitionService: Error closing document '{pdf_filename}' after processing: {e_close}")
+                await loop.run_in_executor(None, doc.close)
+        
+        duration_ms = (time.time() - start_time) * 1000
+        self.logger.info(f"PDFAcquisitionService: Successfully processed {pdf_input.file_path}. Duration: {duration_ms:.2f}ms. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
+        
+        return ServiceResult.success(
+            data=(preliminary_blocks, document_metadata, raw_images),
+            details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration_ms, "pages_processed": len(doc) if doc else 0}
+        )
 
-        # The old way of constructing PDFAcquisitionServiceOutput and returning ServiceResult
-        # is replaced by direct construction of the Tuple for success, or simple failure message.
-        # The detailed status strings like "success_text_only" are less critical now,
-        # as the presence/absence of data in the tuple components implies the outcome. 
+# Example usage (for testing purposes)
+async def main_test_pdf_service():
+    print("Starting PDFAcquisitionService test...")
+    
+    # Create a dummy settings object or mock if your service relies on it
+    class DummySettings:
+        pass # Add any attributes your service's __init__ might expect
+    
+    settings = DummySettings()
+    service = PDFAcquisitionService(settings=settings)
+    
+    # --- Test Case 1: Valid PDF ---
+    # Replace with a path to an actual PDF file for testing
+    # For example: test_pdf_path = "path/to/your/test.pdf" 
+    # Ensure the PDF exists at this path or the test will fail.
+    test_pdf_path = r"E:\ThinkStash\ Embedding-Based Retrieval for Airbnb Search.pdf" # Using a raw string for Windows path
+
+    if not os.path.exists(test_pdf_path):
+        print(f"Test PDF not found at: {test_pdf_path}. Skipping test.")
+        return
+
+    print(f"Processing PDF: {test_pdf_path}")
+    pdf_input = PDFAcquisitionServiceInput(file_path=test_pdf_path, job_id="testjob001")
+    
+    result = await service.execute(pdf_input)
+    
+    if result.success:
+        print("\n--- Test Case 1: Success ---")
+        prelim_blocks, doc_meta, raw_imgs = result.data
+        print(f"Document Metadata: {doc_meta.model_dump_json(indent=2) if doc_meta else 'None'}")
+        print(f"Number of Preliminary Blocks: {len(prelim_blocks)}")
+        print(f"Number of Raw Images: {len(raw_imgs)}")
+        
+        # Print some details of the first few blocks and images
+        for i, block in enumerate(prelim_blocks[:5]):
+            print(f"  Block {i+1}: type={block.type}, order={block.order}, page={block.page_number}, bbox={block.bbox}")
+            if block.type == "text" or block.type == "heading":
+                print(f"    Text: '{block.text_content[:100]}...'")
+            elif block.type == "image_placeholder":
+                print(f"    Image ID Ref: {block.image_id_ref}")
+        
+        for i, img in enumerate(raw_imgs[:3]):
+            print(f"  Image {i+1}: id={img.image_id}, page={img.page_number}, bbox={img.bbox}, filename={img.original_filename}, mime={img.mime_type}")
+            print(f"    GCS Path Params: job_id={img.job_id_for_gcs_path}, source_id={img.original_source_identifier_for_gcs_path}, type={img.source_type_for_gcs_path}")
+
+    else:
+        print("\n--- Test Case 1: Failure ---")
+        print(f"Error: {result.error_message}")
+        if result.details:
+            print(f"Details: {result.details}")
+
+    # --- Test Case 2: File Not Found ---
+    print("\n--- Test Case 2: File Not Found ---")
+    non_existent_path = "path/to/non_existent_file.pdf"
+    pdf_input_non_existent = PDFAcquisitionServiceInput(file_path=non_existent_path, job_id="testjob002")
+    result_non_existent = await service.execute(pdf_input_non_existent)
+    if not result_non_existent.success:
+        print(f"Successfully handled non-existent file: {result_non_existent.error_message}")
+    else:
+        print("Test Case 2 failed: Expected failure for non-existent file.")
+
+    # --- Test Case 3: Empty/Corrupted PDF (manual setup needed) ---
+    # You would need to create an empty or corrupted PDF file and provide its path
+    # empty_pdf_path = "path/to/your/empty_or_corrupt.pdf"
+    # if os.path.exists(empty_pdf_path):
+    #     print("\n--- Test Case 3: Empty/Corrupted PDF ---")
+    #     pdf_input_empty = PDFAcquisitionServiceInput(file_path=empty_pdf_path, job_id="testjob003")
+    #     result_empty = await service.execute(pdf_input_empty)
+    #     if not result_empty.success and "empty or corrupted" in result_empty.error_message:
+    #         print(f"Successfully handled empty/corrupted file: {result_empty.error_message}")
+    #     else:
+    #         print(f"Test Case 3 failed or was skipped. Result: {result_empty}")
+    # else:
+    #     print("\nSkipping Test Case 3: Empty/Corrupted PDF not found.")
+
+
+if __name__ == "__main__":
+    # Ensure an event loop is running if this script is executed directly
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError: # No event loop running
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    loop.run_until_complete(main_test_pdf_service())

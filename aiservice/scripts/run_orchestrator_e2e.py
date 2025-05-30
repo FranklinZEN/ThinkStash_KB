@@ -136,6 +136,8 @@ async def main():
         print(f"Please ensure the file exists or provide a valid URL.")
         sys.exit(1) # Exit if local file not found
         
+    # Run the test once
+    print("\n--- E2E Test - Single Run ---")
     await run_single_e2e_test(orchestrator, source_identifier_arg, source_type_hint_arg)
 
 if __name__ == "__main__":

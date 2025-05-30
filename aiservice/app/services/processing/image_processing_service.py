@@ -5,11 +5,13 @@ import uuid
 import time
 import re
 import functools
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Dict, Set
+import hashlib # Import hashlib
 
 import aiohttp
 from PIL import Image # Pillow
 from google.cloud import storage # For GCS
+from cachetools import LRUCache # Import LRUCache
 
 from aiservice.app.config.settings import Settings # For typed settings
 from aiservice.app.services.base import BaseService, ServiceResult
@@ -28,6 +30,35 @@ class ImageProcessingService(BaseService):
     """
     Asynchronous service to download, process (metadata, LLM analysis), and upload images to GCS.
     """
+    # --- Image Filter Constants ---
+    MIN_IMG_DIMENSION = 50  # Minimum width or height in pixels
+    MIN_IMG_AREA = 5000     # Minimum area (width * height) in pixels
+    MAX_IMG_ASPECT_RATIO_DEVIATION = 4.0  # Max deviation for aspect ratio (e.g., width/height < 4.0 and height/width < 4.0)
+
+    IRRELEVANT_ALT_TEXT_EXACT: Set[str] = {
+        "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
+        "user", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
+        "figure", "image", "photo", "illustration", "diagram"
+        # Add more as identified
+    }
+    IRRELEVANT_ALT_TEXT_SUBSTRINGS: Set[str] = {
+        "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
+        "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo",
+        "decorative image", "background image"
+        # Add more as identified
+    }
+    IRRELEVANT_FILENAME_URL_SEGMENTS: Set[str] = {
+        "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
+        "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
+        "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
+        "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
+        "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com",
+        "default-avatar", "default_avatar", "profile-pic", "profile_pic",
+        "icon-", "logo-", "banner-", "-icon.", "-logo.", "-banner." # Common prefixes/suffixes
+        # Add more as identified
+    }
+    # --- End Image Filter Constants ---
+
     def __init__(self, image_analysis_tool: Optional[ImageAnalysisLLMTool] = None, settings: Optional[Settings] = None):
         super().__init__(settings)
         self.image_analysis_tool = image_analysis_tool
@@ -44,6 +75,9 @@ class ImageProcessingService(BaseService):
                 print(f"ImageProcessingService: WARNING - Failed to initialize GCS client: {str(e)}. GCS uploads will fail.")
                 self.gcs_client = None # Ensure it's None if init fails
                 self.gcs_bucket_name = None # Can't use bucket if client failed
+        
+        # Initialize LRU Cache
+        self.processing_cache = LRUCache(maxsize=256) # Cache up to 256 processed image results
 
     def _sanitize_for_gcs_path(self, text: Optional[str], max_length: int = 100) -> str:
         if not text: return f"untitled_{uuid.uuid4().hex[:6]}"
@@ -86,10 +120,10 @@ class ImageProcessingService(BaseService):
             return {"gcs_url": None, "error": f"GCS upload failed: {str(e)}"}
 
     async def _process_single_image(self, raw_image: RawImageInput) -> Optional[EnrichedImageMetadata]:
-        current_image_bytes: Optional[bytes] = raw_image.image_bytes
+        current_image_bytes: Optional[bytes] = raw_image.image_bytes # Moved higher to be available for initial cache key logic if needed, though hash is after download
         error_messages: List[str] = []
 
-        # 1. Download if source_url is provided and no bytes
+        # 1. Download if source_url is provided and no bytes (current_image_bytes will be updated)
         if raw_image.source_url and not current_image_bytes:
             try:
                 timeout_seconds = self.settings.default_request_timeout_seconds if self.settings else 30
@@ -104,13 +138,85 @@ class ImageProcessingService(BaseService):
                 return None 
 
         if not current_image_bytes:
-            if not error_messages: error_messages.append("No image bytes or downloadable URL provided.")
+            if not error_messages: error_messages.append("No image bytes or downloadable URL provided for cache key generation or processing.")
             print(f"ImageProcessingService: No bytes for image {raw_image.image_id}. Errors: {'; '.join(error_messages)}")
             return None
+        
+        # Generate cache key using a hash of image_bytes
+        image_bytes_hash = hashlib.sha256(current_image_bytes).hexdigest()
+        cache_key = (image_bytes_hash, self.use_llm_for_image_analysis)
 
+        # Check cache
+        if cache_key in self.processing_cache:
+            cached_data: EnrichedImageMetadata = self.processing_cache[cache_key]
+            print(f"ImageProcessingService: Cache HIT for key: {cache_key} (current raw_image.image_id: {raw_image.image_id}) -> using cached EnrichedImageMetadata originally from image_id: {cached_data.image_id}")
+            
+            # Create a new EnrichedImageMetadata object to ensure the image_id and original_source_identifier
+            # match the current job's RawImageInput, while reusing other content-derived data from the cached object.
+            # This is crucial for consistent linking in ContentStructuringService and accurate reporting.
+            updated_cached_data = EnrichedImageMetadata(
+                image_id=raw_image.image_id, # Use current job's image_id
+                gcs_url=cached_data.gcs_url, # gcs_url is content-dependent, so reuse from cache
+                alt_text=cached_data.alt_text, # Re-use cached refined alt_text
+                caption=cached_data.caption,   # Re-use cached refined caption
+                llm_description=cached_data.llm_description, # Re-use cached LLM description
+                width=cached_data.width,       # Re-use cached dimensions
+                height=cached_data.height,     # Re-use cached dimensions
+                original_source_identifier=raw_image.original_source_identifier_for_gcs_path # Use current job's source identifier
+            )
+            # Optional: A more detailed check or logging if other fields were expected to align with raw_image but come from cache.
+            # For example, if raw_image.alt_text could be different from cached_data.alt_text for the same image content
+            # and we needed to decide which one to use. Current assumption is cached EIM holds the canonical version of these.
+            return updated_cached_data
+        
+        print(f"ImageProcessingService: Cache MISS for key: {cache_key} (image_id: {raw_image.image_id})")
+
+        # The rest of the processing logic remains largely the same using current_image_bytes
         metadata = await self._get_image_metadata(current_image_bytes)
         if metadata.get("error"):
             error_messages.append(metadata["error"])
+            # If metadata extraction failed, we can't apply dimension filters, but other filters might still apply or we might choose to bail.
+            # For now, let's assume we might still proceed to GCS upload if bytes exist, but this is a weak point.
+            # A more robust approach might be to return None here if metadata.error is significant.
+
+        # --- Apply Image Filtering Logic ---
+        # Only proceed if metadata was successfully extracted
+        if not metadata.get("error"):
+            img_width = metadata.get("width")
+            img_height = metadata.get("height")
+
+            if img_width is not None and img_height is not None: # Dimensions are available
+                if img_width < self.MIN_IMG_DIMENSION or img_height < self.MIN_IMG_DIMENSION:
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small dimension (W:{img_width}, H:{img_height} < MinDim:{self.MIN_IMG_DIMENSION}).")
+                    return None
+                if (img_width * img_height) < self.MIN_IMG_AREA:
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small area (Area:{img_width * img_height} < MinArea:{self.MIN_IMG_AREA}).")
+                    return None
+                if img_height > 0 and (img_width / img_height) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (W:{img_width}/H:{img_height} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                    return None
+                if img_width > 0 and (img_height / img_width) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (H:{img_height}/W:{img_width} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                    return None
+            # else: dimensions not available, cannot apply dimension-based filters.
+
+            # Alt text filtering
+            alt_text_lower = (raw_image.alt_text or "").lower()
+            if alt_text_lower:
+                if alt_text_lower in self.IRRELEVANT_ALT_TEXT_EXACT:
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to exact match in irrelevant alt text: '{raw_image.alt_text}'.")
+                    return None
+                if any(sub in alt_text_lower for sub in self.IRRELEVANT_ALT_TEXT_SUBSTRINGS):
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to substring match in irrelevant alt text: '{raw_image.alt_text}'.")
+                    return None
+
+            # Filename/URL segment filtering
+            source_identifier_lower = (raw_image.source_url or raw_image.original_filename or "").lower()
+            if source_identifier_lower:
+                if any(segment in source_identifier_lower for segment in self.IRRELEVANT_FILENAME_URL_SEGMENTS):
+                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to irrelevant segment in URL/filename: '{source_identifier_lower}'.")
+                    return None
+        # --- End Image Filtering Logic ---
 
         gcs_url: Optional[str] = None
         if self.gcs_client and self.gcs_bucket_name:
@@ -162,6 +268,13 @@ class ImageProcessingService(BaseService):
 
         if error_messages:
             print(f"ImageProcessingService: Note - Errors during processing of {raw_image.image_id}: {'; '.join(error_messages)}")
+
+        # Store in cache only if successfully processed (gcs_url might be None if GCS is not configured, but that's still a valid 'processed' state)
+        # However, if critical steps like download or metadata failed, final_image_data might be None or incomplete.
+        # The current logic returns None from _process_single_image on critical failures before EnrichedImageMetadata is created.
+        # So, if we get an EnrichedImageMetadata object, it means major processing steps were attempted.
+        if final_image_data: # final_image_data is an EnrichedImageMetadata object here
+             self.processing_cache[cache_key] = final_image_data
 
         return final_image_data
 

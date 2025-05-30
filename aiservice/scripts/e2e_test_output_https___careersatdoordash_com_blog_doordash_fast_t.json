@@ -1,0 +1,27 @@
+{
+  "status_code": "failure_acquisition",
+  "source_identifier": "https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c\n\npython scripts/run_orchestrator_e2e.py https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c",
+  "source_type": "url",
+  "processing_level_used": "full_content",
+  "extracted_title": "https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c\n\npython scripts/run_orchestrator_e2e.py https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c",
+  "is_long_article": false,
+  "original_content_blocks": [],
+  "processed_images_data": {},
+  "document_metadata": {
+    "document_id": "e2e_job_1e691375",
+    "source_identifier": "https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c\n\npython scripts/run_orchestrator_e2e.py https://careersatdoordash.com/blog/doordash-fast-travel-estimates/\u201c",
+    "source_type": "url",
+    "final_url": "https://careersatdoordash.com/blog/doordash-fast-travel-estimates/%E2%80%9Cpython%20scripts/run_orchestrator_e2e.py%20https://careersatdoordash.com/blog/doordash-fast-travel-estimates/%E2%80%9C",
+    "title": null,
+    "author": null,
+    "subject": null,
+    "keywords": [],
+    "creation_date": null,
+    "modification_date": null,
+    "extracted_at": "2025-05-30T01:25:16.534589",
+    "total_pages": null,
+    "language_detected": null,
+    "custom_fields": {}
+  },
+  "error_message": "WebAcquisitionService failed: HTTP error 403 for URL: https://careersatdoordash.com/blog/doordash-fast-travel-estimates/%E2%80%9Cpython%20scripts/run_orchestrator_e2e.py%20https://careersatdoordash.com/blog/doordash-fast-travel-estimates/%E2%80%9C"
+}

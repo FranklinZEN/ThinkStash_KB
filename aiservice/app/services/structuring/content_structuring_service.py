@@ -53,42 +53,36 @@ class ContentStructuringService(BaseService):
             if not service_input.preliminary_blocks: # Check again after enriched_images_map init
                 return ServiceResult.success(data=[])
 
-            # Helper to handle list item aggregation
-            current_list_items: List[Union[str, Dict[str, Any]]] = []
-            current_list_level: Optional[int] = None
-            current_list_ordered: Optional[bool] = None
-            current_list_block_id_prefix: Optional[str] = None
-            current_list_page_number: Optional[int] = None
-            current_list_bbox: Optional[List[float]] = None # Bbox for the whole list can be complex; might take first item's
+            # --- Refactored List Handling Logic ---
+            # active_lists_stack will hold dictionaries representing lists currently being built.
+            # Each dict: {'level': int, 'ordered': bool, 'items': List[Union[str, Dict]], 
+            #             'block_id_prefix': str, 'page_number': Optional[int], 'bbox': Optional[List[float]]}
+            active_lists_stack: List[Dict[str, Any]] = []
 
-            def finalize_current_list():
-                nonlocal current_list_items, current_list_level, current_list_ordered, final_content_blocks
-                nonlocal current_list_block_id_prefix, current_list_page_number, current_list_bbox
-                if current_list_items:
-                    list_block = ContentBlock(
-                        block_id=f"{current_list_block_id_prefix}_list", # Generate a new ID for the list block
-                        type='list',
-                        items=current_list_items,
-                        ordered=current_list_ordered,
-                        page_number=current_list_page_number, # Page of the first item
-                        bbox=current_list_bbox # Bbox of the first item, or combined
-                        # level for the list block itself is not typical in ContentBlock; levels are per item.
-                        # list_start_number might be derived if needed based on item content
-                    )
-                    final_content_blocks.append(list_block)
-                    current_list_items = []
-                    current_list_level = None
-                    current_list_ordered = None
-                    current_list_block_id_prefix = None
-                    current_list_page_number = None
-                    current_list_bbox = None
-            
+            def create_list_content_block(list_data: Dict[str, Any]) -> ContentBlock:
+                return ContentBlock(
+                    block_id=f"{list_data['block_id_prefix']}_list",
+                    type='list',
+                    items=list_data['items'],
+                    ordered=list_data['ordered'],
+                    page_number=list_data['page_number'],
+                    bbox=list_data['bbox']
+                )
+
             try:
                 for p_block in sorted(service_input.preliminary_blocks, key=lambda b: b.order):
-                    # If we encounter a non-list item, finalize any ongoing list
+                    # --- Handle List Finalization based on p_block type OR level change ---
                     if p_block.type != 'list_item':
-                        finalize_current_list()
-
+                        # If we encounter a non-list item, finalize ALL active lists.
+                        while active_lists_stack:
+                            final_list_data = active_lists_stack.pop()
+                            list_cb = create_list_content_block(final_list_data)
+                            if active_lists_stack: # If there's a parent list
+                                active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
+                            else: # This was a top-level list
+                                final_content_blocks.append(list_cb)
+                    
+                    # --- Process PreliminaryBlock ---
                     if p_block.type == 'text':
                         final_content_blocks.append(ContentBlock(
                             block_id=p_block.block_id, type='text', content=p_block.text_content,
@@ -140,29 +134,63 @@ class ContentStructuringService(BaseService):
                         ))
                     elif p_block.type == 'list_item':
                         item_content = p_block.list_item_data if p_block.list_item_data is not None else p_block.text_content
-                        
                         if item_content is None: item_content = ""
 
-                        if not current_list_items or \
-                           current_list_level != p_block.list_level or \
-                           current_list_ordered != p_block.list_ordered:
-                            finalize_current_list() 
-                            current_list_level = p_block.list_level
-                            current_list_ordered = p_block.list_ordered
-                            current_list_block_id_prefix = p_block.block_id.rsplit('_li', 1)[0] if '_li' in p_block.block_id else p_block.block_id
-                            current_list_page_number = p_block.page_number
-                            current_list_bbox = p_block.bbox 
+                        current_item_level = p_block.list_level if p_block.list_level is not None else 0
                         
-                        current_list_items.append(str(item_content)) 
+                        # 1. Finalize lists deeper than current item's level
+                        while active_lists_stack and active_lists_stack[-1]['level'] > current_item_level:
+                            final_list_data = active_lists_stack.pop()
+                            list_cb = create_list_content_block(final_list_data)
+                            if active_lists_stack: # Must have a parent if its level was > current_item_level
+                                active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
+                            else: # This should ideally not happen if logic is correct (popped too much)
+                                print(f"WARNING: Popped a list (ID prefix: {final_list_data['block_id_prefix']}) that had no parent during level reduction.", file=sys.stderr)
+                                final_content_blocks.append(list_cb)
 
-                    else:
+                        # 2. If stack is empty, or current item starts a new list (different level or type)
+                        if not active_lists_stack or \
+                           active_lists_stack[-1]['level'] != current_item_level or \
+                           active_lists_stack[-1]['ordered'] != p_block.list_ordered:
+                            
+                            # If it's a new list at the same level (e.g. ul then another ul), finalize previous one at this level
+                            if active_lists_stack and active_lists_stack[-1]['level'] == current_item_level:
+                                final_list_data = active_lists_stack.pop()
+                                list_cb = create_list_content_block(final_list_data)
+                                if active_lists_stack: # Parent list
+                                     active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
+                                else: # Top-level list
+                                    final_content_blocks.append(list_cb)
+
+                            # Start a new list for the current item's level
+                            new_list_data = {
+                                'level': current_item_level,
+                                'ordered': p_block.list_ordered,
+                                'items': [],
+                                'block_id_prefix': p_block.block_id.rsplit('_li', 1)[0] if '_li' in p_block.block_id else p_block.block_id,
+                                'page_number': p_block.page_number,
+                                'bbox': p_block.bbox # Bbox of the first item serves as initial list bbox
+                            }
+                            active_lists_stack.append(new_list_data)
+                        
+                        # 3. Add item to the current list (top of the stack)
+                        active_lists_stack[-1]['items'].append(str(item_content))
+
+                    else: # Other block types (non-text, non-list_item, already handled above for list finalization)
                         final_content_blocks.append(ContentBlock(
                             block_id=p_block.block_id, type='text',
                             content=f"[Unsupported PreliminaryBlock Type: {p_block.type}] {p_block.text_content or p_block.code_content or ''}".strip(),
                             page_number=p_block.page_number, bbox=p_block.bbox
                         ))
 
-                finalize_current_list() # Finalize any remaining list at the end
+                # Finalize any remaining lists at the end of all blocks
+                while active_lists_stack:
+                    final_list_data = active_lists_stack.pop()
+                    list_cb = create_list_content_block(final_list_data)
+                    if active_lists_stack: # If there's a parent list
+                        active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
+                    else: # This was a top-level list
+                        final_content_blocks.append(list_cb)
 
             except Exception as e_structuring_loop:
                 # Log the problematic block and the exception
