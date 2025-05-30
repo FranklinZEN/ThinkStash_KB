@@ -6,7 +6,8 @@ import time
 import re
 import functools
 from typing import Optional, Any, List, Dict, Set
-import hashlib # Import hashlib
+import hashlib
+import logging # Added logging
 
 import aiohttp
 from PIL import Image # Pillow
@@ -30,54 +31,62 @@ class ImageProcessingService(BaseService):
     """
     Asynchronous service to download, process (metadata, LLM analysis), and upload images to GCS.
     """
-    # --- Image Filter Constants ---
-    MIN_IMG_DIMENSION = 50  # Minimum width or height in pixels
-    MIN_IMG_AREA = 5000     # Minimum area (width * height) in pixels
-    MAX_IMG_ASPECT_RATIO_DEVIATION = 4.0  # Max deviation for aspect ratio (e.g., width/height < 4.0 and height/width < 4.0)
-
-    IRRELEVANT_ALT_TEXT_EXACT: Set[str] = {
-        "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
-        "user", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
-        "figure", "image", "photo", "illustration", "diagram"
-        # Add more as identified
-    }
-    IRRELEVANT_ALT_TEXT_SUBSTRINGS: Set[str] = {
-        "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
-        "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo",
-        "decorative image", "background image"
-        # Add more as identified
-    }
-    IRRELEVANT_FILENAME_URL_SEGMENTS: Set[str] = {
-        "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
-        "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
-        "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
-        "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
-        "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com",
-        "default-avatar", "default_avatar", "profile-pic", "profile_pic",
-        "icon-", "logo-", "banner-", "-icon.", "-logo.", "-banner." # Common prefixes/suffixes
-        # Add more as identified
-    }
-    # --- End Image Filter Constants ---
+    # --- Image Filter Constants are now loaded from settings in __init__ ---
+    # MIN_IMG_DIMENSION = 50  # Removed
+    # MIN_IMG_AREA = 5000     # Removed
+    # MAX_IMG_ASPECT_RATIO_DEVIATION = 4.0 # Removed
+    # IRRELEVANT_ALT_TEXT_EXACT: Set[str] = { ... } # Removed
+    # IRRELEVANT_ALT_TEXT_SUBSTRINGS: Set[str] = { ... } # Removed
+    # IRRELEVANT_FILENAME_URL_SEGMENTS: Set[str] = { ... } # Removed
 
     def __init__(self, image_analysis_tool: Optional[ImageAnalysisLLMTool] = None, settings: Optional[Settings] = None):
         super().__init__(settings)
         self.image_analysis_tool = image_analysis_tool
         self.settings = settings # Store typed settings
-        self.use_llm_for_image_analysis = self.settings.use_llm_for_image_analysis if self.settings else False
-        self.gcs_bucket_name = self.settings.gcs_bucket_name if self.settings else None
+        self.logger = logging.getLogger(__name__) # Initialize logger
         
+        if self.settings:
+            if hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
+                self.logger.setLevel(logging.DEBUG)
+            else:
+                self.logger.setLevel(logging.INFO)
+            self.use_llm_for_image_analysis = self.settings.use_llm_for_image_analysis
+            self.gcs_bucket_name = self.settings.gcs_bucket_name
+            # Load image filter constants from settings
+            self.MIN_IMG_DIMENSION = self.settings.img_filter_min_dimension
+            self.MIN_IMG_AREA = self.settings.img_filter_min_area
+            self.MAX_IMG_ASPECT_RATIO_DEVIATION = self.settings.img_filter_max_aspect_ratio_deviation
+            self.IRRELEVANT_ALT_TEXT_EXACT = self.settings.img_filter_irrelevant_alt_text_exact
+            self.IRRELEVANT_ALT_TEXT_SUBSTRINGS = self.settings.img_filter_irrelevant_alt_text_substrings
+            self.IRRELEVANT_FILENAME_URL_SEGMENTS = self.settings.img_filter_irrelevant_filename_url_segments
+            processing_cache_maxsize = self.settings.image_processing_cache_size
+            self.default_request_timeout_seconds = self.settings.default_request_timeout_seconds
+        else:
+            # Fallbacks if settings object is not provided (should ideally not happen in production)
+            self.logger.setLevel(logging.INFO) # Default if no settings
+            self.use_llm_for_image_analysis = False
+            self.gcs_bucket_name = None
+            self.MIN_IMG_DIMENSION = 50
+            self.MIN_IMG_AREA = 5000
+            self.MAX_IMG_ASPECT_RATIO_DEVIATION = 4.0
+            self.IRRELEVANT_ALT_TEXT_EXACT = {"logo", "avatar", "icon"} # Minimal fallback
+            self.IRRELEVANT_ALT_TEXT_SUBSTRINGS = {"logo", "avatar", "icon"} # Minimal fallback
+            self.IRRELEVANT_FILENAME_URL_SEGMENTS = {"/logo", "/avatar", "/icon"} # Minimal fallback
+            processing_cache_maxsize = 128 # Fallback cache size
+            self.default_request_timeout_seconds = 30
+
         self.gcs_client: Optional[storage.Client] = None
         if self.gcs_bucket_name:
             try:
                 self.gcs_client = storage.Client() # Initialize GCS client
-                print(f"ImageProcessingService: GCS Client initialized for bucket: {self.gcs_bucket_name}")
+                self.logger.info(f"ImageProcessingService: GCS Client initialized for bucket: {self.gcs_bucket_name}")
             except Exception as e:
-                print(f"ImageProcessingService: WARNING - Failed to initialize GCS client: {str(e)}. GCS uploads will fail.")
+                self.logger.warning(f"ImageProcessingService: WARNING - Failed to initialize GCS client: {str(e)}. GCS uploads will fail.")
                 self.gcs_client = None # Ensure it's None if init fails
                 self.gcs_bucket_name = None # Can't use bucket if client failed
         
         # Initialize LRU Cache
-        self.processing_cache = LRUCache(maxsize=256) # Cache up to 256 processed image results
+        self.processing_cache = LRUCache(maxsize=processing_cache_maxsize)
 
     def _sanitize_for_gcs_path(self, text: Optional[str], max_length: int = 100) -> str:
         if not text: return f"untitled_{uuid.uuid4().hex[:6]}"
@@ -113,10 +122,10 @@ class ImageProcessingService(BaseService):
             upload_func = functools.partial(blob.upload_from_file, content_type=(mime_type or 'application/octet-stream'))
             await loop.run_in_executor(None, upload_func, image_file_obj)
             gs_url = f"gs://{self.gcs_bucket_name}/{gcs_blob_name}"
-            print(f"ImageProcessingService: Successfully uploaded to {gs_url}")
+            self.logger.info(f"ImageProcessingService: Successfully uploaded to {gs_url}")
             return {"gcs_url": gs_url, "error": None}
         except Exception as e:
-            print(f"ImageProcessingService: ERROR - GCS Upload failed for {gcs_blob_name}: {str(e)}")
+            self.logger.error(f"ImageProcessingService: ERROR - GCS Upload failed for {gcs_blob_name}: {str(e)}", exc_info=True)
             return {"gcs_url": None, "error": f"GCS upload failed: {str(e)}"}
 
     async def _process_single_image(self, raw_image: RawImageInput) -> Optional[EnrichedImageMetadata]:
@@ -126,7 +135,7 @@ class ImageProcessingService(BaseService):
         # 1. Download if source_url is provided and no bytes (current_image_bytes will be updated)
         if raw_image.source_url and not current_image_bytes:
             try:
-                timeout_seconds = self.settings.default_request_timeout_seconds if self.settings else 30
+                timeout_seconds = self.default_request_timeout_seconds # Use instance attribute
                 timeout = aiohttp.ClientTimeout(total=timeout_seconds)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(str(raw_image.source_url)) as response:
@@ -134,12 +143,12 @@ class ImageProcessingService(BaseService):
                         current_image_bytes = await response.read()
             except Exception as e:
                 error_messages.append(f"Download failed for {raw_image.source_url}: {str(e)}")
-                print(f"ImageProcessingService: {error_messages[-1]}")
+                self.logger.error(f"Download failed for {raw_image.source_url}: {str(e)}", exc_info=True)
                 return None 
 
         if not current_image_bytes:
             if not error_messages: error_messages.append("No image bytes or downloadable URL provided for cache key generation or processing.")
-            print(f"ImageProcessingService: No bytes for image {raw_image.image_id}. Errors: {'; '.join(error_messages)}")
+            self.logger.warning(f"ImageProcessingService: No bytes for image {raw_image.image_id}. Errors: {'; '.join(error_messages)}")
             return None
         
         # Generate cache key using a hash of image_bytes
@@ -149,7 +158,7 @@ class ImageProcessingService(BaseService):
         # Check cache
         if cache_key in self.processing_cache:
             cached_data: EnrichedImageMetadata = self.processing_cache[cache_key]
-            print(f"ImageProcessingService: Cache HIT for key: {cache_key} (current raw_image.image_id: {raw_image.image_id}) -> using cached EnrichedImageMetadata originally from image_id: {cached_data.image_id}")
+            self.logger.info(f"ImageProcessingService: Cache HIT for key: {cache_key} (current raw_image.image_id: {raw_image.image_id}) -> using cached EnrichedImageMetadata originally from image_id: {cached_data.image_id}")
             
             # Create a new EnrichedImageMetadata object to ensure the image_id and original_source_identifier
             # match the current job's RawImageInput, while reusing other content-derived data from the cached object.
@@ -169,7 +178,7 @@ class ImageProcessingService(BaseService):
             # and we needed to decide which one to use. Current assumption is cached EIM holds the canonical version of these.
             return updated_cached_data
         
-        print(f"ImageProcessingService: Cache MISS for key: {cache_key} (image_id: {raw_image.image_id})")
+        self.logger.info(f"ImageProcessingService: Cache MISS for key: {cache_key} (image_id: {raw_image.image_id})")
 
         # The rest of the processing logic remains largely the same using current_image_bytes
         metadata = await self._get_image_metadata(current_image_bytes)
@@ -187,16 +196,16 @@ class ImageProcessingService(BaseService):
 
             if img_width is not None and img_height is not None: # Dimensions are available
                 if img_width < self.MIN_IMG_DIMENSION or img_height < self.MIN_IMG_DIMENSION:
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small dimension (W:{img_width}, H:{img_height} < MinDim:{self.MIN_IMG_DIMENSION}).")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small dimension (W:{img_width}, H:{img_height} < MinDim:{self.MIN_IMG_DIMENSION}).")
                     return None
                 if (img_width * img_height) < self.MIN_IMG_AREA:
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small area (Area:{img_width * img_height} < MinArea:{self.MIN_IMG_AREA}).")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small area (Area:{img_width * img_height} < MinArea:{self.MIN_IMG_AREA}).")
                     return None
                 if img_height > 0 and (img_width / img_height) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (W:{img_width}/H:{img_height} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (W:{img_width}/H:{img_height} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
                     return None
                 if img_width > 0 and (img_height / img_width) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (H:{img_height}/W:{img_width} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (H:{img_height}/W:{img_width} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
                     return None
             # else: dimensions not available, cannot apply dimension-based filters.
 
@@ -204,17 +213,17 @@ class ImageProcessingService(BaseService):
             alt_text_lower = (raw_image.alt_text or "").lower()
             if alt_text_lower:
                 if alt_text_lower in self.IRRELEVANT_ALT_TEXT_EXACT:
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to exact match in irrelevant alt text: '{raw_image.alt_text}'.")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to exact match in irrelevant alt text: '{raw_image.alt_text}'.")
                     return None
                 if any(sub in alt_text_lower for sub in self.IRRELEVANT_ALT_TEXT_SUBSTRINGS):
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to substring match in irrelevant alt text: '{raw_image.alt_text}'.")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to substring match in irrelevant alt text: '{raw_image.alt_text}'.")
                     return None
 
             # Filename/URL segment filtering
             source_identifier_lower = (raw_image.source_url or raw_image.original_filename or "").lower()
             if source_identifier_lower:
                 if any(segment in source_identifier_lower for segment in self.IRRELEVANT_FILENAME_URL_SEGMENTS):
-                    print(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to irrelevant segment in URL/filename: '{source_identifier_lower}'.")
+                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to irrelevant segment in URL/filename: '{source_identifier_lower}'.")
                     return None
         # --- End Image Filtering Logic ---
 
@@ -228,17 +237,17 @@ class ImageProcessingService(BaseService):
             gcs_url = gcs_result.get("gcs_url")
             if gcs_result.get("error"):
                 error_messages.append(gcs_result["error"])
-                print(f"ImageProcessingService: GCS upload failed for {raw_image.image_id}: {gcs_result.get('error')}")
+                self.logger.error(f"ImageProcessingService: GCS upload failed for {raw_image.image_id}: {gcs_result.get('error')}", exc_info=True)
                 return None 
         elif not self.gcs_bucket_name: 
             error_messages.append("GCS bucket not configured; cannot upload.")
-            print(f"ImageProcessingService: GCS not configured. Image {raw_image.image_id} not uploaded.")
+            self.logger.warning(f"ImageProcessingService: GCS not configured. Image {raw_image.image_id} not uploaded.")
         
         llm_description: Optional[str] = None
         llm_caption_override: Optional[str] = raw_image.caption
 
         if self.use_llm_for_image_analysis and self.image_analysis_tool:
-            print(f"ImageProcessingService: LLM analyzing image {raw_image.image_id}")
+            self.logger.info(f"ImageProcessingService: LLM analyzing image {raw_image.image_id}")
             loop = asyncio.get_event_loop()
             analysis_input = ImageAnalysisInput(
                 image_bytes=current_image_bytes,
@@ -267,7 +276,7 @@ class ImageProcessingService(BaseService):
         )
 
         if error_messages:
-            print(f"ImageProcessingService: Note - Errors during processing of {raw_image.image_id}: {'; '.join(error_messages)}")
+            self.logger.warning(f"ImageProcessingService: Note - Errors during processing of {raw_image.image_id}: {'; '.join(error_messages)}")
 
         # Store in cache only if successfully processed (gcs_url might be None if GCS is not configured, but that's still a valid 'processed' state)
         # However, if critical steps like download or metadata failed, final_image_data might be None or incomplete.
@@ -291,15 +300,15 @@ class ImageProcessingService(BaseService):
             if isinstance(result, EnrichedImageMetadata):
                 processed_images_list.append(result)
             elif isinstance(result, Exception):
-                print(f"ImageProcessingService: Exception processing image {raw_image_input.image_id}: {result}")
+                self.logger.error(f"ImageProcessingService: Exception processing image {raw_image_input.image_id}: {result}", exc_info=True)
                 failed_image_ids.append(raw_image_input.image_id)
             elif result is None: 
-                print(f"ImageProcessingService: Image {raw_image_input.image_id} was not processed successfully (returned None).")
+                self.logger.warning(f"ImageProcessingService: Image {raw_image_input.image_id} was not processed successfully (returned None).")
                 failed_image_ids.append(raw_image_input.image_id)
         
         duration = time.time() - start_time
         status_message = f"Processed {len(processed_images_list)} out of {len(service_input.images_to_process)} images, {len(failed_image_ids)} failed."
-        print(f"ImageProcessingService: Completed in {duration:.2f}s. {status_message}")
+        self.logger.info(f"ImageProcessingService: Completed in {duration:.2f}s. {status_message}")
 
         if failed_image_ids and not processed_images_list:
             failure_summary = f"All {len(failed_image_ids)} images failed processing. First failure on: {failed_image_ids[0] if failed_image_ids else 'N/A'}."

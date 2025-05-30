@@ -1,2 +1,0 @@
-This is a simple plain text file for testing file acquisition.
-It has a few lines.

@@ -1,56 +1,54 @@
 import time
-from typing import Optional, List, Dict, Union, Any # Added Union
-import sys
+from typing import Optional, List, Dict, Union, Any
+import logging
 
-from pydantic import BaseModel, Field # BaseModel, Field might not be needed directly if service input is from another file
+from pydantic import BaseModel, Field
 
 from aiservice.app.services.base import BaseService, ServiceResult
-from aiservice.app.models.orchestration_models import ContentBlock # Final output block model
-# Import the new input model
+from aiservice.app.models.orchestration_models import ContentBlock
 from aiservice.app.models.content_structuring_models import ContentStructuringServiceInput
-# Import models needed for input processing
-from aiservice.app.models.pipeline_models import PreliminaryBlock, EnrichedImageMetadata, DocumentMetadata # Added DocumentMetadata
+from aiservice.app.models.pipeline_models import PreliminaryBlock, EnrichedImageMetadata, DocumentMetadata
 
-from aiservice.app.config.settings import Settings # Settings might still be used for other configs
-# Removed LLM related imports: MinimalLLMCrew, StructuredContentBlock, ContentStructuringInput (old), ContentStructuringOutput
+from aiservice.app.config.settings import Settings
 
 class ContentStructuringService(BaseService):
     """
     Transforms PreliminaryBlocks and EnrichedImageMetadata into a list of ContentBlocks
     using deterministic Python logic.
     """
-    def __init__(self, settings: Optional[Any] = None): # Removed minimal_llm_crew
+    def __init__(self, settings: Optional[Any] = None):
         super().__init__(settings)
-        # No crew initialization needed
+        self.settings = settings
+        self.logger = logging.getLogger(__name__)
+        if self.settings and hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
 
     # _map_structured_block_to_content_block is removed as it was LLM-specific.
     # Transformation logic will be directly in execute.
 
     async def execute(self, service_input: ContentStructuringServiceInput) -> ServiceResult[List[ContentBlock]]:
         start_time = time.time()
-        # Outer try-except to catch any unhandled error within execute
         try: 
             final_content_blocks: List[ContentBlock] = []
             
             if not service_input:
-                print("ERROR ContentStructuringService: Service input is None.", file=sys.stderr)
+                self.logger.error("Service input is None.")
                 return ServiceResult.failure(data=[], error_message="Service input is None.")
 
             if service_input.preliminary_blocks is None:
-                # This implies an issue upstream or incorrect input formation.
-                print("ERROR ContentStructuringService: service_input.preliminary_blocks is None.", file=sys.stderr)
+                self.logger.error("service_input.preliminary_blocks is None.")
                 return ServiceResult.failure(data=[], error_message="Preliminary blocks list is None.")
 
             if service_input.enriched_images is None:
-                print("ERROR ContentStructuringService: Enriched images list is None. This might cause issues.", file=sys.stderr)
-                # Depending on logic, this might be fatal or recoverable if no image_placeholders exist.
-                # For now, proceeding but logging error. Downstream image linking will fail.
+                self.logger.warning("Enriched images list is None. This might cause issues with image linking.")
                 enriched_images_map: Dict[str, EnrichedImageMetadata] = {}
             else:
                 enriched_images_map: Dict[str, EnrichedImageMetadata] = \
                     {img.image_id: img for img in service_input.enriched_images}
 
-            if not service_input.preliminary_blocks: # Check again after enriched_images_map init
+            if not service_input.preliminary_blocks:
                 return ServiceResult.success(data=[])
 
             # --- Refactored List Handling Logic ---
@@ -145,7 +143,7 @@ class ContentStructuringService(BaseService):
                             if active_lists_stack: # Must have a parent if its level was > current_item_level
                                 active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
                             else: # This should ideally not happen if logic is correct (popped too much)
-                                print(f"WARNING: Popped a list (ID prefix: {final_list_data['block_id_prefix']}) that had no parent during level reduction.", file=sys.stderr)
+                                self.logger.warning(f"Popped a list (ID prefix: {final_list_data['block_id_prefix']}) that had no parent during level reduction.")
                                 final_content_blocks.append(list_cb)
 
                         # 2. If stack is empty, or current item starts a new list (different level or type)
@@ -197,18 +195,19 @@ class ContentStructuringService(BaseService):
                 problematic_block_details = "Unknown (p_block not available or error before first iteration)"
                 if 'p_block' in locals() and p_block:
                     try:
-                        problematic_block_details = p_block.model_dump_json() # Or just str(p_block)
+                        problematic_block_details = p_block.model_dump_json()
                     except Exception as e_dump_block:
                         problematic_block_details = f"Could not serialize p_block: {str(p_block)}, dump error: {e_dump_block}"
                 
                 error_msg = f"Error during content structuring loop. Last processed/problematic p_block (approx): {problematic_block_details}. Exception: {type(e_structuring_loop).__name__}: {e_structuring_loop}"
-                print(f"CRITICAL ContentStructuringService: {error_msg}", file=sys.stderr) # Keep this detailed critical error log
-                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg) # Return partial if any
+                self.logger.critical(f"{error_msg}", exc_info=True)
+                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg)
             
             duration = time.time() - start_time
+            self.logger.info(f"ContentStructuringService finished successfully in {duration:.2f}s. Blocks created: {len(final_content_blocks)}.")
             return ServiceResult.success(data=final_content_blocks)
 
-        except Exception as e_outer_execute: # Catch-all for the entire method
+        except Exception as e_outer_execute:
             error_message = f"Outer exception in ContentStructuringService.execute: {type(e_outer_execute).__name__}: {str(e_outer_execute)}"
             # Attempt to get service_input details if available
             input_summary = "service_input was None or unavailable for summary"
@@ -219,8 +218,7 @@ class ContentStructuringService(BaseService):
                     input_summary = "Error summarizing service_input fields."
             
             full_error_message = f"{error_message}. Input summary: {input_summary}"
-            print(f"FATAL ERROR ContentStructuringService: {full_error_message}", file=sys.stderr)
-            # Return a failure, ensure data is an empty list as per ServiceResult generic type for data field if failure.
+            self.logger.critical(f"FATAL ERROR in ContentStructuringService: {full_error_message}", exc_info=True)
             return ServiceResult.failure(data=[], error_message=full_error_message) 
 
 # Example usage (conceptual, not run as part of the service file)

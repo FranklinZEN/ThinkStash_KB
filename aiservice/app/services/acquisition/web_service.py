@@ -13,6 +13,7 @@ import functools
 import json
 from datetime import datetime
 import tempfile # Added for temporary file handling
+import logging # Added logging
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -139,7 +140,20 @@ class WebAcquisitionService(BaseService):
 
     def __init__(self, settings: Optional[Any] = None):
         super().__init__(settings)
-        # Consider initializing an aiohttp.ClientSession here if it's to be reused across calls
+        self.settings_instance = settings # Store the settings instance if provided
+        self.logger = logging.getLogger(__name__) # Initialize logger
+        if self.settings_instance and hasattr(self.settings_instance, 'debug_mode') and self.settings_instance.debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
+        # In-memory cache for HTML content: {url: (html_string, fetch_timestamp)}
+        self.html_cache: Dict[str, Tuple[str, float]] = {}
+        # Cache Time-To-Live in seconds
+        if self.settings_instance and hasattr(self.settings_instance, 'web_html_cache_ttl_seconds'):
+            self.cache_ttl_seconds: int = self.settings_instance.web_html_cache_ttl_seconds
+        else:
+            self.cache_ttl_seconds: int = 3600 # Fallback if settings not provided or field missing
+        
         # For now, creating session per call for simplicity.
 
     def _get_domain(self, url_str: str) -> Optional[str]:
@@ -340,7 +354,7 @@ class WebAcquisitionService(BaseService):
         soup_for_structuring: Optional[Union[BeautifulSoup, Tag]] = None # Can be the whole doc or a specific tag
 
         if is_trafilatura_content and html_to_parse:
-            print("DEBUG WebAcquisitionService: Using Trafilatura's extracted HTML snippet for structuring.") # Keep this high-level debug
+            self.logger.info("Using Trafilatura's extracted HTML snippet for structuring.")
             temp_soup = BeautifulSoup(html_to_parse, 'lxml')
             main_tag_in_snippet = temp_soup.find('main')
             if main_tag_in_snippet:
@@ -351,7 +365,7 @@ class WebAcquisitionService(BaseService):
             else:
                 soup_for_structuring = temp_soup 
         else:
-            print("DEBUG WebAcquisitionService: Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.") # Keep high-level
+            self.logger.info("Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.")
             # --- Start Fallback Main Content Isolation using BeautifulSoup Selectors ---
             main_content_element_found: Optional[Tag] = None
             for selector in self.MAIN_CONTENT_SELECTORS:
@@ -362,21 +376,21 @@ class WebAcquisitionService(BaseService):
                             main_content_element_found = candidate_element
                             log_snippet_raw = str(main_content_element_found)[:500]
                             log_snippet_clean = log_snippet_raw.replace('\n', ' ')
-                            print(f"DEBUG: (Fallback) ==> SELECTED main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}") # DEBUG
+                            self.logger.debug(f"(Fallback) Selected main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}")
                             break
                 except Exception as e_select:
-                    print(f"WARNING: (Fallback) Selector error ('{selector}') during main content isolation: {e_select}") # DEBUG
+                    self.logger.warning(f"(Fallback) Selector error ('{selector}') during main content isolation: {e_select}")
                     pass
-            print("--- Finished Main Content Isolation (Fallback BS4) ---") # DEBUG
+            self.logger.debug("Finished Main Content Isolation (Fallback BS4).")
 
             if main_content_element_found:
                 log_isolated_snippet_raw = str(main_content_element_found)[:500]
                 log_isolated_snippet_clean = log_isolated_snippet_raw.replace('\n', ' ')
-                print(f"DEBUG: (Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}") # DEBUG
+                self.logger.debug(f"(Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}")
                 isolated_main_content_html = str(main_content_element_found)
                 soup_for_structuring = BeautifulSoup(isolated_main_content_html, 'lxml')
             else:
-                print("DEBUG: (Fallback) No specific main content container found by BS4, using full body/page for structuring.") # DEBUG
+                self.logger.info("(Fallback) No specific main content container found by BS4, using full body/page for structuring.")
                 if soup_full_page.body:
                     soup_for_structuring = BeautifulSoup(str(soup_full_page.body), 'lxml')
                 else:
@@ -384,27 +398,28 @@ class WebAcquisitionService(BaseService):
         
         # --- 0.B Remove Boilerplate Content (from the selected soup_for_structuring) ---
         # This runs whether content is from Trafilatura or BS4 fallback
-        print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
+        # print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
         for selector_idx, selector in enumerate(BOILERPLATE_SELECTORS):
             try:
                 # Ensure soup_for_structuring is not None before calling .select()
                 if soup_for_structuring:
-                    print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
+                    # print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
                     elements_found = soup_for_structuring.select(selector)
-                    print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
+                    # print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
                     
                     for i, element in enumerate(elements_found):
                         if element:
-                            if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"):
-                                print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
+                            # if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"): # Example of selective uncommenting
+                            #     print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
                             element.decompose()
                 else:
-                    print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
+                    # print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
+                    pass # No need to print if it's none, just skip
             except Exception as e_decompose:
                 # self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Optional logging
-                print(f"WARNING: Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Use print for debugging
+                self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}")
                 pass
-        print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
+        # print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
         
         # --- 1. Populate DocumentMetadata (using soup_full_page for broader context like <head>) ---
         doc_title: Optional[str] = None
@@ -454,7 +469,7 @@ class WebAcquisitionService(BaseService):
         if soup_for_structuring:
             iterable_elements = soup_for_structuring.find_all(True, recursive=True) 
         else:
-            print("ERROR WebAcquisitionService: soup_for_structuring is None before block extraction loop. No blocks will be generated.")
+            self.logger.error("soup_for_structuring is None before block extraction loop. No blocks will be generated.")
 
         processed_elements = set() 
         block_order = 0 
@@ -470,18 +485,18 @@ class WebAcquisitionService(BaseService):
         image_id_ref_val: Optional[str] = None
 
         for element_idx, element in enumerate(iterable_elements):
-            print(f"\nDEBUG WebAcquisitionService: --- Element Loop Start [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
+            # print(f"\nDEBUG WebAcquisitionService: --- Element Loop Start [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
             
             if element in processed_elements:
-                print(f"DEBUG WebAcquisitionService: Element <{element.name}> already processed. Skipping.")
+                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> already processed. Skipping.")
                 continue
             if not element.name:
-                print(f"DEBUG WebAcquisitionService: Element has no name. Skipping.")
+                # print(f"DEBUG WebAcquisitionService: Element has no name. Skipping.")
                 continue
 
             tags_to_skip_directly = ['script', 'style', 'meta', 'link', 'noscript', 'header', 'footer', 'nav', 'aside', 'form', 'button', 'input', 'select', 'textarea', 'label', 'option', 'doc', 'main']
             if element.name in tags_to_skip_directly:
-                print(f"DEBUG WebAcquisitionService: Element <{element.name}> is in direct skip list. Skipping.")
+                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> is in direct skip list. Skipping.")
                 for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
                 processed_elements.add(element)
                 continue
@@ -492,7 +507,7 @@ class WebAcquisitionService(BaseService):
             heading_level_val = None; list_item_data_val = None; list_level_val = None; list_ordered_val = None; code_content_val = None; code_language_val = None; table_html_content_val = None; image_id_ref_val = None
 
             current_element_text_content = element.get_text(separator=' ', strip=True)
-            print(f"DEBUG WebAcquisitionService: Element <{element.name}> extracted text (first 100 chars): '{current_element_text_content[:100]}'")
+            # print(f"DEBUG WebAcquisitionService: Element <{element.name}> extracted text (first 100 chars): '{current_element_text_content[:100]}'")
 
             if element.name == 'p':
                 block_type = "text"; text_content = current_element_text_content
@@ -517,7 +532,7 @@ class WebAcquisitionService(BaseService):
                 list_ordered_val = parent_list.name == 'ol' if parent_list else False
                 list_level_val = sum(1 for _ in element.find_parents(['ul', 'ol']))
             elif element.name in ['ul', 'ol']:
-                print(f"DEBUG WebAcquisitionService: Element <{element.name}> is list container. Individual <li> will be processed. Skipping direct block for <{element.name}>.")
+                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> is list container. Individual <li> will be processed. Skipping direct block for <{element.name}>.")
                 # Mark children as processed to avoid creating blocks from them AND their parent list tag
                 for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
                 processed_elements.add(element) # Mark the list tag itself as processed
@@ -531,11 +546,12 @@ class WebAcquisitionService(BaseService):
                         is_container_of_handled_types = True; break
                 if not is_container_of_handled_types:
                     block_type = "text"; text_content = current_element_text_content
-                    print(f"DEBUG WebAcquisitionService: Element <{element.name}> processed by FALLBACK text logic.")
+                    # print(f"DEBUG WebAcquisitionService: Element <{element.name}> processed by FALLBACK text logic.")
                 else:
-                    print(f"DEBUG WebAcquisitionService: Element <{element.name}> has text but is a container of other handled types. Skipping direct block creation.")
+                    # print(f"DEBUG WebAcquisitionService: Element <{element.name}> has text but is a container of other handled types. Skipping direct block creation.")
+                    pass # No need to print, just skip
             
-            print(f"DEBUG WebAcquisitionService: After type decision for <{element.name}>: block_type='{block_type}', text_content present: {text_content is not None}")
+            # print(f"DEBUG WebAcquisitionService: After type decision for <{element.name}>: block_type='{block_type}', text_content present: {text_content is not None}")
 
             if block_type and (text_content or list_item_data_val or code_content_val or table_html_content_val or block_type == 'image_placeholder'):
                 block_id = f"{job_id if job_id else 'doc'}_b{block_order}"
@@ -551,24 +567,25 @@ class WebAcquisitionService(BaseService):
                 # Filter out None values before passing to Pydantic model
                 final_prelim_block_data = {k: v for k, v in prelim_block_data.items() if v is not None}
                 
-                try:
-                    preliminary_blocks.append(PreliminaryBlock(**final_prelim_block_data))
-                    block_order += 1
-                    print(f"DEBUG WebAcquisitionService: CREATED PreliminaryBlock for <{element.name}>: ID {block_id}, Type '{block_type}', Order {block_order-1}. Total blocks: {len(preliminary_blocks)}.")
-                except Exception as e_create_block:
-                    print(f"ERROR WebAcquisitionService: Failed to create PreliminaryBlock for element <{element.name}>. Error: {e_create_block}. Data: {final_prelim_block_data}")
+                # Limited debug print for created blocks
+                debug_content_preview = ""
+                if text_content: debug_content_preview = text_content[:70] + "..." if len(text_content) > 70 else text_content
+                elif list_item_data_val: debug_content_preview = str(list_item_data_val)[:70] + "..." if len(str(list_item_data_val)) > 70 else str(list_item_data_val)
+                elif code_content_val: debug_content_preview = code_content_val[:70] + "..." if len(code_content_val) > 70 else code_content_val
+                
+                if block_order < 5 or block_order % 10 == 0 : # Print for first 5 and then every 10th block
+                    self.logger.debug(f"CREATED PrelimBlock for <{element.name}>: ID {block_id}, Type '{block_type}', Order {block_order}. Content: '{debug_content_preview}'")
+                
+                preliminary_blocks.append(PreliminaryBlock(**final_prelim_block_data)) # type: ignore
+                block_order += 1
+                # Mark the element and all its descendants as processed
+                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
                 processed_elements.add(element)
-            elif block_type:
-                print(f"DEBUG WebAcquisitionService: Element <{element.name}> had block_type '{block_type}' but no qualifying content. Not creating block.")
-            else:
-                print(f"DEBUG WebAcquisitionService: Element <{element.name}> did not resolve to any block_type. Not creating block.")
-            
-            print(f"DEBUG WebAcquisitionService: --- Element Loop End [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
 
         # After loop, add image placeholders based on raw_images_list (extracted from full HTML)
         # This assumes raw_images_list is populated correctly by _extract_images_from_html
         if raw_images_list:
-            print(f"DEBUG WebAcquisitionService: Adding {len(raw_images_list)} image placeholders as PreliminaryBlocks.")
+            self.logger.debug(f"Adding {len(raw_images_list)} image placeholders as PreliminaryBlocks.")
         for img_raw_input in raw_images_list:
             block_id = f"{job_id if job_id else 'doc'}_img_b{block_order}"
             preliminary_blocks.append(PreliminaryBlock(
@@ -582,231 +599,196 @@ class WebAcquisitionService(BaseService):
                 # They are associated via EnrichedImageMetadata later.
             ))
             block_order += 1
-            print(f"DEBUG WebAcquisitionService: CREATED image_placeholder PreliminaryBlock: ID {block_id}, ImageRef {img_raw_input.image_id}, Order {block_order-1}.")
+            self.logger.debug(f"CREATED image_placeholder PreliminaryBlock: ID {block_id}, ImageRef {img_raw_input.image_id}, Order {block_order-1}.")
 
-        print(f"DEBUG WebAcquisitionService: _parse_and_structure_html finished. Total PreliminaryBlocks created: {len(preliminary_blocks)} (incl. images).")
+        self.logger.info(f"_parse_and_structure_html finished. Total PreliminaryBlocks created: {len(preliminary_blocks)} (incl. images).")
         # Ensure preliminary_blocks are sorted by order before returning
         preliminary_blocks.sort(key=lambda b: b.order)
         
         # Filter boilerplate text blocks AFTER all blocks (including images) have been ordered
         if preliminary_blocks: # Only filter if there are any blocks
-            print(f"DEBUG WebAcquisitionService: Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks)} blocks.")
+            self.logger.debug(f"Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks)} blocks.")
             preliminary_blocks = self._filter_boilerplate_preliminary_blocks(preliminary_blocks, final_url)
-            print(f"DEBUG WebAcquisitionService: After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks)} blocks remaining.")
+            self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks)} blocks remaining.")
 
         return preliminary_blocks, document_metadata_obj, raw_images_list
 
     def _filter_boilerplate_preliminary_blocks(self, blocks: List[PreliminaryBlock], source_url_for_logging: str) -> List[PreliminaryBlock]:
+        """ 
+        Filters PreliminaryBlock objects that are likely boilerplate based on common patterns
+        in their text_content. This is a secondary filter after HTML element decomposition.
         """
-        Filters a list of PreliminaryBlocks to remove common boilerplate content.
-        Operates on text content after initial block creation.
-        """
-        # More comprehensive list of keywords often found in boilerplate footers, headers, navs.
-        # Prioritize multi-word phrases where possible to reduce false positives.
-        BOILERPLATE_KEYWORDS_PHRASES = {
-            # Common Links & Sections
-            "about us", "contact us", "privacy policy", "terms of service", "terms and conditions",
-            "cookie policy", "cookie settings", "do not sell or share my personal information", 
-            "accessibility", "sitemap", "help center", "support", "faq", "careers", "investors", 
-            "newsroom", "press", "blog", "media", "legal", "security",
-            # Actions & Navigation
-            "sign in", "log in", "sign up", "register", "my account", "view cart", "checkout",
-            "search", "home", "products", "services", "solutions", "features", "pricing", "download",
-            # Social Media & Sharing (individual words are tricky, so keep them minimal or use with context)
-            "facebook", "twitter", "linkedin", "instagram", "youtube", "pinterest", "share this",
-            # Copyright & Company Info
-            "all rights reserved", "inc.", "llc", "ltd.", "technologies inc.", 
-            # Common menu items / categories that might be part of a global nav extracted as a single block
-            "our offerings", "gift cards", "global citizenship", "safety", "sustainability",
-            "travel", "reserve", "airports", "cities",
-            # Specific to Uber example but can be generalized
-            "visit help center", "google data policy", "company", "products", "ride", "drive", "deliver", "eat",
-            "uber for business", "uber freight", "english", "location marker" 
-            # Words that often appear in cookie consent / privacy banners if they become a text block
-            "cookies", "privacy", "accept", "decline", "manage settings", "consent"
-        }
-        # Short, standalone boilerplate lines that if a block primarily consists of, it's likely boilerplate.
-        STANDALONE_BOILERPLATE_LINES = {
-            "select language", "choose country", "follow us", "get the app",
-            "download on the app store", "get it on google play",
-            "request a ride" # If it becomes a text block despite button removal
-        }
+        if not blocks:
+            return []
 
-        MIN_WORDS_FOR_KEYWORD_ANALYSIS = 5 # Don't analyze very short blocks with keyword ratio
-        BOILERPLATE_KEYWORD_RATIO_THRESHOLD = 0.6 # If >60% of words are keywords (for medium blocks)
-        MAX_WORDS_FOR_HIGH_KEYWORD_RATIO_BLOCK = 70 # Increased from 30 to 70
+        # Compile regex patterns for efficiency if they are numerous or complex
+        # For now, using simple string checks
+        # Updated to be more conservative and focus on very common boilerplate indicators
+        # that often survive initial HTML tag-based removal.
+        PATTERNS_TO_FILTER = [
+            re.compile(r"^\s*copyright\s*(©|\(c\))?\s*\d{4}(-\d{4})?\s*.+", re.IGNORECASE),
+            re.compile(r"all\s+rights\s+reserved", re.IGNORECASE),
+            re.compile(r"privacy\s+policy", re.IGNORECASE),
+            re.compile(r"terms\s+of\s+(service|use|condition)", re.IGNORECASE),
+            re.compile(r"cookie\s+(settings|preferences|policy)", re.IGNORECASE),
+            re.compile(r"site\s+map", re.IGNORECASE),
+            re.compile(r"powered\s+by", re.IGNORECASE),
+            re.compile(r"^(subscribe|follow us|newsletter|sign up for our newsletter)$", re.IGNORECASE),
+            re.compile(r"share\s+this\s+page", re.IGNORECASE),
+            re.compile(r"log\s+in\s+/\s+register", re.IGNORECASE),
+            re.compile(r"(previous|next)\s+(post|article)", re.IGNORECASE),
+            re.compile(r"related\s+(articles|posts)", re.IGNORECASE),
+            re.compile(r"leave\s+a\s+comment", re.IGNORECASE),
+            re.compile(r"you\s+may\s+also\s+like", re.IGNORECASE),
+            re.compile(r"advertisement", re.IGNORECASE), # Generic ad text
+            re.compile(r"back\s+to\s+top", re.IGNORECASE),
+            # Very short, likely navigation/utility links (be careful with these)
+            re.compile(r"^\s*(home|about|contact|help|faq|blog|docs|support|careers)\s*$", re.IGNORECASE),
+        ]
 
-        filtered_blocks: List[PreliminaryBlock] = []
+        MIN_TEXT_LENGTH_FOR_FILTERING = 10 # Don't filter very short text unless it's an exact match above
+        MAX_TEXT_LENGTH_FOR_SHORT_LINK_FILTER = 25 # Max length for the very generic link filter
+
+        filtered_blocks = []
         for block in blocks:
-            if block.type != "text" or not block.text_content:
+            if block.type == "text" and block.text_content:
+                text_to_check = block.text_content.strip()
+                is_boilerplate = False
+                for pattern in PATTERNS_TO_FILTER:
+                    if pattern.search(text_to_check):
+                        # For the short link filter, apply length constraint
+                        if pattern.pattern == r"^\s*(home|about|contact|help|faq|blog|docs|support|careers)\s*$" and len(text_to_check) > MAX_TEXT_LENGTH_FOR_SHORT_LINK_FILTER:
+                            continue # Don't filter if it's a short link pattern but the text is longer
+                        
+                        # self.logger.debug(f"Filtering block ID {block.block_id} due to pattern: '{pattern.pattern}'. Text: '{text_to_check[:100]}...'")
+                        is_boilerplate = True
+                        break
+                
+                if not is_boilerplate:
+                    filtered_blocks.append(block)
+                # else: Keep the print above for when a block IS filtered by text
+            else:
+                # Non-text blocks or text blocks with no content are kept
                 filtered_blocks.append(block)
-                continue
+        
+        if len(blocks) != len(filtered_blocks):
+            # self.logger.debug(f"Filtered out {len(blocks) - len(filtered_blocks)} boilerplate PreliminaryBlocks based on text patterns from {source_url_for_logging}.")
+            pass
 
-            text_to_check = block.text_content.lower().strip()
-            
-            # Check for standalone boilerplate lines
-            if text_to_check in STANDALONE_BOILERPLATE_LINES:
-                print(f"DEBUG WebAcquisitionService: Filtering out block (standalone line) from {source_url_for_logging}: '{block.text_content[:100]}...'")
-                continue
-
-            words = text_to_check.split()
-            word_count = len(words)
-
-            if word_count == 0:
-                filtered_blocks.append(block) # Keep empty blocks? Or filter? For now, keep.
-                continue
-
-            # Check for keyword ratio in moderately short blocks
-            if MIN_WORDS_FOR_KEYWORD_ANALYSIS <= word_count <= MAX_WORDS_FOR_HIGH_KEYWORD_RATIO_BLOCK:
-                keyword_hits = 0
-                # Check for multi-word phrases first
-                temp_text_for_phrase_check = " " + text_to_check + " " # Pad for easier phrase matching
-                for phrase in BOILERPLATE_KEYWORDS_PHRASES:
-                    if " " in phrase: # It's a multi-word phrase
-                        if phrase in temp_text_for_phrase_check:
-                             # Count words in phrase, consider overlap carefully if needed, simple count for now
-                            keyword_hits += len(phrase.split()) 
-                
-                # Check for single keywords (those not part of matched phrases yet)
-                # This is a simplified hit count; more advanced would be unique word matches.
-                for word in words:
-                    if word in BOILERPLATE_KEYWORDS_PHRASES: # Check against the set
-                        keyword_hits +=1
-                
-                # Heuristic: if a significant portion of the words are keywords
-                if word_count > 0 and (keyword_hits / word_count) >= BOILERPLATE_KEYWORD_RATIO_THRESHOLD:
-                    print(f"DEBUG WebAcquisitionService: Filtering out block (keyword ratio) from {source_url_for_logging}: '{block.text_content[:100]}...'")
-                    continue
-            
-            # Specific check for the problematic Uber string structure: many terms, one long block.
-            # This targets blocks that are just a long list of terms often found in footers/fat footers.
-            # The example was ~50 words.
-            if 20 < word_count < 100: # If it's a fairly long concatenated block
-                # Renamed and expanded this set for better general applicability
-                AGGREGATED_FOOTER_KEYWORDS = {
-                    # Original Uber specific plus more generic terms often found in aggregated footers
-                    "uber", "visit", "help", "center", "google", "data", "policy", "company", 
-                    "offerings", "newsroom", "investors", "blog", "careers", "gift", "cards", 
-                    "ride", "drive", "deliver", "eat", "business", "freight", "global", 
-                    "citizenship", "safety", "sustainability", "travel", "reserve", "airports", 
-                    "cities", "facebook", "twitter", "youtube", "linkedin", "instagram", "globe", 
-                    "english", "location", "marker", "jersey", "technologies", "inc", "privacy", 
-                    "accessibility", "terms", "about", "contact", "support", "sitemap", "legal", 
-                    "cookies", "security", "press", "media", "copyright", "©", "rights", "reserved",
-                    "select", "country", "region", "language", "all", "share", "information", "personal",
-                    "apps", "download", "app store", "google play", "follow", "us"
-                    # Add common single-word links if they contribute to these long strings
-                }
-                match_count = 0
-                for word in words:
-                    if word in AGGREGATED_FOOTER_KEYWORDS:
-                        match_count += 1
-                # Lowered threshold slightly
-                if (match_count / word_count) > 0.70: # Lowered from 0.75, using more generic keyword set
-                    print(f"DEBUG WebAcquisitionService: Filtering out block (Aggregated Footer Keyword Ratio) from {source_url_for_logging}: '{block.text_content[:100]}...'")
-                    continue
-            
-            filtered_blocks.append(block)
-            
         return filtered_blocks
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
-        start_time = time.time()
-        job_id = web_input.job_id or f"web_{uuid.uuid4().hex[:12]}"
+        request_start_time = time.time()
+        url = web_input.url
+        job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
+        processing_level = web_input.processing_level
 
+        # Initialize variables that will be part of the successful return tuple
         preliminary_blocks_list: List[PreliminaryBlock] = []
-        document_metadata_obj: Optional[DocumentMetadata] = None
-        raw_images_list: List[RawImageInput] = []
-        temp_pdf_file_path: Optional[str] = None # Initialize here
-
-        original_url = web_input.url.strip() # Ensure no leading/trailing whitespace
-
-        # --- URL Normalization ---
-        normalized_url = original_url
-        if normalized_url.startswith("chrome-extension://"):
-            # Try to find an embedded http/https URL
-            match = re.search(r"(https?://[^\s]+)", normalized_url)
-            if match:
-                normalized_url = match.group(1)
-            else:
-                # If no http/https URL is found, it's likely a local file, which we can't fetch
-                return ServiceResult.failure(
-                    error_message=f"Cannot fetch local file from chrome-extension URL: {original_url}",
-                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
-                )
+        raw_images_list: List[RawImageInput] = [] # Use raw_images_list consistently
         
-        parsed_normalized_url = urlparse(normalized_url)
-        if not parsed_normalized_url.scheme:
-            if parsed_normalized_url.netloc or (parsed_normalized_url.path and '.' in parsed_normalized_url.path.split('/')[0]): # Heuristic for domain-like path
-                normalized_url = f"https://{normalized_url}" # Default to HTTPS
-            else:
-                # If it doesn't look like a domain/path that can be made a URL, fail early
-                 return ServiceResult.failure(
-                    error_message=f"Invalid URL format (cannot determine scheme): {original_url}",
-                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
-                )
-        elif parsed_normalized_url.scheme not in ["http", "https"]:
-            # If it has a scheme but it's not http/https (e.g. file://, ftp:// after initial chrome-ext stripping)
-            return ServiceResult.failure(
-                error_message=f"Unsupported URL scheme '{parsed_normalized_url.scheme}' in URL: {normalized_url}",
-                error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
-            )
-        # --- End URL Normalization ---
-        
-        final_url_val: Optional[str] = None
-        
+        # Initialize document_metadata_obj early and fully for consistent error returns
         document_metadata_obj = DocumentMetadata(
             document_id=job_id,
-            source_identifier=original_url, # Keep original URL as source_identifier
-            source_type="url",
+            source_identifier=url, # Use the input URL as the primary identifier
+            source_type='url', 
             extracted_at=datetime.utcnow()
         )
+        
+        html_content_str: Optional[str] = None
+        final_url_val: str = url # Start with input URL, will be updated by redirects if fetch occurs
+        pdf_bytes_val: Optional[bytes] = None
+        temp_pdf_file_path: Optional[str] = None
 
-        try:
-            # --- URL Validation and Filtering (uses normalized_url) ---
-            parsed_url = urlparse(normalized_url) # Use the cleaned and potentially schemed URL
-            if not all([parsed_url.scheme, parsed_url.netloc]):
-                # This check might be redundant if normalization ensures scheme and netloc for http/https URLs
-                return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+        # --- Cache Check ---
+        current_time = time.time()
+        if url in self.html_cache:
+            cached_html, fetch_time = self.html_cache[url]
+            if (current_time - fetch_time) < self.cache_ttl_seconds:
+                self.logger.info(f"HTML cache HIT for {url}")
+                html_content_str = cached_html
+                # final_url_val remains 'url' (original input) if from cache
+            else:
+                self.logger.info(f"HTML cache STALE for {url}")
+                del self.html_cache[url]
+
+        # --- If cache miss or stale, proceed to fetch and then process ---
+        if html_content_str is None: 
+            self.logger.info(f"HTML cache MISS for {url}. Fetching...")
             
-            domain = self._get_domain(normalized_url)
-            if self._check_domain_in_set(domain, UNSUPPORTED_URL_TYPE_DOMAINS):
-                is_allowed_social = any(re.search(pattern, normalized_url, re.IGNORECASE) for pattern in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
-                if not is_allowed_social:
-                    return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+            normalized_url = url 
+            if normalized_url.startswith("chrome-extension://"):
+                match = re.search(r"(https?:\\\\/\\\\/[^\\\\s]+)", normalized_url)
+                if match:
+                    normalized_url = match.group(1)
+                else:
+                    return ServiceResult.failure(
+                        error_message=f"Cannot fetch local file from chrome-extension URL: {url}",
+                        error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                    )
+            
+            parsed_normalized_url = urlparse(normalized_url)
+            if not parsed_normalized_url.scheme:
+                if parsed_normalized_url.netloc or (parsed_normalized_url.path and '.' in parsed_normalized_url.path.split('/')[0]):
+                    normalized_url = f"https://{normalized_url}"
+                else:
+                     return ServiceResult.failure(
+                        error_message=f"Invalid URL format (cannot determine scheme): {url}",
+                        error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                    )
+            elif parsed_normalized_url.scheme not in ["http", "https"]:
+                return ServiceResult.failure(
+                    error_message=f"Unsupported URL scheme '{parsed_normalized_url.scheme}' in URL: {normalized_url}",
+                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                )
 
-            # --- Fetching Content (uses normalized_url) ---
-            async with aiohttp.ClientSession() as session:
-                try:
+            try: # This try is for the network fetching part
+                parsed_url_for_domain_check = urlparse(normalized_url) # Use normalized for domain checks
+                if not all([parsed_url_for_domain_check.scheme, parsed_url_for_domain_check.netloc]):
+                     return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+
+                domain = self._get_domain(normalized_url)
+                if self._check_domain_in_set(domain, UNSUPPORTED_URL_TYPE_DOMAINS):
+                    is_allowed_social = any(re.search(pattern, normalized_url, re.IGNORECASE) for pattern in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
+                    if not is_allowed_social:
+                        return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+
+                async with aiohttp.ClientSession() as session:
                     headers = {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
                         "Accept-Language": "en-US,en;q=0.9",
                     }
-                    async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response: # Use normalized_url
-                        final_url_val = str(response.url)
-                        if document_metadata_obj: document_metadata_obj.final_url = final_url_val
+                    async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response:
+                        final_url_val = str(response.url) # Update final_url_val after actual fetch
+                        document_metadata_obj.final_url = final_url_val # Update metadata with the truly final URL
 
                         if response.status != 200:
                             return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
 
                         content_type = response.headers.get('Content-Type', '').lower()
-                        html_content_str: Optional[str] = None
-                        pdf_bytes_val: Optional[bytes] = None
-
                         if 'application/pdf' in content_type:
                             pdf_bytes_val = await response.read()
                         elif 'text/html' in content_type or 'application/xhtml+xml' in content_type or not content_type:
                             html_content_str = await response.text()
+                            if html_content_str: # Store non-empty HTML in cache
+                                self.html_cache[url] = (html_content_str, time.time()) # Use original 'url' as key
+                                self.logger.info(f"Stored HTML in cache for {url}")
                         else:
                             return ServiceResult.failure(error_message=f"Unsupported content type: {content_type} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
-
-                except aiohttp.ClientError as e:
-                    return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}) # Use normalized_url
-                except asyncio.TimeoutError:
-                     return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}) # Use normalized_url
             
-            if pdf_bytes_val and final_url_val:
+            except aiohttp.ClientError as e_net:
+                return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e_net)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+            except asyncio.TimeoutError:
+                return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+            except Exception as e_fetch_prep: # Catch other errors during pre-fetch or fetch setup
+                return ServiceResult.failure(error_message=f"Error during URL fetch preparation for {url}: {str(e_fetch_prep)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+        
+        # --- Content Processing (PDF or HTML) ---
+        # This block executes if html_content_str was from cache OR successfully fetched and set.
+        # Or if pdf_bytes_val was set.
+        try:
+            if pdf_bytes_val: # final_url_val would have been updated if fetch occurred
                 # --- Route to PDFAcquisitionService ---
                 try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
@@ -817,7 +799,7 @@ class WebAcquisitionService(BaseService):
                     pdf_input_obj = PDFAcquisitionServiceInput(
                         file_path=temp_pdf_file_path,
                         job_id=job_id, # Pass along the job_id
-                        processing_level=web_input.processing_level # Pass along processing_level
+                        processing_level=processing_level # Pass along processing_level
                     )
                     pdf_service_result = await pdf_acq_service.execute(pdf_input_obj)
 
@@ -869,7 +851,7 @@ class WebAcquisitionService(BaseService):
                 is_trafilatura_content_available = False
                 loop = asyncio.get_event_loop()
                 try:
-                    print(f"DEBUG: Attempting main content HTML extraction with Trafilatura for {final_url_val}")
+                    self.logger.info(f"Attempting main content HTML extraction with Trafilatura for {final_url_val}")
                     # Use run_in_executor for the synchronous trafilatura call
                     main_content_html_snippet_by_trafilatura = await loop.run_in_executor(
                         None, # Default thread pool executor
@@ -884,13 +866,13 @@ class WebAcquisitionService(BaseService):
                         )
                     )
                     if main_content_html_snippet_by_trafilatura and len(main_content_html_snippet_by_trafilatura.strip()) >= 100: # Check if snippet is substantial
-                        print(f"DEBUG: Trafilatura successfully extracted HTML snippet (length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
+                        self.logger.info(f"Trafilatura successfully extracted HTML snippet (length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
                         is_trafilatura_content_available = True
                     else:
-                        print(f"DEBUG: Trafilatura returned very small or empty snippet (length: {len(main_content_html_snippet_by_trafilatura or '')}). Will use BS4 fallback.")
+                        self.logger.info(f"Trafilatura returned very small or empty snippet (length: {len(main_content_html_snippet_by_trafilatura or '')}). Will use BS4 fallback.")
                         main_content_html_snippet_by_trafilatura = None # Ensure it's None if not substantial
                 except Exception as e_traf:
-                    print(f"ERROR: Trafilatura extraction failed for {final_url_val}: {e_traf}")
+                    self.logger.error(f"Trafilatura extraction failed for {final_url_val}: {e_traf}", exc_info=True)
                     main_content_html_snippet_by_trafilatura = None # Ensure it's None on error
                 # --- End Trafilatura Integration ---
 
@@ -925,44 +907,41 @@ class WebAcquisitionService(BaseService):
                     full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
                     job_id=job_id,
-                    processing_level=web_input.processing_level
+                    processing_level=processing_level
                 )
             else:
                 # Should not happen if fetching was successful and content type was one of the above
                 return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
 
-            processing_duration = time.time() - start_time
+            processing_duration = time.time() - request_start_time
             if document_metadata_obj: # Ensure metadata is not None
                 document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
                 document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
             
+            # Ensure preliminary_blocks are sorted by order before returning
+            preliminary_blocks_list.sort(key=lambda b: b.order)
+            
+            # Filter boilerplate text blocks AFTER all blocks (including images) have been ordered
+            if preliminary_blocks_list: # Only filter if there are any blocks
+                self.logger.debug(f"Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks_list)} blocks.")
+                preliminary_blocks_list = self._filter_boilerplate_preliminary_blocks(preliminary_blocks_list, final_url_val)
+                self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks_list)} blocks remaining.")
+
             return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
 
-        except Exception as e:
-            # self.logger.error(f"WebAcquisitionService error for URL {original_url}: {e}", exc_info=True) # Optional logging
-            processing_duration = time.time() - start_time
+        except Exception as e_process: # Catch errors from PDF routing or HTML parsing/structuring
+            processing_duration = time.time() - request_start_time
             if document_metadata_obj: 
                  document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
                  document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
-                 document_metadata_obj.custom_fields["error"] = str(e)
-
+                 document_metadata_obj.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}"
+            self.logger.exception(f"WEB_SERVICE_CONTENT_PROCESSING_ERROR for {final_url_val}", exc_info=True) # Use logger.exception for traceback
             return ServiceResult.failure(
-                error_message=f"WEB_SERVICE_FATAL_ERROR: {type(e).__name__} for {normalized_url}. Check logs.",
+                error_message=f"WEB_SERVICE_CONTENT_PROCESSING_ERROR: {type(e_process).__name__} for {final_url_val}. Details: {str(e_process)}",
                 error_details={
-                    "original_url": original_url,
-                    "normalized_url_at_failure": normalized_url,
-                    "exception_type": type(e).__name__,
-                    "original_data": (
-                        preliminary_blocks_list if preliminary_blocks_list is not None else [], 
-                        document_metadata_obj, 
-                        raw_images_list if raw_images_list is not None else []
-                    )
+                    "original_url": url,
+                    "final_url_at_failure": final_url_val,
+                    "exception_type": type(e_process).__name__,
+                    "original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)
                 }
             )
-        finally:
-            if temp_pdf_file_path and os.path.exists(temp_pdf_file_path):
-                try:
-                    os.remove(temp_pdf_file_path)
-                except Exception as e_remove:
-                    # self.logger.warning(f"Could not remove temporary PDF file {temp_pdf_file_path}: {e_remove}") # Optional logging
-                    pass

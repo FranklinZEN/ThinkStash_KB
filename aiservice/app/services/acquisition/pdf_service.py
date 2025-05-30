@@ -8,6 +8,7 @@ from typing import Optional, Any, List, Dict, Tuple
 from pydantic import BaseModel, Field
 from datetime import datetime
 import functools # Added for functools.partial
+import logging # Added logging
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
@@ -29,6 +30,12 @@ class PDFAcquisitionService(BaseService):
     """
     def __init__(self, settings: Optional[Any] = None):
         super().__init__(settings)
+        self.settings = settings # Store settings if provided for future use (e.g. debug_mode)
+        self.logger = logging.getLogger(__name__) # Initialize logger
+        if self.settings and hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO) # Default to INFO
         # LLM image analysis is no longer performed by this service.
         # It will be handled by ImageProcessingService based on RawImageInput.
 
@@ -62,14 +69,14 @@ class PDFAcquisitionService(BaseService):
                         clean_date_str = raw_date[2:16]
                         creation_dt = datetime.strptime(clean_date_str, '%Y%m%d%H%M%S')
                     except (ValueError, TypeError) as e_creation:
-                        print(f"PDFAcquisitionService: Warning - Could not parse creationDate '{pdf_meta['creationDate']}': {e_creation}")
+                        self.logger.warning(f"PDFAcquisitionService: Warning - Could not parse creationDate '{pdf_meta['creationDate']}': {e_creation}")
                 if pdf_meta.get('modDate'):
                     try:
                         raw_date = pdf_meta['modDate']
                         clean_date_str = raw_date[2:16]
                         modification_dt = datetime.strptime(clean_date_str, '%Y%m%d%H%M%S')
                     except (ValueError, TypeError) as e_mod:
-                        print(f"PDFAcquisitionService: Warning - Could not parse modDate '{pdf_meta['modDate']}': {e_mod}")
+                        self.logger.warning(f"PDFAcquisitionService: Warning - Could not parse modDate '{pdf_meta['modDate']}': {e_mod}")
 
             document_metadata = DocumentMetadata(
                 document_id=job_id,
@@ -250,7 +257,7 @@ class PDFAcquisitionService(BaseService):
                             img_extension = base_image_dict.get("ext")
                             
                             if not image_bytes:
-                                print(f"PDFAcquisitionService: Warning - Could not extract image bytes for xref {xref} on page {page_num + 1}.")
+                                self.logger.warning(f"PDFAcquisitionService: Warning - Could not extract image bytes for xref {xref} on page {page_num + 1} of {pdf_input.file_path}. Skipping image.")
                                 continue
 
                             image_id = f"{job_id}_p{page_num + 1}_img{img_idx}"
@@ -268,23 +275,23 @@ class PDFAcquisitionService(BaseService):
                                 if isinstance(bbox_or_rects, fitz.Rect) and bbox_or_rects.is_valid and not bbox_or_rects.is_empty:
                                     img_bbox_on_page = list(bbox_or_rects)
                             except Exception as e_img_bbox:
-                                print(f"PDFAcquisitionService: Warning - Could not get image bbox for xref {xref} on page {page_num + 1}: {e_img_bbox}")
+                                self.logger.warning(f"PDFAcquisitionService: Warning - Could not get image bbox for xref {xref} on page {page_num + 1}: {e_img_bbox}")
                             
-                            raw_image_obj = RawImageInput(
+                            new_raw_image = RawImageInput(
                                 image_id=image_id,
                                 image_bytes=image_bytes,
                                 source_document_id=pdf_input.file_path,
                                 original_filename=f"image_{xref}.{img_extension}",
                                 page_number=page_num + 1,
                                 bbox=img_bbox_on_page, # Bounding box on the page
-                                mime_type=f"image/{img_extension}",
-                                alt_text=None, # PDFs don't usually have alt text in a standard way
-                                caption=None,  # Captions would need separate logic to find nearby text
-                                original_source_identifier_for_gcs_path=pdf_input.file_path, # or a cleaner identifier
-                                source_type_for_gcs_path="pdf",
-                                job_id_for_gcs_path=job_id
+                                mime_type=f"image/{img_extension}" if img_extension else None,
+                                alt_text=None, # PDFs generally don't have structured alt text for images like HTML
+                                caption=None,  # Captions might be inferred from nearby text later if needed
+                                original_source_identifier_for_gcs_path=pdf_input.file_path, # For GCS path
+                                source_type_for_gcs_path="pdf", # For GCS path
+                                job_id_for_gcs_path=job_id # For GCS path
                             )
-                            raw_images.append(raw_image_obj)
+                            raw_images.append(new_raw_image)
 
                             # Create an image placeholder block
                             # The order of this placeholder relative to text blocks needs to be determined.
@@ -299,8 +306,7 @@ class PDFAcquisitionService(BaseService):
                                 custom_attributes={"original_xref": xref}
                             ))
                         except Exception as e_img_extract:
-                            print(f"PDFAcquisitionService: Error extracting image xref {xref} on page {page_num+1}: {e_img_extract}")
-                            # Optionally, log this error more formally
+                            self.logger.error(f"PDFAcquisitionService: Failed to extract image (xref {xref}, idx {img_idx}) on page {page_num + 1} of '{pdf_input.file_path}': {e_img_extract}", exc_info=True)
             
             # Sort all preliminary blocks by page number, then by an estimated vertical position (y0 of bbox)
             # and for images/placeholders that might not have a reliable y0 initially, use a secondary key or ensure order is stable.
@@ -325,7 +331,7 @@ class PDFAcquisitionService(BaseService):
                 block.order = i
 
             if document_metadata is None: 
-                print("PDFAcquisitionService: ERROR - DocumentMetadata was not initialized!")
+                self.logger.error("PDFAcquisitionService: ERROR - DocumentMetadata was not initialized!")
                 document_metadata = DocumentMetadata(
                     document_id=job_id, 
                     source_identifier=pdf_input.file_path, 
@@ -336,42 +342,47 @@ class PDFAcquisitionService(BaseService):
                 )
             
             duration = time.time() - start_time
-            print(f"PDFAcquisitionService: Completed for {pdf_filename} in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}") # Keep this for success logging
+            self.logger.info(f"PDFAcquisitionService: Completed for {pdf_filename} in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}") # Keep this for success logging
             return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
 
         except fitz.fitz.EmptyFileError:
             # No duration calculation here as it's an early exit
             return ServiceResult.failure(error_message=f"File is empty or corrupted: {pdf_input.file_path}")
-        except Exception as e:
-            # Ensure duration is calculated even in case of general exception
-            duration_ms = (time.time() - start_time) * 1000
-            self.logger.error(f"PDFAcquisitionService: Error processing {pdf_input.file_path}. Duration: {duration_ms:.2f}ms. Error: {e}", exc_info=True)
+        except Exception as e_main:
+            duration = time.time() - start_time
+            self.logger.error(f"PDFAcquisitionService: Failed to process '{pdf_input.file_path}' in {duration:.2f}s: {e_main}", exc_info=True)
             return ServiceResult.failure(
-                error_message=f"Error processing PDF {pdf_input.file_path}: {e}",
-                details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration_ms}
+                error_message=f"Error processing PDF '{pdf_filename}': {str(e_main)}",
+                error_details={ "filename": pdf_filename, "duration_seconds": duration }
             )
         finally:
             if doc:
                 await loop.run_in_executor(None, doc.close)
         
-        duration_ms = (time.time() - start_time) * 1000
-        self.logger.info(f"PDFAcquisitionService: Successfully processed {pdf_input.file_path}. Duration: {duration_ms:.2f}ms. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
+        duration = time.time() - start_time
+        self.logger.info(f"PDFAcquisitionService: Successfully processed '{pdf_input.file_path}' in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}.")
         
         return ServiceResult.success(
             data=(preliminary_blocks, document_metadata, raw_images),
-            details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration_ms, "pages_processed": len(doc) if doc else 0}
+            details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration, "pages_processed": len(doc) if doc else 0}
         )
 
 # Example usage (for testing purposes)
 async def main_test_pdf_service():
+    # Basic test setup (replace with actual testing framework)
+    # Configure basic logging for the test
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
     print("Starting PDFAcquisitionService test...")
     
-    # Create a dummy settings object or mock if your service relies on it
+    # Create a dummy settings object if your service expects one
     class DummySettings:
-        pass # Add any attributes your service's __init__ might expect
+        debug_mode = True # Or False, to test logger level setting in service
+        # Add any other settings attributes your service __init__ might access
     
-    settings = DummySettings()
-    service = PDFAcquisitionService(settings=settings)
+    dummy_settings = DummySettings()
+    service = PDFAcquisitionService(settings=dummy_settings)
     
     # --- Test Case 1: Valid PDF ---
     # Replace with a path to an actual PDF file for testing

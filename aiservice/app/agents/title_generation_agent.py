@@ -1,1 +1,0 @@
-# Placeholder for TS-AI-Reconstruct-6: Title Generation/Extraction Agent 

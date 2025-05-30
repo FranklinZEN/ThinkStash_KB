@@ -8,9 +8,7 @@ langchain_openai # underscore used by pip, though import is often langchain.open
 
 # FastAPI and Pydantic (pinned as they are generally stable)
 fastapi
-uvicorn[standard]
-pydantic==2.11.4
-python-dotenv==1.1.0
+pydantic[email]>=2.0,<3.0
 
 # Utility and Parsing Libraries (pinned where specific versions are known good or important)
 requests==2.32.3
@@ -30,10 +28,7 @@ Markdown
 markdown-it-py # Let pip pick latest
 
 # OpenAI SDK (pinned as it's generally stable)
-openai==1.75.0 
-google-genai
-# Google Cloud Storage (pinned as it's generally stable)
-google-cloud-storage==3.1.0
+openai # For OpenAI library, used by langchain-openai and for Gemini compatibility
 
 # Testing (pinned as they are generally stable)
 requests-mock==1.12.1
@@ -44,3 +39,39 @@ ftfy==6.3.1
 
 # Removed crewai sub-dependencies like appdirs, click, embedchain, instructor etc.
 # Pip will resolve these based on the requirements of the latest crewai/langchain. 
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# For asynchronous HTTP requests (if Next.js calls this service)
+httpx
+
+# Other specific libraries if needed by tools or agents
+# e.g., beautifulsoup4 for web scraping tools
+
+# For LLM configuration (potentially, if models are loaded this way)
+# langchain_community # Often has base LLM providers or utilities
+
+# Older, potentially replaced Gemini SDK - keep commented if direct langchain-google-genai is not used
+# google-generativeai
+
+# Image processing
+# pdf2image # If PDFs contain images that need to be extracted not as part of text flow
+
+# OCR
+# pytesseract # If OCR is needed beyond what PDF extraction provides
+
+# PDF Processing
+# pdfminer.six
+
+# Web Scraping related, if used by tools
+# beautifulsoup4
+# requests
+
+# For Celery (if used for background tasks, not currently in scope for V2.6 core AI insight)
+# celery
+# redis # as a Celery broker
+
+# Langchain (core, and specific integrations)
+langchain-openai # For OpenAI models, or Gemini via OpenAI compatibility layer
+# langchain-google-genai # For direct Gemini integration - switching back to OpenAI compatibility layer 

@@ -1,11 +1,18 @@
+#!/usr/bin/env python
+# coding: utf-8
+"""Defines tools for content processing within CrewAI agents."""
+
 import requests
 from PIL import Image # Pillow for image metadata
 from google.cloud import storage # Google Cloud Storage
-from crewai.tools import BaseTool
+from crewai_tools import BaseTool
 import os
 import uuid # For generating unique filenames
 import io # For handling image bytes
 from aiservice.app.config.settings import settings # New import for V2.5 settings
+# We will import ContentBlock and other necessary models here when we define the tools
+# from aiservice.app.models.orchestration_models import ContentBlock
+# from typing import List, Dict, Any
 
 class ImageDownloaderTool(BaseTool):
     name: str = "Image Downloader from URL"

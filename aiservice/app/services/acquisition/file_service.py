@@ -16,6 +16,7 @@ from docx.text.paragraph import Paragraph as DocxParagraph # For type hinting
 from docx.document import Document as DocxDocument # For type hinting
 from docx.shared import Inches
 import io # For image bytes stream
+import logging # Added logging
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput # Import new models
@@ -38,6 +39,15 @@ class FileAcquisitionService(BaseService):
     Asynchronous service to extract text, structure, and images from various file types (DOCX, MD, TXT),
     producing PreliminaryBlock, DocumentMetadata, and RawImageInput objects.
     """
+
+    def __init__(self, settings: Optional[Any] = None):
+        super().__init__(settings)
+        self.settings = settings # Store settings if provided
+        self.logger = logging.getLogger(__name__) # Initialize logger
+        if self.settings and hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO) # Default to INFO
 
     def _generate_image_id(self, file_type_prefix: str, job_id: str, index: int) -> str: # job_id is now required
         # job_prefix = f"{job_id}_" if job_id else f"{uuid.uuid4().hex[:4]}_" # job_id is now required
@@ -157,8 +167,7 @@ class FileAcquisitionService(BaseService):
 
         except Exception as e:
             error_msg = f"Error processing DOCX file {file_path}: {str(e)}"
-            import traceback
-            print(f"DOCX Processing Error: {error_msg} Traceback: {traceback.format_exc()}")
+            self.logger.error(f"DOCX Processing Error: {error_msg}", exc_info=True)
             return error_msg
 
     async def _process_markdown(self, 
@@ -243,14 +252,14 @@ class FileAcquisitionService(BaseService):
                                                 image_data_dict["original_filename"] = os.path.basename(resolved_path)
                                                 image_data_dict["mime_type"] = f"image/{os.path.splitext(resolved_path)[1].lstrip('.').lower() or 'unknown'}"
                                             except Exception as e_img_read:
-                                                print(f"MD Service: Could not read image file {resolved_path}: {e_img_read}")
-                                                # Potentially store src as source_url as a fallback if reading fails
-                                                image_data_dict["source_url"] = img_src # Store original src if local read fails
+                                                self.logger.warning(f"MD Service: Could not read image file {resolved_path}: {e_img_read}")
+                                                image_data_dict["source_url"] = img_src 
                                         else:
-                                            print(f"MD Service: Local image not found {img_src} (resolved: {resolved_path}), storing as source_url.")
-                                            image_data_dict["source_url"] = img_src # If path doesn't exist
+                                            self.logger.warning(f"MD Service: Local image not found {img_src} (resolved: {resolved_path}), storing as source_url.")
+                                            image_data_dict["source_url"] = img_src 
                                     
-                                    raw_images.append(RawImageInput(**image_data_dict))
+                                    if processing_level == "full_content":
+                                        raw_images.append(RawImageInput(**image_data_dict)) # type: ignore
                                     preliminary_blocks.append(PreliminaryBlock(
                                         block_id=f"{job_id}_{block_id_suffix}_img{img_ref_idx-1}", type="image_placeholder",
                                         image_id_ref=raw_image_id, order=-1, page_number=None, bbox=None
@@ -311,8 +320,7 @@ class FileAcquisitionService(BaseService):
             return None # Success
         except Exception as e:
             error_msg = f"Error processing Markdown file {file_path}: {str(e)}"
-            import traceback
-            print(f"MD Processing Error: {error_msg} Traceback: {traceback.format_exc()}")
+            self.logger.error(f"Markdown Processing Error: {error_msg}", exc_info=True)
             return error_msg
 
     async def _process_txt(self, 
@@ -359,7 +367,8 @@ class FileAcquisitionService(BaseService):
             return None # Success
 
         except Exception as e:
-            error_msg = f"Error reading or processing TXT file {file_path}: {str(e)}"
+            error_msg = f"Error processing TXT file {file_path}: {str(e)}"
+            self.logger.error(f"TXT Processing Error: {error_msg}", exc_info=True)
             return error_msg
 
     async def execute(self, file_input: FileAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
@@ -429,7 +438,7 @@ class FileAcquisitionService(BaseService):
             # General exception handler
             duration = time.time() - start_time
             # Log the exception e for debugging
-            print(f"FileAcquisitionService: Unhandled error processing {file_path}: {str(e)}")
+            self.logger.error(f"FileAcquisitionService: Unhandled error processing {file_path}: {str(e)}", exc_info=True)
             return ServiceResult.failure(
                 error_message=f"Error processing file {os.path.basename(file_path)}: {str(e)}",
             ) 
