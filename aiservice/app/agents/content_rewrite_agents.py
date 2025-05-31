@@ -23,10 +23,12 @@ from aiservice.app.models.orchestration_models import ContentBlock
 class ContentRewriteAgents:
     """Factory class or container for creating and configuring content rewrite agents."""
 
-    def __init__(self):
+    def __init__(self, user_id: Optional[str] = "default_user_id_agents"):
         self.llm = get_configured_llm() # Now configured for ChatGoogleGenerativeAI
+        self.user_id = user_id # Store user_id
+        print(f"ContentRewriteAgents initialized with user_id: {self.user_id}") # For debugging
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm) 
-        self.content_processor_tool = FastContentBlockProcessorTool()
+        self.content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id) # Pass user_id
 
     def summarization_agent(self) -> Agent:
         """
@@ -62,20 +64,22 @@ class ContentRewriteAgents:
         return Agent(
             role="Content Reconstruction Architect",
             goal=(
-                "Parse the LLM's summarized output. Reconstruct the final list of content blocks by "
-                "integrating the summarized text with the original essential image blocks, based on the "
-                "LLM output or image references. Ensure accurate block reconstruction and logical flow."
+                "Your SOLE responsibility is to take a textual summary and optional image metadata, "
+                "and then invoke the 'FastContentBlockProcessorTool' using the 'reconstruct_content_from_summary' operation "
+                "with this data. The tool will perform the reconstruction into the final list of ContentBlock objects. "
+                "DO NOT attempt to generate the ContentBlock list yourself. Your output MUST be the direct result of the tool call."
             ),
             backstory=(
-                "You are a meticulous architect of digital content. You can take raw textual output from an LLM "
-                "and precisely reconstruct it into well-structured content blocks, seamlessly integrating "
-                "images and ensuring a polished final product. Speed and precision are your hallmarks."
+                "You are a meticulous architect specializing in content structures. "
+                "You understand that precise formatting is paramount and rely exclusively on specialized tools "
+                "to ensure the integrity of the ContentBlock schema. You do not deviate from this process."
             ),
             llm=None, # This agent uses tools only, no LLM calls needed for output construction.
-            tools=[self.content_processor_tool], 
+            tools=[self.content_processor_tool],
             allow_delegation=False,
             verbose=True,
-            memory=False
+            memory=False, # Consider if memory is needed or could interfere - keeping False for now
+            return_direct=True
         )
 
 # Example usage (for testing or integration into a crew)

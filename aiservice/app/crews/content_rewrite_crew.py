@@ -7,12 +7,18 @@ to rewrite/summarize content based on the V2.6 plan.
 
 from crewai import Crew, Process, Task
 from typing import List, Dict, Any, Optional
+import json
+import re
+import time
+import uuid
+import dataclasses
+import ast
 
 # Agent definitions
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
 
 # Model imports
-from aiservice.app.models.orchestration_models import ContentBlock # For reconstruction
+from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
 
 
@@ -26,7 +32,15 @@ class ContentRewriteCrewManager:
             rewrite_input: The input data containing content_blocks and optional metadata.
         """
         self.rewrite_input = rewrite_input
-        self.agents_factory = ContentRewriteAgents()
+        # Extract user_id, providing a default if not available
+        self.user_id = "default_user_id_manager"
+        if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.user_id:
+            self.user_id = self.rewrite_input.document_metadata.user_id
+        elif self.rewrite_input.user_id: # Fallback to user_id on RewriteContentInput if present
+            self.user_id = self.rewrite_input.user_id
+        
+        print(f"ContentRewriteCrewManager initialized with user_id: {self.user_id}") # For debugging
+        self.agents_factory = ContentRewriteAgents(user_id=self.user_id) # Pass user_id
 
     def setup_crew(self, concatenated_text: str, essential_image_metadata: List[Dict[str, Any]]) -> Crew:
         """
@@ -47,7 +61,7 @@ class ContentRewriteCrewManager:
                 "are contextually important for the summary, refer to them using placeholders like '[IMAGE: <image_id_ref_value>]' or '[IMAGE: <gcs_url_value>]'. "
                 "The image_id_ref_value or gcs_url_value should correspond to the 'image_id_ref' or 'gcs_url' present in the 'essential_image_metadata'."
                 "The summary should be a single string of well-written text. "
-                "When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to 0.3 and the 'max_tokens' parameter to 1000."
+                "When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to 0.0 and the 'max_tokens' parameter to 1000."
             ),
             expected_output=(
                 "A single string containing the concise summary of the text, with image placeholders if applicable."
@@ -58,14 +72,13 @@ class ContentRewriteCrewManager:
 
         task_reconstruct_output = Task(
             description=(
-                "Your SOLE and ONLY task is to use the 'Fast Content Block Processor' tool. You MUST NOT attempt to generate the list of dictionaries yourself. "
-                "The tool will handle the entire reconstruction process. "
-                "To do this, you need to correctly identify and pass the required inputs to the tool: "
-                "1. 'operation': You MUST set this to 'reconstruct_content_from_summary'. "
-                "2. 'summarized_text': This is the direct string output you received as input from the 'Expert Summarizer' task (the previous task's result). "
-                "3. 'image_metadata_list': This is the 'essential_image_metadata' list of dictionaries, which was provided as an initial input to the crew and is available to you as:\n\n'{essential_image_metadata}'\n\n "
-                "4. 'content_blocks': You MUST pass an empty list ([]) for this argument. "
-                "Your action MUST be to call this tool with these exact parameters. The tool's direct return value will be the final output for this task. Do not add, remove, or modify anything from the tool's output."
+                "CRITICAL INSTRUCTION: You MUST use the 'FastContentBlockProcessorTool'.\n"
+                "You have received 'summarized_text' from the previous task. You also have 'essential_image_metadata' from the crew's initial inputs (available as '{essential_image_metadata}').\n"
+                "To successfully use the tool, you MUST construct your tool input with these exact argument names and values:"
+                "1. 'operation': EXACTLY the string 'reconstruct_content_from_summary'."
+                "2. 'summarized_text': The 'summarized_text' content you received."
+                "3. 'image_metadata_list': The 'essential_image_metadata' list."
+                "Your entire output for this task MUST be the direct, unaltered result from this single tool call. NO OTHER ACTIONS OR OUTPUTS."
             ),
             expected_output=(
                 "The direct, unaltered Python list of dictionaries returned by the 'Fast Content Block Processor' tool's 'reconstruct_content_from_summary' operation. "
@@ -73,7 +86,7 @@ class ContentRewriteCrewManager:
             ),
             agent=output_constructor_agent,
             context=[task_summarize_content],
-            # tools=[self.agents_factory.content_processor_tool] # Explicitly specifying agent's tools here can sometimes help if implicit isn't working
+            tools=[self.agents_factory.content_processor_tool] # Explicitly specifying agent's tools here can sometimes help if implicit isn't working
         )
 
         content_rewrite_crew = Crew(
@@ -84,134 +97,375 @@ class ContentRewriteCrewManager:
         )
         return content_rewrite_crew
 
-    def run(self) -> RewriteContentOutput:
-        """Runs the Content Rewrite Crew and returns the structured output."""
+    def _try_json_parse(self, data_str: str) -> Any:
+        try:
+            # Attempt to parse as a Python literal first (handles single quotes, etc.)
+            # Safely evaluates if it's a Python literal like list, dict, tuple, string, number, bool, None.
+            print(f"DEBUG: _try_json_parse attempting ast.literal_eval for: {data_str[:200]}...")
+            evaluated_data = ast.literal_eval(data_str)
+            print(f"DEBUG: ast.literal_eval successful. Type: {type(evaluated_data)}")
+            return evaluated_data
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError) as e_ast:
+            # ast.literal_eval failed, likely not a simple Python literal or too complex.
+            # This can happen if it's actual JSON (with null, true, false) or malformed.
+            print(f"DEBUG: ast.literal_eval failed: {e_ast}. Falling back to json.loads for: {data_str[:200]}...")
+            try:
+                return json.loads(data_str)
+            except json.JSONDecodeError:
+                # Try to find JSON array within a potentially larger string
+                match = re.search(r'(\\[.*?\\])', data_str, re.DOTALL) # Made regex non-greedy for the content within brackets
+                if match:
+                    json_like_part = match.group(1)
+                    print(f"DEBUG: Found JSON-like part with regex: {json_like_part[:200]}...")
+                    try:
+                        return json.loads(json_like_part)
+                    except json.JSONDecodeError as e_inner:
+                        print(f"WARNING: Found JSON-like part but failed to parse with json.loads: {json_like_part[:200]}. Error: {e_inner}")
+                        return None
+                print(f"WARNING: Failed to decode with json.loads directly and no parsable array found via regex from string: {data_str[:200]}")
+                return None
+            except Exception as e_json_other: # Catch other potential errors from json.loads
+                print(f"ERROR: Unexpected error during json.loads fallback: {e_json_other}. Data: {data_str[:200]}")
+                return None
+        except Exception as e_outer: # Catch any other unexpected errors
+            print(f"ERROR: Unexpected error in _try_json_parse: {e_outer}. Data: {data_str[:200]}")
+            return None
 
-        # --- Direct Data Preparation --- 
-        all_text_parts = []
-        essential_image_metadata_list = []
+    def safe_parse_to_content_blocks(self, data: Any, field_name: str) -> List[ContentBlock]:
+        """
+        Safely parses data (expected to be a list of dicts) into a List[ContentBlock].
+        Logs errors if parsing or validation fails.
+        Args:
+            data: The data to parse, ideally a list of dictionaries.
+            field_name: A descriptive name of the field being parsed (for logging).
+        Returns:
+            A list of ContentBlock objects, or an empty list if parsing/validation fails.
+        """
+        parsed_blocks: List[ContentBlock] = []
+        if not isinstance(data, list):
+            print(f"ERROR: Data for '{field_name}' is not a list, but type {type(data)}. Cannot parse into ContentBlocks.")
+            return []
+
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                print(f"ERROR: Item {i} in '{field_name}' is not a dictionary, but type {type(item)}. Skipping.")
+                continue
+            try:
+                # Ensure block_id is present, generate if missing (as per ContentBlock model default_factory)
+                if 'block_id' not in item or item['block_id'] is None:
+                    item['block_id'] = str(uuid.uuid4())
+                
+                # Ensure 'type' is present, default to 'text' if missing and content is present
+                if 'type' not in item or item['type'] is None:
+                    if 'content' in item and isinstance(item['content'], str):
+                         item['type'] = 'text' # Sensible default if text content exists
+                    else:
+                        print(f"WARNING: Item {i} in '{field_name}' is missing 'type' and cannot infer. Skipping. Item: {str(item)[:100]}")
+                        continue
+
+
+                # Attempt to create ContentBlock, this will validate all fields
+                block = ContentBlock(**item)
+                parsed_blocks.append(block)
+            except Exception as e: # Catch Pydantic ValidationError and other potential errors
+                print(f"ERROR: Failed to validate item {i} in '{field_name}' as ContentBlock. Error: {e}. Item: {str(item)[:200]}")
+        
+        if data and not parsed_blocks:
+             print(f"WARNING: Input data for '{field_name}' was non-empty but resulted in zero successfully parsed ContentBlocks.")
+        elif not data:
+            print(f"INFO: Input data for '{field_name}' was empty or None. Returning empty list of ContentBlocks.")
+
+        return parsed_blocks
+
+    def run(self) -> RewriteContentOutput:
+        start_time = time.time()
+        print(f"INFO: ContentRewriteCrewManager run initiated for user_id: {self.user_id}")
+
+        # 1. Pre-process input: Concatenate text and extract essential image metadata
+        concatenated_text = ""
+        essential_image_metadata: List[Dict[str, Any]] = []
+        text_parts = []
         for block in self.rewrite_input.content_blocks_to_rewrite:
             if block.type == "text" and block.content:
-                all_text_parts.append(block.content)
-            elif block.type == "list" and block.items: # Assuming items in a list are strings for now
-                for item in block.items:
-                    if isinstance(item, str):
-                        all_text_parts.append(item)
-            elif block.type == "image":
-                # Extract necessary image metadata for the SummarizationAgent and OutputConstructorAgent
-                # The OutputConstructorAgent's tool will need enough to reconstruct the image block
-                img_meta = {
+                text_parts.append(block.content)
+            elif block.type == "image" and block.image_id_ref:
+                # Extract only essential fields for the summarization context to avoid excessive token usage
+                essential_meta = {
                     "image_id_ref": block.image_id_ref,
-                    "gcs_url": block.gcs_url,
+                    "gcs_url": block.gcs_url, # Keep GCS URL for potential reference
                     "alt_text": block.alt_text,
                     "caption": block.caption,
-                    "llm_description": block.llm_description, # Though likely None at this stage for original blocks
+                    "llm_description": block.llm_description, # If available from previous steps
                     "width": block.width,
                     "height": block.height
-                    # Add any other fields from ContentBlock that are essential for reconstruction by the tool
                 }
-                essential_image_metadata_list.append(img_meta)
-        
-        concatenated_text_for_summarization = "\n\n".join(all_text_parts)
-        print(f"DEBUG: Preprocessed concatenated text length: {len(concatenated_text_for_summarization)}")
-        print(f"DEBUG: Preprocessed essential image metadata count: {len(essential_image_metadata_list)}")
-        # --- End Direct Data Preparation ---
+                # Filter out None values from essential_meta to keep it clean
+                essential_image_metadata.append({k: v for k, v in essential_meta.items() if v is not None})
+        concatenated_text = "\n\n".join(text_parts)
 
-        crew = self.setup_crew(concatenated_text_for_summarization, essential_image_metadata_list)
-        
-        # The crew_inputs should now directly map to what the first task (task_summarize_content) expects,
-        # plus any inputs needed by subsequent tasks that aren't outputs of previous tasks.
+        print(f"DEBUG: Preprocessed concatenated text length: {len(concatenated_text)}")
+        print(f"DEBUG: Preprocessed essential image metadata count: {len(essential_image_metadata)}")
+
         crew_inputs = {
-            'concatenated_text': concatenated_text_for_summarization,          # For task_summarize_content
-            'essential_image_metadata': essential_image_metadata_list,      # For task_summarize_content & task_reconstruct_output
+            "concatenated_text": concatenated_text,
+            "essential_image_metadata": essential_image_metadata,
+            "original_content_blocks_json_string": self.rewrite_input.original_content_blocks_json_string
         }
+        # Truncate for logging if too long
+        loggable_crew_inputs = {
+            k: (v[:500] + '...' if isinstance(v, str) and len(v) > 500 else v)
+            for k, v in crew_inputs.items()
+        }
+        print(f"DEBUG: Crew Inputs being passed to kickoff: {loggable_crew_inputs}")
 
-        print(f"DEBUG: Crew Inputs being passed to kickoff: {crew_inputs}")
+        # 2. Setup and run the Crew
+        crew = self.setup_crew(concatenated_text, essential_image_metadata)
+        crew_result = None
+        final_agent_output = None
+        parsed_content_blocks: List[ContentBlock] = []
+        final_status_code = OrchestrationStatusCodeEnum.ERROR_UNKNOWN # Default to error
+        final_error_message = "Crew execution did not start or complete as expected."
 
-        # The result of crew.kickoff() should be the output of the *last* task in a sequential crew.
-        # In our case, task_reconstruct_output should return a list of dicts.
-        crew_result = crew.kickoff(inputs=crew_inputs)
-
-        raw_output_from_last_task = None # Initialize
-        if crew_result and crew_result.tasks_output and len(crew_result.tasks_output) > 0:
-            last_task_output = crew_result.tasks_output[-1]
-            
-            # Try agent_output first, as it might hold the direct structured output from the agent's execution
-            if hasattr(last_task_output, 'agent_output') and last_task_output.agent_output is not None:
-                raw_output_from_last_task = last_task_output.agent_output
-            # Else, try exported_output (for structured data like list/dict)
-            elif hasattr(last_task_output, 'exported_output') and last_task_output.exported_output is not None:
-                raw_output_from_last_task = last_task_output.exported_output
-            # Else, try raw_output (often a string, potentially JSON)
-            elif hasattr(last_task_output, 'raw_output') and last_task_output.raw_output is not None:
-                raw_output_from_last_task = last_task_output.raw_output
-            # Else, try the 'output' attribute as another common place for the final result
-            elif hasattr(last_task_output, 'output') and last_task_output.output is not None:
-                raw_output_from_last_task = last_task_output.output
-            # If none of the above yielded a result, raw_output_from_last_task remains None.
-
-        # Ensure raw_output_from_last_task is what we expect (list of dicts)
-        if isinstance(raw_output_from_last_task, list) and all(isinstance(item, dict) for item in raw_output_from_last_task):
-            final_content_blocks = []
-            for item_dict in raw_output_from_last_task:
-                try:
-                    # The tool's reconstruct operation already returns model_dump(mode='json'),
-                    # so these items should be dicts that ContentBlock can parse.
-                    final_content_blocks.append(ContentBlock(**item_dict))
-                except Exception as e:
-                    print(f"Warning: Could not convert item dictionary to ContentBlock: {item_dict}. Error: {e}")
-            
-            return RewriteContentOutput(
-                ai_rewritten_content_blocks=final_content_blocks,
-                status_code="success"
-            )
-        # Handling cases where the output might be a string (e.g. if agent returns raw string instead of parsed list)
-        # or other unexpected types.
-        elif isinstance(raw_output_from_last_task, str):
-            # Attempt to parse if it's a JSON string list of dicts
-            import json
-            try:
-                parsed_list = json.loads(raw_output_from_last_task)
-                if isinstance(parsed_list, list) and all(isinstance(item, dict) for item in parsed_list):
-                    final_content_blocks = []
-                    for item_dict in parsed_list:
-                        try:
-                            final_content_blocks.append(ContentBlock(**item_dict))
-                        except Exception as e:
-                            print(f"Warning: Could not convert item dictionary (from JSON string) to ContentBlock: {item_dict}. Error: {e}")
-                    return RewriteContentOutput(
-                        ai_rewritten_content_blocks=final_content_blocks,
-                        status_code="success_parsed_json_string"
-                    )
+        try:
+            crew_result = crew.kickoff(inputs=crew_inputs)
+        except Exception as e:
+            print(f"ERROR: Exception during crew.kickoff(): {e}")
+            final_status_code = OrchestrationStatusCodeEnum.ERROR_CREW_EXECUTION_FAILED
+            final_error_message = f"Exception during crew kickoff: {str(e)}"
+            # Construct usage_metrics_dict here as well for the error case
+            # as crew object might exist even if kickoff fails partially or metrics are available.
+            usage_metrics_dict_error_case: Optional[Dict[str, Any]] = None
+            if crew and hasattr(crew, 'usage_metrics') and crew.usage_metrics:
+                um_error = crew.usage_metrics
+                print(f"DEBUG: [Error Path] Converting crew.usage_metrics. Type: {type(um_error)}, Value: {um_error}")
+                temp_metrics_dict_error = {}
+                known_attrs_error = ['total_tokens', 'prompt_tokens', 'completion_tokens', 'successful_requests']
+                for attr_err in known_attrs_error:
+                    if hasattr(um_error, attr_err):
+                        temp_metrics_dict_error[attr_err] = getattr(um_error, attr_err)
+                if isinstance(um_error, dict):
+                    usage_metrics_dict_error_case = {**um_error, **temp_metrics_dict_error}
+                elif temp_metrics_dict_error:
+                    usage_metrics_dict_error_case = temp_metrics_dict_error
                 else:
-                    error_msg = f"Crew finished. Output was a string, but not a valid JSON list of dictionaries. Output: {raw_output_from_last_task}"
-                    print(error_msg)
-                    return RewriteContentOutput(
-                        ai_rewritten_content_blocks=[],
-                        status_code="error_string_not_parsable_list",
-                        error_message=error_msg
-                    )
-            except json.JSONDecodeError:
-                error_msg = f"Crew finished. Output was a string, but not valid JSON. Output: {raw_output_from_last_task}"
-                print(error_msg)
-                return RewriteContentOutput(
-                    ai_rewritten_content_blocks=[],
-                    status_code="error_string_not_json",
-                    error_message=error_msg
-                )
-        else:
-            error_msg = (
-                f"Crew finished, but the final output from the last task was not a list of dictionaries as expected. "
-                f"Type received: {type(raw_output_from_last_task)}. "
-                f"Last Task Output object: {last_task_output if 'last_task_output' in locals() else 'Not available'}. "
-                f"CrewOutput object: {crew_result}"
-            )
-            print(error_msg)
+                    try:
+                        usage_metrics_dict_error_case = vars(um_error)
+                    except TypeError:
+                        usage_metrics_dict_error_case = None
+                if not isinstance(usage_metrics_dict_error_case, dict) and usage_metrics_dict_error_case is not None:
+                    usage_metrics_dict_error_case = None # Ensure it's None if conversion is problematic
+            
+            end_time_error = time.time()
+            processing_time_ms_error = (end_time_error - start_time) * 1000
             return RewriteContentOutput(
                 ai_rewritten_content_blocks=[],
-                status_code="error_unexpected_output_type",
-                error_message=error_msg
+                status_code=final_status_code.value if isinstance(final_status_code, OrchestrationStatusCodeEnum) else str(final_status_code),
+                error_message=final_error_message,
+                usage_metrics=usage_metrics_dict_error_case,
+                processing_time_ms=processing_time_ms_error,
+                trace_id=str(uuid.uuid4()),
+                original_request_data_snippet=str(self.rewrite_input)[:500]
             )
+
+        # --- Start of Moved Usage Metrics Conversion Block ---
+        usage_metrics_dict: Optional[Dict[str, Any]] = None
+        if crew_result: # Ensure crew_result exists before trying to access usage_metrics from it or its crew
+            actual_crew_object_for_metrics = getattr(crew_result, 'crew', crew) # Prefer crew from CrewOutput if available, else fallback to the one we ran
+            if actual_crew_object_for_metrics and hasattr(actual_crew_object_for_metrics, 'usage_metrics') and actual_crew_object_for_metrics.usage_metrics:
+                um = actual_crew_object_for_metrics.usage_metrics
+                print(f"DEBUG: [Primary Path] Converting crew.usage_metrics. Type: {type(um)}, Value: {um}")
+                print(f"DEBUG: [Primary Path] Attributes of um: {dir(um)}")
+
+                temp_metrics_dict = {}
+                known_attrs = ['total_tokens', 'prompt_tokens', 'completion_tokens', 'successful_requests']
+                
+                for attr in known_attrs:
+                    if hasattr(um, attr):
+                        value = getattr(um, attr)
+                        temp_metrics_dict[attr] = value
+                        print(f"DEBUG: [Primary Path] Added to metrics dict: {{'{attr}': {value} (type: {type(value)})}}")
+                    else:
+                        print(f"DEBUG: [Primary Path] Attribute '{attr}' not found in usage_metrics object.")
+                
+                if isinstance(um, dict):
+                    print("DEBUG: [Primary Path] crew.usage_metrics is already a dict. Merging with known_attrs if any were missed.")
+                    usage_metrics_dict = {**um, **temp_metrics_dict}
+                elif temp_metrics_dict:
+                    usage_metrics_dict = temp_metrics_dict
+                else:
+                    print(f"WARNING: [Primary Path] Could not convert usage_metrics of type {type(um)} to dict using known attributes or direct dict check. Trying vars().")
+                    try:
+                        usage_metrics_dict = vars(um)
+                        print(f"DEBUG: [Primary Path] vars(um) result: {usage_metrics_dict}")
+                    except TypeError:
+                        print(f"ERROR: [Primary Path] vars(um) failed for type {type(um)}. usage_metrics will be None.")
+                        usage_metrics_dict = None
+                
+                print(f"DEBUG: [Primary Path] Final usage_metrics_dict: {usage_metrics_dict}, Type: {type(usage_metrics_dict)}")
+                
+                if not isinstance(usage_metrics_dict, dict) and usage_metrics_dict is not None:
+                    print(f"CRITICAL WARNING: [Primary Path] usage_metrics_dict is NOT a dict after conversion attempts. Type: {type(usage_metrics_dict)}. Setting to None.")
+                    usage_metrics_dict = None
+            else:
+                print("DEBUG: [Primary Path] No usage_metrics found on crew_result.crew or the initial crew object.")
+        else:
+            print("DEBUG: [Primary Path] crew_result is None, skipping usage_metrics conversion.")
+        # --- End of Moved Usage Metrics Conversion Block ---
+
+        if crew_result:
+            print(f"DEBUG: Full crew_result object (type {type(crew_result)}): {str(crew_result)[:1000]}...")
+            crew_result_raw = getattr(crew_result, 'raw', None)
+            if crew_result_raw:
+                print(f"DEBUG: crew_result.raw (type {type(crew_result_raw)}): {str(crew_result_raw)[:1000]}...")
+            else:
+                print("DEBUG: crew_result has no .raw attribute or it is empty.")
+
+            # Attempt to get final_agent_output directly from crew_result.raw
+            if isinstance(crew_result_raw, list):
+                print("INFO: Using crew_result.raw directly as it is a list.")
+                final_agent_output = crew_result_raw
+            elif isinstance(crew_result_raw, str):
+                print(f"INFO: crew_result.raw is a string. Attempting to parse: {crew_result_raw[:500]}...")
+                parsed_raw_output = self._try_json_parse(crew_result_raw)
+                if isinstance(parsed_raw_output, list):
+                    final_agent_output = parsed_raw_output
+                    print("INFO: Successfully parsed crew_result.raw string into a list.")
+                else:
+                    print(f"WARNING: Failed to parse crew_result.raw string into a list. Parsed data type: {type(parsed_raw_output)}")
+            
+            # Fallback to tasks_output ONLY if crew_result.raw didn't yield a list for final_agent_output
+            if final_agent_output is None:
+                if crew_result.tasks_output and len(crew_result.tasks_output) > 0:
+                    print("INFO: crew_result.raw did not yield a list. Falling back to inspecting tasks_output.")
+                    last_task_output = crew_result.tasks_output[-1]
+                    print(f"DEBUG: last_task_output (type {type(last_task_output)}): {str(last_task_output)[:1000]}...")
+
+                    raw_output_data = getattr(last_task_output, 'raw_output', None)
+                    pydantic_output_data = getattr(last_task_output, 'pydantic_output', None)
+                    exported_output_data = getattr(last_task_output, 'exported_output', None)
+                    agent_output_data = getattr(last_task_output, 'agent_output', None)
+                    output_data = getattr(last_task_output, 'output', None)
+
+                    print(f"DEBUG: last_task_output.raw_output type: {type(raw_output_data)}, content (first 200): {str(raw_output_data)[:200]}")
+                    print(f"DEBUG: last_task_output.pydantic_output type: {type(pydantic_output_data)}, content (first 200): {str(pydantic_output_data)[:200]}")
+                    print(f"DEBUG: last_task_output.exported_output type: {type(exported_output_data)}, content (first 200): {str(exported_output_data)[:200]}")
+                    print(f"DEBUG: last_task_output.agent_output type: {type(agent_output_data)}, content (first 200): {str(agent_output_data)[:200]}")
+                    print(f"DEBUG: last_task_output.output type: {type(output_data)}, content (first 200): {str(output_data)[:200]}")
+
+                    if isinstance(pydantic_output_data, list):
+                        final_agent_output = pydantic_output_data
+                        print("INFO: Using pydantic_output from last task.")
+                    elif isinstance(exported_output_data, list):
+                        final_agent_output = exported_output_data
+                        print("INFO: Using exported_output from last task.")
+                    elif isinstance(agent_output_data, list):
+                        final_agent_output = agent_output_data
+                        print("INFO: Using agent_output from last task.")
+                    elif isinstance(raw_output_data, list):
+                        final_agent_output = raw_output_data
+                        print("INFO: Using raw_output from last task (as list).")
+                    elif isinstance(raw_output_data, str):
+                        print(f"INFO: Attempting to parse raw_output_data (string from last task): {raw_output_data[:500]}...")
+                        parsed_data = self._try_json_parse(raw_output_data)
+                        if isinstance(parsed_data, list):
+                            final_agent_output = parsed_data
+                            print("INFO: Successfully parsed raw_output_data string (from last task) into a list.")
+                        else:
+                            print(f"WARNING: Failed to parse raw_output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                    elif isinstance(output_data, list):
+                        final_agent_output = output_data
+                        print("INFO: Using output_data from last task (as list).")
+                    elif isinstance(output_data, str):
+                        print(f"INFO: Attempting to parse output_data (string from last task): {output_data[:500]}...")
+                        parsed_data = self._try_json_parse(output_data)
+                        if isinstance(parsed_data, list):
+                            final_agent_output = parsed_data
+                            print("INFO: Successfully parsed output_data string (from last task) into a list.")
+                        else:
+                            print(f"WARNING: Failed to parse output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                    else: # Fallback if no specific attribute yielded a list
+                        final_output_attr_val = getattr(last_task_output, 'output', None)
+                        if isinstance(final_output_attr_val, str):
+                            print(f"INFO: Attempting to parse last_task_output.output (string attribute): {final_output_attr_val[:500]}...")
+                            parsed_data = self._try_json_parse(final_output_attr_val)
+                            if isinstance(parsed_data, list):
+                                final_agent_output = parsed_data
+                                print("INFO: Successfully parsed last_task_output.output string attribute into a list.")
+                            else:
+                                print(f"WARNING: Failed to parse last_task_output.output string attribute. Parsed data type: {type(parsed_data)}")
+                        elif isinstance(final_output_attr_val, list):
+                            final_agent_output = final_output_attr_val
+                            print("INFO: Using last_task_output.output directly as it is a list attribute.")
+                else: # No crew_result.tasks_output or it's empty, and crew_result.raw processing failed to produce a list
+                    print("INFO: Neither crew_result.raw (after parsing attempts) nor tasks_output yielded a usable list. Cannot determine final agent output.")
+            # If final_agent_output is still None here, it means no valid output was found through any method.
+            # The existing error handling below will catch this.
+
+
+            if final_agent_output is None or not isinstance(final_agent_output, list):
+                final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_TYPE
+                error_msg_detail = (
+                    f"Crew finished, but the final processed output was not a list of dictionaries as expected. "
+                    f"Final processed output type: {type(final_agent_output)}. Final processed output (first 1000 chars): {str(final_agent_output)[:1000]}. "
+                    f"Checked crew_result.raw and relevant attributes of last_task_output if available."
+                )
+                print(f"ERROR: Error in crew execution: {error_msg_detail}")
+                final_error_message = error_msg_detail
+                # This return was part of the user's snippet, effectively ending processing here on error.
+                end_time_task_error = time.time()
+                processing_time_ms_task_error = (end_time_task_error - start_time) * 1000
+                return RewriteContentOutput(
+                    ai_rewritten_content_blocks=[],
+                    status_code=final_status_code.value if isinstance(final_status_code, OrchestrationStatusCodeEnum) else str(final_status_code), # Corrected status_code
+                    error_message=final_error_message,
+                    usage_metrics=usage_metrics_dict, # Use already converted dict
+                    processing_time_ms=processing_time_ms_task_error,
+                    trace_id=str(uuid.uuid4()),
+                    original_request_data_snippet=str(self.rewrite_input)[:500]
+                )
+            
+            # If we reach here, final_agent_output is a list (could be empty)
+            print(f"INFO: Final agent output determined to be a list with {len(final_agent_output)} items.")
+            parsed_content_blocks = self.safe_parse_to_content_blocks(final_agent_output, "ai_rewritten_content_blocks")
+            
+            if not parsed_content_blocks and final_agent_output: # It was a non-empty list, but parsing failed
+                final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION
+                final_error_message = "Crew output was a list of dictionaries, but failed Pydantic validation into ContentBlocks."
+                print(f"ERROR: {final_error_message} Input list (first item): {str(final_agent_output[0])[:500] if final_agent_output else 'Empty List'}")
+            elif not parsed_content_blocks and not final_agent_output: # It was an empty list, parsing resulted in empty
+                 print("INFO: Crew returned an empty list of content blocks, successfully processed as such.")
+                 final_status_code = OrchestrationStatusCodeEnum.SUCCESS
+                 final_error_message = None
+            elif parsed_content_blocks: # Successfully parsed non-empty list
+                print(f"INFO: Successfully parsed {len(parsed_content_blocks)} content blocks from crew output.")
+                final_status_code = OrchestrationStatusCodeEnum.SUCCESS
+                final_error_message = None
+            else: # Should be covered, but as a fallback
+                final_status_code = OrchestrationStatusCodeEnum.ERROR_UNKNOWN 
+                final_error_message = "Unknown error after attempting to parse final agent output."
+                print(f"ERROR: {final_error_message} Final agent output: {str(final_agent_output)[:500]}")
+
+        elif not crew_result: # If crew_result itself is None from the kickoff exception
+            # final_status_code and final_error_message are already set by the except block
+            pass
+        else: # No crew_result.tasks_output or it's empty
+            final_status_code = OrchestrationStatusCodeEnum.ERROR_NO_OUTPUT_FROM_CREW
+            final_error_message = "Crew execution did not produce any usable task outputs."
+            print(f"ERROR: {final_error_message}. Crew Result: {crew_result}")
+        
+        end_time = time.time()
+        processing_time_ms = (end_time - start_time) * 1000
+        print(f"INFO: ContentRewriteCrewManager run finished in {processing_time_ms/1000:.2f} seconds. Status: {final_status_code}")
+
+        # 4. Construct and return the output Pydantic model
+        return RewriteContentOutput(
+            ai_rewritten_content_blocks=parsed_content_blocks,
+            status_code=final_status_code.value if isinstance(final_status_code, OrchestrationStatusCodeEnum) else str(final_status_code),
+            error_message=final_error_message,
+            usage_metrics=usage_metrics_dict, # Use the converted dict
+            processing_time_ms=processing_time_ms,
+            trace_id=str(uuid.uuid4()) # Generate a new trace_id for this operation
+        )
 
 # Example Usage (for direct testing if needed)
 if __name__ == "__main__":

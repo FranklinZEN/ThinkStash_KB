@@ -45,6 +45,7 @@ class PreliminaryBlock(BaseModel):
 
 class DocumentMetadata(BaseModel):
     document_id: str = Field(..., description="Unique ID for this processed document instance (e.g., job_id).")
+    user_id: str = Field(..., description="Identifier for the user associated with this document.")
     source_identifier: str = Field(..., description="Original filename, URL, etc.")
     source_type: str = Field(..., description="Type of source (e.g., 'pdf', 'docx', 'url', 'txt', 'md').")
     final_url: Optional[str] = Field(None, description="Final URL after any redirects (for web sources).")

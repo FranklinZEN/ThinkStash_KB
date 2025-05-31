@@ -122,14 +122,27 @@ def main():
         raw_doc_metadata = e2e_data.get("document_metadata", {})
         # Ensure all required fields for DocumentMetadata are present or provide defaults
         # The DocumentMetadata model will raise errors if required fields are missing
-        # For simplicity, we'll assume the JSON provides them.
-        # Example: 'extracted_at' needs to be datetime
-        if 'extracted_at' in raw_doc_metadata and isinstance(raw_doc_metadata['extracted_at'], str):
-            raw_doc_metadata['extracted_at'] = datetime.datetime.fromisoformat(raw_doc_metadata['extracted_at'].replace('Z', '+00:00')) # Handle Z for UTC
         
         # Ensure document_id is present, generate if not (though it should be in e2e output)
         if not raw_doc_metadata.get("document_id"):
             raw_doc_metadata["document_id"] = str(uuid.uuid4())
+            print(f"Generated missing document_id: {raw_doc_metadata['document_id']}")
+
+        # Ensure user_id is present, generate a default if not
+        if not raw_doc_metadata.get("user_id"):
+            raw_doc_metadata["user_id"] = "test_user_manual_script_default" # Default user_id
+            print(f"Added missing user_id with default: {raw_doc_metadata['user_id']}")
+
+        # Example: 'extracted_at' needs to be datetime
+        if 'extracted_at' in raw_doc_metadata and isinstance(raw_doc_metadata['extracted_at'], str):
+            try:
+                raw_doc_metadata['extracted_at'] = datetime.datetime.fromisoformat(raw_doc_metadata['extracted_at'].replace('Z', '+00:00')) # Handle Z for UTC
+            except ValueError as ve:
+                print(f"Warning: Could not parse 'extracted_at' string '{raw_doc_metadata['extracted_at']}'. Using current UTC time. Error: {ve}")
+                raw_doc_metadata['extracted_at'] = datetime.datetime.now(datetime.timezone.utc)
+        elif 'extracted_at' not in raw_doc_metadata:
+             print(f"Warning: 'extracted_at' not found in document_metadata. Using current UTC time.")
+             raw_doc_metadata['extracted_at'] = datetime.datetime.now(datetime.timezone.utc)
 
         loaded_doc_metadata = DocumentMetadata(**raw_doc_metadata)
         
@@ -140,7 +153,9 @@ def main():
 
         rewrite_input_data = RewriteContentInput(
             content_blocks_to_rewrite=loaded_content_blocks,
-            document_metadata=loaded_doc_metadata
+            document_metadata=loaded_doc_metadata,
+            original_content_blocks_json_string=json.dumps([block.model_dump(mode='json') for block in loaded_content_blocks]) if loaded_content_blocks else None,
+            user_id=loaded_doc_metadata.user_id if loaded_doc_metadata else "test_user_json_fallback" # Pass user_id here too
         )
         print(f"Successfully loaded {len(loaded_content_blocks)} content blocks and document metadata.")
 
@@ -156,6 +171,7 @@ def main():
         ]
         sample_doc_metadata = DocumentMetadata(
             document_id=str(uuid.uuid4()),
+            user_id="manual_test_user_fallback", # Added user_id here for the fallback
             source_type="manual_test_fallback",
             source_identifier="fallback_doc_001",
             extracted_at=datetime.datetime.now(datetime.timezone.utc)
@@ -163,7 +179,9 @@ def main():
         )
         rewrite_input_data = RewriteContentInput(
             content_blocks_to_rewrite=sample_content_blocks,
-            document_metadata=sample_doc_metadata
+            document_metadata=sample_doc_metadata,
+            original_content_blocks_json_string=json.dumps([block.model_dump(mode='json') for block in sample_content_blocks]),
+            user_id=sample_doc_metadata.user_id
         )
     except json.JSONDecodeError:
         print(f"Error: Could not decode JSON from {JSON_INPUT_FILE_PATH}. Please ensure it's valid JSON.")

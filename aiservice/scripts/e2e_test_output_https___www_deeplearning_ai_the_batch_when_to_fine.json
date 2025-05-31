@@ -1,5 +1,6 @@
 {
   "status_code": "success",
+  "user_id": "actual_user_from_test_data_001",
   "source_identifier": "https://www.deeplearning.ai/the-batch/when-to-fine-tune-and-when-not-to/",
   "source_type": "url",
   "processing_level_used": "full_content",

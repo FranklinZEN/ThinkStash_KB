@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 from .pipeline_models import DocumentMetadata, EnrichedImageMetadata
+import enum
 
 class OrchestrationInput(BaseModel):
     source_identifier: str = Field(..., description="URL or filepath")
@@ -43,6 +44,22 @@ class ContentBlock(BaseModel):
     # Ensure no old image fields like original_source_identifier are lingering if they are now part of EnrichedImageMetadata
     # The plan was to have ContentStructuringService create 'image' ContentBlock by finding matching EnrichedImageMetadata.
     # So, ContentBlock itself stores the resolved image details.
+
+class OrchestrationStatusCodeEnum(str, enum.Enum):
+    """Standardized status codes for orchestration and processing."""
+    SUCCESS = "success"
+    PARTIAL_SUCCESS = "partial_success"
+    
+    ERROR_UNKNOWN = "error_unknown"
+    ERROR_CREW_EXECUTION_FAILED = "error_crew_execution_failed"
+    ERROR_UNEXPECTED_OUTPUT_TYPE = "error_unexpected_output_type"
+    ERROR_CONTENT_BLOCK_VALIDATION = "error_content_block_validation"
+    ERROR_NO_OUTPUT_FROM_CREW = "error_no_output_from_crew"
+    
+    FAILURE_ACQUISITION = "failure_acquisition"
+    FAILURE_IMAGE_PROCESSING = "failure_image_processing"
+    FAILURE_STRUCTURING = "failure_structuring"
+    UNSUPPORTED_TYPE = "unsupported_type"
 
 class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])

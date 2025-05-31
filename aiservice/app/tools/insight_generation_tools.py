@@ -120,8 +120,9 @@ class OptimizedLLMInteractionTool(BaseTool):
 
 class FastContentBlockProcessorToolInput(BaseModel):
     """Input for FastContentBlockProcessorTool."""
-    content_blocks: List[ContentBlock] = Field(..., description="List of ContentBlock objects to process. Not used by 'reconstruct_content_from_summary' operation if 'summarized_text' is provided.")
-    operation: str = Field(default="concatenate_text", description="The processing operation to perform.")
+    # Made content_blocks optional as it's not used by 'reconstruct_content_from_summary'
+    content_blocks: Optional[List[ContentBlock]] = Field(default=None, description="Optional list of ContentBlock objects to process. Primarily used by operations like 'concatenate_text' or 'extract_image_metadata'. Not used by 'reconstruct_content_from_summary' if 'summarized_text' is provided.")
+    operation: str = Field(description="The processing operation to perform.") # Removed default to make it explicit
     summarized_text: Optional[str] = Field(None, description="The summarized text string, used by 'reconstruct_content_from_summary'.")
     image_metadata_list: Optional[List[Dict[str, Any]]] = Field(None, description="List of essential image metadata dictionaries, used by 'reconstruct_content_from_summary'.")
 
@@ -132,6 +133,12 @@ class FastContentBlockProcessorTool(BaseTool):
         "Designed for efficient data extraction and transformation without LLM calls."
     )
     args_schema: type[BaseModel] = FastContentBlockProcessorToolInput
+    user_id: Optional[str] = None # Added to store user_id
+
+    def __init__(self, user_id: Optional[str] = "default_user_id_tool", **kwargs):
+        super().__init__(**kwargs)
+        self.user_id = user_id
+        print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}") # For debugging
 
     def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list: Optional[List[Dict[str, Any]]] = None) -> Any: # Added new optional args
         """Processes content blocks based on the specified operation."""
@@ -192,10 +199,11 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
-            if not summarized_text or image_metadata_list is None: # image_metadata_list can be an empty list
+            # User ID will be taken from self.user_id set during __init__
+            if summarized_text is None or image_metadata_list is None: # image_metadata_list can be an empty list
                 return "Error: 'summarized_text' and 'image_metadata_list' are required for 'reconstruct_content_from_summary'."
 
-            reconstructed_blocks: List[ContentBlock] = []
+            reconstructed_blocks_dicts: List[Dict[str, Any]] = [] # Changed to store dicts
             
             # Create a quick lookup for image metadata by gcs_url or image_id_ref
             image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in image_metadata_list if meta.get('gcs_url')}
@@ -215,6 +223,12 @@ class FastContentBlockProcessorTool(BaseTool):
             # According to the plan: "The LLM prompt will guide you to refer to images by their identifiers 
             # if they are contextually important for the summary." - so placeholders are expected.
 
+            current_user_id = self.user_id
+            if not current_user_id:
+                # Fallback or error if user_id is critical and not set
+                print("Warning: user_id not set in FastContentBlockProcessorTool for reconstruct_content_from_summary. Using placeholder.")
+                current_user_id = "tool_reconstruct_fallback_user"
+
             current_text_segment = ""
             last_idx = 0
             
@@ -230,11 +244,14 @@ class FastContentBlockProcessorTool(BaseTool):
                 # Add preceding text segment if any
                 text_before_placeholder = summarized_text[last_idx:start_match].strip()
                 if text_before_placeholder:
-                    reconstructed_blocks.append(ContentBlock(
+                    text_block = ContentBlock(
                         block_id=uuid.uuid4().hex,
+                        tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
+                        user_id=current_user_id, # Use current_user_id
                         type="text",
                         content=text_before_placeholder
-                    ))
+                    )
+                    reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
                 
                 # Find and add image block
                 img_meta_to_use = None
@@ -244,18 +261,19 @@ class FastContentBlockProcessorTool(BaseTool):
                     img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
                 
                 if img_meta_to_use:
-                    reconstructed_blocks.append(ContentBlock(
+                    image_block = ContentBlock(
                         block_id=uuid.uuid4().hex,
+                        tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
+                        user_id=current_user_id, # Use current_user_id
                         type="image",
                         image_id_ref=img_meta_to_use.get("image_id_ref"),
                         gcs_url=img_meta_to_use.get("gcs_url"),
                         alt_text=img_meta_to_use.get("alt_text"),
                         caption=img_meta_to_use.get("caption"),
-                        llm_description=img_meta_to_use.get("llm_description"),
                         width=img_meta_to_use.get("width"),
                         height=img_meta_to_use.get("height")
-                        # page_number and bbox might not be relevant for new blocks or might need to be derived
-                    ))
+                    )
+                    reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
                 else:
                     # If placeholder image not found, could insert a warning text block or skip
                     print(f"Warning: Image for placeholder '{placeholder_identifier}' not found in provided metadata.")
@@ -271,19 +289,22 @@ class FastContentBlockProcessorTool(BaseTool):
             # Add any remaining text after the last placeholder
             remaining_text = summarized_text[last_idx:].strip()
             if remaining_text:
-                reconstructed_blocks.append(ContentBlock(
+                text_block = ContentBlock(
                     block_id=uuid.uuid4().hex,
+                    tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
+                    user_id=current_user_id, # Use current_user_id
                     type="text",
                     content=remaining_text
-                ))
+                )
+                reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
             
             # If no placeholders were found at all, the whole summarized_text is one block
-            if not reconstructed_blocks and summarized_text:
-                 reconstructed_blocks.append(ContentBlock(
+            if not reconstructed_blocks_dicts and summarized_text:
+                 reconstructed_blocks_dicts.append(ContentBlock(
                     block_id=uuid.uuid4().hex,
                     type="text",
                     content=summarized_text
-                ))
+                ).model_dump(mode='json'))
             
             # Fallback: if summary had no placeholders, and we're supposed to add images,
             # we might append them here if the design requires it.
@@ -291,7 +312,7 @@ class FastContentBlockProcessorTool(BaseTool):
             # If essential_image_metadata was meant to be included regardless of placeholders, that logic would be different (e.g. append all at end)
             # For now, sticking to placeholder-driven insertion.
 
-            return [block.model_dump(mode='json') for block in reconstructed_blocks]
+            return reconstructed_blocks_dicts # Return list of dicts
 
         else:
             return f"Error: Unknown operation '{operation}'."
