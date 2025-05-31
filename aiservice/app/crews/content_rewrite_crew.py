@@ -13,6 +13,7 @@ import time
 import uuid
 import ast
 from textwrap import dedent
+from pydantic import BaseModel, Field
 
 # Agent definitions
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
@@ -20,6 +21,10 @@ from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
 # Model imports
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
+
+# Define a Pydantic model for the output of the summarization task
+class SummarizerTaskOutput(BaseModel):
+    summarized_text: str = Field(description="The summarized text content.")
 
 
 class ContentRewriteCrewManager:
@@ -72,23 +77,30 @@ class ContentRewriteCrewManager:
                 The summary should be a single string of well-written text.
                 When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to {self.agents_factory.summarizer_temperature} and the 'max_tokens' parameter to {self.agents_factory.summarizer_max_tokens}.
                 """),
-            expected_output="A concise textual summary of the input content, potentially including image references like '[IMAGE: <image_id_ref>]'.",
+            expected_output="A Pydantic object of type 'SummarizerTaskOutput' containing the 'summarized_text' as a string.",
             agent=summarization_agent,
-            tools=[self.agents_factory.optimized_llm_tool]
+            output_pydantic=SummarizerTaskOutput
         )
 
         task_reconstruct_output = Task(
-            description=(
-                "Reconstruct content blocks using the 'FastContentBlockProcessorTool'.\\n"
-                "Operation: 'reconstruct_content_from_summary'.\\n"
-                "Summarized text: Use the output from the 'task_summarize_content'.\\n"
-                "Image metadata list (JSON string): {{reconstructor_image_metadata_list_json}}\\n"
-                "Document ID: {{reconstructor_document_id}}\\n"
-                "Your output for this task MUST be the direct, unaltered result from the tool call."
+            description=dedent(
+                """
+                Reconstruct content blocks using the FastContentBlockProcessorTool.
+                The necessary inputs (operation, summarized_text, image_metadata_list_json, document_id)
+                are provided directly to the tool via the task's input configuration.
+                Your output for this task MUST be the direct, unaltered result from the tool call.
+                """
             ),
             expected_output="A list of ContentBlock dictionaries, reconstructed from the summary and image metadata, as returned by the FastContentBlockProcessorTool.",
-            agent=output_constructor_agent, # Agent has the tool
-            context=[task_summarize_content]
+            agent=output_constructor_agent,
+            tools=[self.agents_factory.content_processor_tool],
+            context=[task_summarize_content],
+            inputs={
+                "operation": "{{reconstructor_operation}}", # From crew_kickoff_inputs
+                "summarized_text": "{{context}}", # CHANGED: Use generic context placeholder
+                "image_metadata_list_json": "{{reconstructor_image_metadata_list_json}}", # From crew_kickoff_inputs
+                "document_id": "{{reconstructor_document_id}}" # From crew_kickoff_inputs
+            }
         )
 
         content_rewrite_crew = Crew(
@@ -205,7 +217,8 @@ class ContentRewriteCrewManager:
             'concatenated_text': concatenated_text,
             'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata), # Use locally processed metadata
             'reconstructor_image_metadata_list_json': json.dumps(essential_image_metadata), # Use locally processed metadata, as JSON string
-            'reconstructor_document_id': current_document_id
+            'reconstructor_document_id': current_document_id,
+            'reconstructor_operation': "reconstruct_content_from_summary" # ADDED for explicit tool argument
         }
         
         if self.verbose_level > 1:

@@ -25,6 +25,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI # Corrected import loc
 # Corrected import for ChatOpenAI
 from langchain_openai import ChatOpenAI # More direct import path
 
+# Import SummarizerTaskOutput for type checking
+from aiservice.app.crews.content_rewrite_crew import SummarizerTaskOutput
+
 # --- Optimized LLM Interaction Tool ---
 
 class OptimizedLLMInteractionToolInput(BaseModel):
@@ -141,9 +144,42 @@ class FastContentBlockProcessorTool(BaseTool):
         self.user_id = user_id
         print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}") # For debugging
 
-    def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list_json: Optional[str] = None, document_id: Optional[str] = None) -> Any:
-        """Processes content blocks based on the specified operation."""
+    def _run(
+        self,
+        operation: str,
+        content_blocks: Optional[List[ContentBlock]] = None,
+        summarized_text: Optional[Any] = None, # Changed type to Any to accept Pydantic model
+        image_metadata_list_json: Optional[str] = None,
+        document_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        print("DEBUG: FastContentBlockProcessorTool._run called.")
+        print(f"  DEBUG Tool - Received operation: {operation}")
+        print(f"  DEBUG Tool - Received summarized_text type: {type(summarized_text)}")
+        print(f"  DEBUG Tool - Received summarized_text (raw value, first 100 chars): {str(summarized_text)[:100] if summarized_text else 'None'}")
+
+        actual_summarized_text: Optional[str] = None
+        if isinstance(summarized_text, SummarizerTaskOutput):
+            print("  DEBUG Tool - summarized_text is SummarizerTaskOutput. Extracting .summarized_text attribute.")
+            actual_summarized_text = summarized_text.summarized_text
+        elif isinstance(summarized_text, str):
+            print("  DEBUG Tool - summarized_text is already a string.")
+            actual_summarized_text = summarized_text
+        elif summarized_text is not None:
+            print(f"  WARNING Tool - summarized_text is an unexpected type: {type(summarized_text)}. Attempting to cast to string.")
+            try:
+                actual_summarized_text = str(summarized_text)
+            except Exception as e_cast:
+                print(f"  ERROR Tool - Failed to cast summarized_text to string: {e_cast}")
+                # Return an error or raise an exception, as this is unexpected
+                return [{"error": f"summarized_text has unexpected type {type(summarized_text)} and could not be cast to string."}]
         
+        print(f"  DEBUG Tool - Processed actual_summarized_text (first 100 chars): {actual_summarized_text[:100] if actual_summarized_text else 'None'}")
+        print(f"  DEBUG Tool - Received image_metadata_list_json (first 100 chars): {image_metadata_list_json[:100] if image_metadata_list_json else 'None'}")
+        print(f"  DEBUG Tool - Received document_id: {document_id}")
+        print(f"  DEBUG Tool - Received content_blocks (type): {type(content_blocks)}")
+
+        image_metadata_list: Optional[List[Dict[str, Any]]] = None
+
         current_document_id_for_run = document_id # Capture for the run, especially for reconstruction
 
         if operation == "concatenate_text":
@@ -197,13 +233,13 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
-            if summarized_text is None or image_metadata_list_json is None:
-                return "Error: 'summarized_text' and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."
+            if actual_summarized_text is None or image_metadata_list_json is None: # MODIFIED to use actual_summarized_text
+                return [{"error": "'summarized_text' (after processing) and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."}]
 
             try:
                 image_metadata_list: List[Dict[str, Any]] = json.loads(image_metadata_list_json)
             except json.JSONDecodeError as e:
-                return f"Error: Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}"
+                return [{"error": f"Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}"}]
 
             reconstructed_blocks_dicts: List[Dict[str, Any]] = []
             order_idx_counter = 0
@@ -222,14 +258,14 @@ class FastContentBlockProcessorTool(BaseTool):
                 # It's crucial for the calling Agent/Crew to provide document_id for reconstruction.
 
             last_idx = 0
-            placeholder_pattern = r'\[IMAGE:\s*([^\s\]]+)\s*\]'
+            placeholder_pattern = r'\\[IMAGE:\\s*([^\\s\\]]+)\\s*\\]'
             import re
 
-            for match in re.finditer(placeholder_pattern, summarized_text):
+            for match in re.finditer(placeholder_pattern, actual_summarized_text): # MODIFIED to use actual_summarized_text
                 start_match, end_match = match.span()
                 placeholder_identifier = match.group(1)
 
-                text_before_placeholder = summarized_text[last_idx:start_match].strip()
+                text_before_placeholder = actual_summarized_text[last_idx:start_match].strip() # MODIFIED
                 if text_before_placeholder:
                     text_block = ContentBlock(
                         block_id=uuid.uuid4().hex,
@@ -296,7 +332,7 @@ class FastContentBlockProcessorTool(BaseTool):
 
                 last_idx = end_match
 
-            remaining_text = summarized_text[last_idx:].strip()
+            remaining_text = actual_summarized_text[last_idx:].strip() # MODIFIED to use actual_summarized_text
             if remaining_text:
                 text_block = ContentBlock(
                     block_id=uuid.uuid4().hex,
