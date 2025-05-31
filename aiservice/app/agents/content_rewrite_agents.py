@@ -28,7 +28,10 @@ class ContentRewriteAgents:
         self.user_id = user_id # Store user_id
         print(f"ContentRewriteAgents initialized with user_id: {self.user_id}") # For debugging
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm) 
-        self.content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id) # Pass user_id
+        self.content_processor_tool = FastContentBlockProcessorTool(
+            user_id=self.user_id,
+            result_as_answer=True
+        )
 
     def summarization_agent(self) -> Agent:
         """
@@ -57,29 +60,25 @@ class ContentRewriteAgents:
 
     def output_constructor_agent(self) -> Agent:
         """
-        Agent responsible for parsing the LLM's summarized output and 
-        reconstructing the final List[ContentBlock], interspersing images correctly.
-        This agent uses Python-only tools and does NOT make LLM calls.
+        Agent responsible for reconstructing the final content blocks from summarized text and image metadata.
+        This agent should ONLY use its tool and return the direct output.
         """
         return Agent(
-            role="Content Reconstruction Architect",
+            role="Output Reconstruction Architect",
             goal=(
-                "Your SOLE responsibility is to take a textual summary and optional image metadata, "
-                "and then invoke the 'FastContentBlockProcessorTool' using the 'reconstruct_content_from_summary' operation "
-                "with this data. The tool will perform the reconstruction into the final list of ContentBlock objects. "
-                "DO NOT attempt to generate the ContentBlock list yourself. Your output MUST be the direct result of the tool call."
+                "Given summarized text, a list of essential image metadata, and a document ID, "
+                "use the FastContentBlockProcessorTool with the 'reconstruct_content_from_summary' operation "
+                "to create a new list of ContentBlock objects. You MUST use the tool and output its result directly."
             ),
             backstory=(
-                "You are a meticulous architect specializing in content structures. "
-                "You understand that precise formatting is paramount and rely exclusively on specialized tools "
-                "to ensure the integrity of the ContentBlock schema. You do not deviate from this process."
+                "You are a specialized agent focused on meticulously reconstructing structured content. "
+                "You do not engage in creative writing or summarization yourself. Your sole function is to "
+                "accurately process inputs through your designated tool and return the tool's direct output."
             ),
-            llm=None, # This agent uses tools only, no LLM calls needed for output construction.
-            tools=[self.content_processor_tool],
+            tools=[self.content_processor_tool], # Ensures it uses the tool configured with result_as_answer=True
+            llm=self.llm, # MODIFIED: Explicitly assign the configured LLM
             allow_delegation=False,
             verbose=True,
-            memory=False, # Consider if memory is needed or could interfere - keeping False for now
-            return_direct=True
         )
 
 # Example usage (for testing or integration into a crew)

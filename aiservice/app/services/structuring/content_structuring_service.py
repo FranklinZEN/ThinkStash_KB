@@ -30,6 +30,7 @@ class ContentStructuringService(BaseService):
 
     async def execute(self, service_input: ContentStructuringServiceInput) -> ServiceResult[List[ContentBlock]]:
         start_time = time.time()
+        self.logger.debug(f"CSS: Logger effective level: {logging.getLevelName(self.logger.getEffectiveLevel())}") # DEBUG LOGGER LEVEL
         try: 
             final_content_blocks: List[ContentBlock] = []
             
@@ -47,6 +48,7 @@ class ContentStructuringService(BaseService):
             else:
                 enriched_images_map: Dict[str, EnrichedImageMetadata] = \
                     {img.image_id: img for img in service_input.enriched_images}
+            self.logger.debug(f"CSS: enriched_images_map created. Keys: {list(enriched_images_map.keys())}") # DEBUG LOG
 
             if not service_input.preliminary_blocks:
                 return ServiceResult.success(data=[])
@@ -102,6 +104,7 @@ class ContentStructuringService(BaseService):
                             page_number=p_block.page_number, bbox=p_block.bbox
                         ))
                     elif p_block.type == 'image_placeholder':
+                        self.logger.debug(f"CSS: Processing image_placeholder. p_block.image_id_ref: '{p_block.image_id_ref}'") # DEBUG LOG
                         if p_block.image_id_ref and p_block.image_id_ref in enriched_images_map:
                             enriched_img = enriched_images_map[p_block.image_id_ref]
                             final_content_blocks.append(ContentBlock(

@@ -32,14 +32,18 @@ class ContentRewriteCrewManager:
             rewrite_input: The input data containing content_blocks and optional metadata.
         """
         self.rewrite_input = rewrite_input
-        # Extract user_id, providing a default if not available
         self.user_id = "default_user_id_manager"
-        if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.user_id:
-            self.user_id = self.rewrite_input.document_metadata.user_id
+        self.document_id_to_pass = "default_doc_id_manager"
+
+        if self.rewrite_input.document_metadata:
+            if self.rewrite_input.document_metadata.user_id:
+                self.user_id = self.rewrite_input.document_metadata.user_id
+            if self.rewrite_input.document_metadata.document_id:
+                self.document_id_to_pass = self.rewrite_input.document_metadata.document_id
         elif self.rewrite_input.user_id: # Fallback to user_id on RewriteContentInput if present
             self.user_id = self.rewrite_input.user_id
         
-        print(f"INFO: ContentRewriteCrewManager initialized with user_id: {self.user_id}") # Retained: Useful high-level info
+        print(f"INFO: ContentRewriteCrewManager initialized with user_id: {self.user_id}, document_id: {self.document_id_to_pass}")
         self.agents_factory = ContentRewriteAgents(user_id=self.user_id) # Pass user_id
 
     def setup_crew(self, concatenated_text: str, essential_image_metadata: List[Dict[str, Any]]) -> Crew:
@@ -56,15 +60,15 @@ class ContentRewriteCrewManager:
         # Define Tasks
         task_summarize_content = Task(
             description=(
-                "You are provided with 'concatenated_text':\\n\\n'{concatenated_text}'\\n\\nAnd 'essential_image_metadata':\\n\\n'{essential_image_metadata}'\\n\\n" # Dynamically injected
+                f"You are provided with 'concatenated_text':\n\n'{concatenated_text}'\n\nAnd 'essential_image_metadata':\n\n'{essential_image_metadata}'\n\n"
                 "Generate a concise summary of the 'concatenated_text'. If images from 'essential_image_metadata' "
-                "are contextually important for the summary, refer to them using placeholders like '[IMAGE: <image_id_ref_value>]' or '[IMAGE: <gcs_url_value>]'. "
-                "The image_id_ref_value or gcs_url_value should correspond to the 'image_id_ref' or 'gcs_url' present in the 'essential_image_metadata'."
+                "are contextually important for the summary, you MUST refer to them using the EXACT placeholder format: '[IMAGE: <image_id_ref_value>]' or '[IMAGE: <gcs_url_value>]'. "
+                "The image_id_ref_value or gcs_url_value MUST correspond to an 'image_id_ref' or 'gcs_url' from the 'essential_image_metadata'. "
                 "The summary should be a single string of well-written text. "
-                "When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to 0.0 and the 'max_tokens' parameter to 1000."
+                "When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to 0.0 and the 'max_tokens' parameter to 500000."
             ),
             expected_output=(
-                "A single string containing the concise summary of the text, with image placeholders if applicable."
+                "A single string containing the concise summary of the text, with image placeholders in the format '[IMAGE: <identifier>]' if applicable."
             ),
             agent=summarization_agent,
             tools=[self.agents_factory.optimized_llm_tool]
@@ -72,12 +76,13 @@ class ContentRewriteCrewManager:
 
         task_reconstruct_output = Task(
             description=(
-                "CRITICAL INSTRUCTION: You MUST use the 'FastContentBlockProcessorTool'.\n"
-                "You have received 'summarized_text' from the previous task. You also have 'essential_image_metadata' from the crew's initial inputs (available as '{essential_image_metadata}').\n"
-                "To successfully use the tool, you MUST construct your tool input with these exact argument names and values:"
-                "1. 'operation': EXACTLY the string 'reconstruct_content_from_summary'."
-                "2. 'summarized_text': The 'summarized_text' content you received."
-                "3. 'image_metadata_list': The 'essential_image_metadata' list."
+                "CRITICAL INSTRUCTION: You MUST use the 'FastContentBlockProcessorTool'.\\n"
+                "Your ONLY task is to call this tool ONCE with the following arguments, using the exact values provided from your context:\\n"
+                "1. 'operation': Use the exact string 'reconstruct_content_from_summary'.\\n"
+                "2. 'summarized_text': Use the 'summarized_text' you received from the previous task's output.\\n"
+                "3. 'image_metadata_list_json': Use the exact JSON string provided in the '{{crew_essential_image_metadata_json}}' crew input variable.\\n"
+                "4. 'full_image_context_json': Use the exact JSON string provided in the '{{crew_full_image_context_json}}' crew input variable.\\n"
+                "5. 'document_id': Use the exact string provided in the '{{crew_document_id}}' crew input variable.\\n"
                 "Your entire output for this task MUST be the direct, unaltered result from this single tool call. NO OTHER ACTIONS OR OUTPUTS."
             ),
             expected_output=(
@@ -85,8 +90,7 @@ class ContentRewriteCrewManager:
                 "Each dictionary in the list must conform to the Pydantic 'ContentBlock' model structure."
             ),
             agent=output_constructor_agent,
-            context=[task_summarize_content],
-            tools=[self.agents_factory.content_processor_tool] # Explicitly specifying agent's tools here can sometimes help if implicit isn't working
+            context=[task_summarize_content]
         )
 
         content_rewrite_crew = Crew(
@@ -207,9 +211,35 @@ class ContentRewriteCrewManager:
         # print(f"DEBUG: Preprocessed concatenated text length: {len(concatenated_text)}")
         # print(f"DEBUG: Preprocessed essential image metadata count: {len(essential_image_metadata)}")
 
+        current_document_id = self.document_id_to_pass
+
+        # Prepare the full image context for the reconstructor agent/tool
+        # This should contain all original image details from the input, not just "essential" for summarizer
+        full_image_context_for_reconstructor: List[Dict[str, Any]] = []
+        for block in self.rewrite_input.content_blocks_to_rewrite:
+            if block.type == "image":
+                img_meta = {
+                    "image_id_ref": block.image_id_ref,
+                    "gcs_url": block.gcs_url,
+                    "alt_text": block.alt_text,
+                    "caption": block.caption,
+                    "llm_description": block.llm_description,
+                    "width": block.width,
+                    "height": block.height
+                }
+                full_image_context_for_reconstructor.append({k: v for k, v in img_meta.items() if v is not None})
+        
+        # Serialize to JSON strings for crew kickoff
+        essential_image_metadata_json = json.dumps(essential_image_metadata)
+        full_image_context_json = json.dumps(full_image_context_for_reconstructor)
+
+
         crew_inputs = {
             "concatenated_text": concatenated_text,
-            "essential_image_metadata": essential_image_metadata,
+            "essential_image_metadata": essential_image_metadata, # This is for the summarization task's direct formatting (remains list of dicts)
+            "crew_essential_image_metadata_json": essential_image_metadata_json, # For reconstruction tool via agent
+            "crew_full_image_context_json": full_image_context_json, # For reconstruction tool via agent
+            "crew_document_id": current_document_id,
             "original_content_blocks_json_string": self.rewrite_input.original_content_blocks_json_string
         }
         # Truncate for logging if too long

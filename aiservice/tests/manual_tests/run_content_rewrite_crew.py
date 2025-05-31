@@ -19,6 +19,7 @@ import time
 import datetime
 import uuid # Added for generating document_id
 import json # Added for loading test data from JSON
+import argparse # ADDED for command-line arguments
 
 # Ensure the aiservice module can be found
 # This adjusts the path to include the parent directory of 'aiservice' if the script is run directly.
@@ -38,9 +39,19 @@ from crewai import Task, Crew
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents # To get the agent
 from aiservice.app.config.llm_config import get_configured_llm, reset_llm_client # For direct LLM if needed for agent
 
-JSON_INPUT_FILE_PATH = os.path.join(PROJECT_ROOT, "aiservice", "scripts", "e2e_test_output_https___airbnb_tech_infrastructure_journey_platfor.json")
-
 def main():
+    # ADDED ArgumentParser setup
+    parser = argparse.ArgumentParser(description="Manual test script for ContentRewriteCrew.")
+    parser.add_argument(
+        "json_input_file", 
+        type=str, 
+        help="Path to the JSON file containing OrchestrationOutput data for the rewrite crew."
+    )
+    args = parser.parse_args()
+    
+    # USE the provided argument for the file path
+    json_input_file_from_arg = args.json_input_file
+
     print("--- Initializing Manual Test for ContentRewriteCrew ---")
     # Load settings and display current LLM (already in your script)
     try:
@@ -108,12 +119,101 @@ def main():
 
     print("\n--- Isolated Summarizer Test Finished ---")
 
+    # --- Testing OutputConstructorAgent in Isolation ---
+    print("\n--- Testing OutputConstructorAgent in Isolation ---")
+    agents_factory_for_constructor = ContentRewriteAgents(user_id="test_isolated_constructor_user")
+    output_constructor_agent = agents_factory_for_constructor.output_constructor_agent()
+
+    # Verify LLM presence (it should not be None now due to CrewAgentExecutor requirements)
+    print(f"DEBUG: output_constructor_agent.llm is: {output_constructor_agent.llm}")
+
+    test_summarized_text = "This is a sample summary that the summarization agent would provide. It might mention [IMAGE: img_ref_001] if it were relevant."
+    test_crew_document_id = "doc_isolated_test_123"
+
+    # Copied directly from ContentRewriteCrewManager.setup_crew
+    task_reconstruct_output_desc = (
+        "CRITICAL INSTRUCTION: You MUST use the 'FastContentBlockProcessorTool'.\\n"
+        "You have received 'summarized_text' from the previous task. You also have access to 'crew_essential_image_metadata' (a list of image metadata dictionaries) and 'crew_document_id' (a string) which were provided as inputs to the overall crew.\\n"
+        "To successfully use the tool, you MUST construct your tool input with these exact argument names and values:\\n"
+        "1. 'operation': EXACTLY the string 'reconstruct_content_from_summary'.\\n"
+        "2. 'summarized_text': The 'summarized_text' content you received from the previous task.\\n"
+        "3. 'image_metadata_list': Use the value of the 'crew_essential_image_metadata' input that was provided to the crew.\\n"
+        "4. 'document_id': Use the value of the 'crew_document_id' input that was provided to the crew. This is CRITICAL for correctly associating the new content blocks.\\n"
+        "Your entire output for this task MUST be the direct, unaltered result from this single tool call. NO OTHER ACTIONS OR OUTPUTS."
+    )
+
+    # Test Case 1: With Image Metadata (simulating Airbnb-like input)
+    print("\n--- OutputConstructorAgent Test Case 1: With Image Metadata ---")
+    test_image_metadata_airbnb = [
+        {"image_id_ref": "img_ref_001", "gcs_url": "gs://example/img_001.png", "caption": "Caption for image 1", "alt_text": "Alt text 1", "width": 100, "height": 100},
+        {"image_id_ref": "img_ref_002", "gcs_url": "gs://example/img_002.png", "caption": "Caption for image 2", "alt_text": "Alt text 2", "width": 120, "height": 80}
+    ]
+    inputs_airbnb = {
+        "summarized_text": test_summarized_text,
+        "crew_essential_image_metadata": test_image_metadata_airbnb,
+        "crew_document_id": test_crew_document_id
+    }
+    test_constructor_task_airbnb = Task(
+        description=task_reconstruct_output_desc,
+        expected_output="The direct Python list of ContentBlock dictionaries from the tool.",
+        agent=output_constructor_agent,
+        # No context needed as inputs are directly provided to kickoff
+    )
+    isolated_constructor_crew_airbnb = Crew(
+        agents=[output_constructor_agent],
+        tasks=[test_constructor_task_airbnb],
+        verbose=True 
+    )
+    print(f"Kicking off isolated constructor crew (Airbnb-like) with inputs: {inputs_airbnb}")
+    try:
+        constructor_result_airbnb = isolated_constructor_crew_airbnb.kickoff(inputs=inputs_airbnb)
+        print("\n--- Isolated Constructor Crew Result (Airbnb-like) ---")
+        print(constructor_result_airbnb)
+        print(f"Usage Metrics: {isolated_constructor_crew_airbnb.usage_metrics}")
+    except Exception as e:
+        print("\n--- Isolated Constructor Crew Error (Airbnb-like) ---")
+        import traceback
+        traceback.print_exc()
+        print(f"Error details: {e}")
+
+    # Test Case 2: With Empty Image Metadata (simulating Google-like input)
+    print("\n--- OutputConstructorAgent Test Case 2: With Empty Image Metadata ---")
+    test_image_metadata_empty = []
+    inputs_empty = {
+        "summarized_text": test_summarized_text + " This part of summary has no new images.",
+        "crew_essential_image_metadata": test_image_metadata_empty,
+        "crew_document_id": test_crew_document_id + "_empty" # Make doc ID slightly different for clarity
+    }
+    test_constructor_task_empty = Task(
+        description=task_reconstruct_output_desc, # Same description
+        expected_output="The direct Python list of ContentBlock dictionaries from the tool.",
+        agent=output_constructor_agent,
+    )
+    isolated_constructor_crew_empty = Crew(
+        agents=[output_constructor_agent],
+        tasks=[test_constructor_task_empty],
+        verbose=True
+    )
+    print(f"Kicking off isolated constructor crew (Google-like) with inputs: {inputs_empty}")
+    try:
+        constructor_result_empty = isolated_constructor_crew_empty.kickoff(inputs=inputs_empty)
+        print("\n--- Isolated Constructor Crew Result (Google-like) ---")
+        print(constructor_result_empty)
+        print(f"Usage Metrics: {isolated_constructor_crew_empty.usage_metrics}")
+    except Exception as e:
+        print("\n--- Isolated Constructor Crew Error (Google-like) ---")
+        import traceback
+        traceback.print_exc()
+        print(f"Error details: {e}")
+
+    print("\n--- Isolated OutputConstructorAgent Tests Finished ---")
+
     # --- Full Crew Test using data from JSON file ---
     print("\n--- Preparing Input Data for Full Crew from JSON File ---")
-    print(f"Loading data from: {JSON_INPUT_FILE_PATH}")
+    print(f"Loading data from: {json_input_file_from_arg}")
 
     try:
-        with open(JSON_INPUT_FILE_PATH, 'r', encoding='utf-8') as f:
+        with open(json_input_file_from_arg, 'r', encoding='utf-8') as f:
             e2e_data = json.load(f)
         
         raw_content_blocks = e2e_data.get("original_content_blocks", [])
@@ -160,7 +260,7 @@ def main():
         print(f"Successfully loaded {len(loaded_content_blocks)} content blocks and document metadata.")
 
     except FileNotFoundError:
-        print(f"Error: JSON input file not found at {JSON_INPUT_FILE_PATH}")
+        print(f"Error: JSON input file not found at {json_input_file_from_arg}")
         print("Falling back to default sample data.")
         # Fallback to original sample data if JSON is not found
         sample_content_blocks = [
@@ -184,7 +284,7 @@ def main():
             user_id=sample_doc_metadata.user_id
         )
     except json.JSONDecodeError:
-        print(f"Error: Could not decode JSON from {JSON_INPUT_FILE_PATH}. Please ensure it's valid JSON.")
+        print(f"Error: Could not decode JSON from {json_input_file_from_arg}. Please ensure it's valid JSON.")
         print("Exiting test.")
         return
     except Exception as e: # Catch other Pydantic validation errors or unexpected issues

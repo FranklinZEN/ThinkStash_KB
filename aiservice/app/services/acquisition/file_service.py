@@ -31,6 +31,7 @@ class FileAcquisitionServiceInput(BaseModel):
     # job_id_for_gcs_path will be job_id
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking.")
+    user_id: Optional[str] = Field(None, description="Optional user ID for tracking and associating with metadata.")
 
 # Removed ProcessedFileImage and FileAcquisitionServiceOutput models
 
@@ -373,53 +374,66 @@ class FileAcquisitionService(BaseService):
 
     async def execute(self, file_input: FileAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
         start_time = time.time()
-        job_id = file_input.job_id or uuid.uuid4().hex[:8]
-        file_path = file_input.file_path
-        file_type = file_input.source_content_type.lower()
-        # page_title = os.path.basename(file_path) # Will be part of DocumentMetadata
+        # Use job_id from input or generate one
+        current_job_id = file_input.job_id or f"file_job_{uuid.uuid4().hex[:8]}"
+        # Get user_id from input
+        current_user_id = file_input.user_id
 
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images: List[RawImageInput] = []
         
-        # Initialize DocumentMetadata
+        # Initialize DocumentMetadata with job_id and user_id early
         document_metadata = DocumentMetadata(
-            document_id=job_id,
-            source_identifier=file_path,
-            source_type=file_type,
-            title=os.path.basename(file_path), # Default title
-            extracted_at=datetime.utcnow()
-            # Other fields will be populated by specific processors
+            document_id=current_job_id,         # USE current_job_id
+            user_id=current_user_id,          # USE current_user_id
+            source_identifier=file_input.file_path,
+            source_type=file_input.source_content_type,
+            extracted_at=datetime.utcnow(),
+            title=os.path.basename(file_input.file_path) # Default title to filename
         )
 
-        if not os.path.exists(file_path):
+        if not os.path.exists(file_input.file_path):
             duration = time.time() - start_time
             # Update error reporting to be simpler
             return ServiceResult.failure(
-                error_message=f"File not found: {file_path}",
+                error_message=f"File not found: {file_input.file_path}",
                 # No detailed error model needed for simple failures
             )
         
         call_error_message: Optional[str] = None # Error message from _process_... calls
 
         try:
-            if file_type == "docx":
+            if file_input.source_content_type.lower() == "docx":
                     call_error_message = await self._process_docx(
-                        file_path, job_id, file_input.processing_level, file_type,
-                        document_metadata, preliminary_blocks, raw_images
+                        file_path=file_input.file_path, 
+                        job_id=current_job_id, 
+                        processing_level=file_input.processing_level,
+                        source_type_for_gcs=file_input.source_content_type, 
+                        base_document_metadata=document_metadata, # Pass the main object
+                        preliminary_blocks=preliminary_blocks, 
+                        raw_images=raw_images
                     )
-            elif file_type == "md":
+            elif file_input.source_content_type.lower() == "md":
                     call_error_message = await self._process_markdown(
-                        file_path, job_id, file_input.processing_level, file_type,
-                        document_metadata, preliminary_blocks, raw_images
+                        file_path=file_input.file_path, 
+                        job_id=current_job_id, 
+                        processing_level=file_input.processing_level,
+                        source_type_for_gcs=file_input.source_content_type,
+                        base_document_metadata=document_metadata, # Pass the main object
+                        preliminary_blocks=preliminary_blocks, 
+                        raw_images=raw_images
                     )
-            elif file_type == "txt":
+            elif file_input.source_content_type.lower() == "txt":
                     call_error_message = await self._process_txt(
-                        file_path, job_id, document_metadata, preliminary_blocks
+                        file_path=file_input.file_path,
+                        job_id=current_job_id, # Pass job_id for block_id generation consistency
+                        base_document_metadata=document_metadata, # Pass the main object
+                        preliminary_blocks=preliminary_blocks
                     )
             # Fallback for file_ext_... can be removed if RoutingService handles this better,
             # or adapted if truly needed here. For now, focusing on specified types.
             else:
-                    call_error_message = f"Unsupported file type: {file_type}"
+                    call_error_message = f"Unsupported file type: {file_input.source_content_type}"
             
             if call_error_message: # If any _process method sets an error or unhandled type
                  return ServiceResult.failure(error_message=call_error_message)
@@ -438,7 +452,7 @@ class FileAcquisitionService(BaseService):
             # General exception handler
             duration = time.time() - start_time
             # Log the exception e for debugging
-            self.logger.error(f"FileAcquisitionService: Unhandled error processing {file_path}: {str(e)}", exc_info=True)
+            self.logger.error(f"FileAcquisitionService: Unhandled error processing {file_input.file_path}: {str(e)}", exc_info=True)
             return ServiceResult.failure(
-                error_message=f"Error processing file {os.path.basename(file_path)}: {str(e)}",
+                error_message=f"Error processing file {os.path.basename(file_input.file_path)}: {str(e)}",
             ) 

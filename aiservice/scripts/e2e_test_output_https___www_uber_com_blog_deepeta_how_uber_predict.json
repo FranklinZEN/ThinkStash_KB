@@ -1,0 +1,155 @@
+{
+  "status_code": "success",
+  "source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/",
+  "source_type": "url",
+  "processing_level_used": "full_content",
+  "extracted_title": "www.uber.com",
+  "is_long_article": false,
+  "original_content_blocks": [
+    {
+      "block_id": "e2e_job_d754dc36_b0",
+      "tmp_id": null,
+      "user_id": null,
+      "document_id": null,
+      "type": "text",
+      "order_index": null,
+      "content": "<doc fingerprint=\"3c73f2d265320a1b\">\n  <main>\n    <p>At Uber, magical customer experiences depend on accurate arrival time predictions (ETAs). We use ETAs to calculate fares, estimate pickup times, match riders to drivers, plan deliveries, and more. Traditional routing engines compute ETAs by dividing up the road network into small road segments represented by weighted edges in a graph. They use shortest-path algorithms to find the best path through the graph and add up the weights to derive an ",
+      "page_number": null,
+      "bbox": null,
+      "level": null,
+      "language": null,
+      "items": null,
+      "ordered": null,
+      "list_start_number": null,
+      "image_id_ref": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null
+    }
+  ],
+  "processed_images_data": {
+    "WEB_IMG_e2e_job_d754dc36_1": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_1",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_bc4448/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_1.svg",
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_2": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_2",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_d19118/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_2.svg",
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_3": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_3",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_a3f79e/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_3.png",
+      "alt_text": "Featured image for DeepETA: How Uber Predicts Arrival Times Using Deep Learning",
+      "caption": null,
+      "llm_description": null,
+      "width": 1024,
+      "height": 606,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_4": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_4",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_8e617b/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_4.jpeg",
+      "alt_text": "Xinyu Hu",
+      "caption": null,
+      "llm_description": null,
+      "width": 1024,
+      "height": 980,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_5": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_5",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_f52d66/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_5.jpg",
+      "alt_text": "Olcay Cirit",
+      "caption": null,
+      "llm_description": null,
+      "width": 500,
+      "height": 318,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_6": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_6",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_0fca9e/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_6.png",
+      "alt_text": "Tanmay Binaykiya",
+      "caption": null,
+      "llm_description": null,
+      "width": 300,
+      "height": 343,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_7": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_7",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_af4fc2/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_7.png",
+      "alt_text": "Ramit Hora",
+      "caption": null,
+      "llm_description": null,
+      "width": 300,
+      "height": 300,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_8": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_8",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_198924/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_8.svg",
+      "alt_text": "Download the Uber app for Android",
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_9": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_9",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_f2ac51/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_9.svg",
+      "alt_text": "Download the Uber app for IOS",
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    },
+    "WEB_IMG_e2e_job_d754dc36_10_og": {
+      "image_id": "WEB_IMG_e2e_job_d754dc36_10_og",
+      "gcs_url": "gs://thinkstash_media_gcs_bucket/url/untitled_fe37aa/e2e_job_d754dc36/WEB_IMG_e2e_job_d754dc36_10_og.png",
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null,
+      "width": 1250,
+      "height": 740,
+      "original_source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/"
+    }
+  },
+  "document_metadata": {
+    "document_id": "e2e_job_d754dc36",
+    "user_id": "test_user_123",
+    "source_identifier": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/",
+    "source_type": "url",
+    "final_url": "https://www.uber.com/blog/deepeta-how-uber-predicts-arrival-times/",
+    "title": "www.uber.com",
+    "author": null,
+    "subject": null,
+    "keywords": [],
+    "creation_date": null,
+    "modification_date": null,
+    "extracted_at": "2025-05-31T20:14:01.159154",
+    "total_pages": null,
+    "language_detected": null,
+    "custom_fields": {
+      "web_processing_duration_seconds": 0.692
+    }
+  },
+  "error_message": null
+}

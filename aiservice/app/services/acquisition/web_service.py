@@ -28,6 +28,7 @@ class WebAcquisitionServiceInput(BaseModel):
     url: str = Field(..., description="The URL to fetch and process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images. 'full_content' enables image extraction.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking or unique ID generation.")
+    user_id: Optional[str] = Field(None, description="Optional user ID for tracking and associating with metadata.")
 
 # --- Configuration Data (adapted from WebContentFetcherTool) ---
 UNSUPPORTED_URL_TYPE_DOMAINS: Set[str] = {
@@ -335,283 +336,368 @@ class WebAcquisitionService(BaseService):
 
     async def _parse_and_structure_html(
         self, 
-        html_to_parse: str, # This will be either Trafilatura's snippet or full HTML
-        is_trafilatura_content: bool, # Flag to indicate the source of html_to_parse
-        full_html_content_for_metadata_and_images: str, # Always the original full HTML
+        html_to_parse: str,
+        is_trafilatura_content: bool,
+        full_html_content_for_metadata_and_images: str,
         final_url: str, 
         job_id: Optional[str], 
+        user_id: Optional[str],
         processing_level: str
     ) -> Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]:
-        
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images_list: List[RawImageInput] = []
         
-        # Full page soup for metadata and image extraction - always from original full HTML
-        soup_full_page = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
-        
-        isolated_main_content_html: Optional[str] = None # Will be set if not using Trafilatura content
-        main_content_element_found: Optional[Tag] = None # Will be set if not using Trafilatura content
-        soup_for_structuring: Optional[Union[BeautifulSoup, Tag]] = None # Can be the whole doc or a specific tag
+        self.logger.debug(f"_parse_and_structure_html called for URL: {final_url}, job_id: {job_id}, user_id: {user_id}")
 
-        if is_trafilatura_content and html_to_parse:
-            self.logger.info("Using Trafilatura's extracted HTML snippet for structuring.")
-            temp_soup = BeautifulSoup(html_to_parse, 'lxml')
-            main_tag_in_snippet = temp_soup.find('main')
-            if main_tag_in_snippet:
-                soup_for_structuring = main_tag_in_snippet 
-            elif temp_soup.find('doc'): # Trafilatura often uses <doc>
-                doc_tag_in_snippet = temp_soup.find('doc')
-                soup_for_structuring = doc_tag_in_snippet
-            else:
-                soup_for_structuring = temp_soup 
-        else:
-            self.logger.info("Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.")
-            # --- Start Fallback Main Content Isolation using BeautifulSoup Selectors ---
-            main_content_element_found: Optional[Tag] = None
-            for selector in self.MAIN_CONTENT_SELECTORS:
-                try:
-                    candidate_element = soup_full_page.select_one(selector)
-                    if candidate_element:
-                        if candidate_element.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']) and len(candidate_element.get_text(strip=True)) > 200:
-                            main_content_element_found = candidate_element
-                            log_snippet_raw = str(main_content_element_found)[:500]
-                            log_snippet_clean = log_snippet_raw.replace('\n', ' ')
-                            self.logger.debug(f"(Fallback) Selected main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}")
-                            break
-                except Exception as e_select:
-                    self.logger.warning(f"(Fallback) Selector error ('{selector}') during main content isolation: {e_select}")
-                    pass
-            self.logger.debug("Finished Main Content Isolation (Fallback BS4).")
+        doc_id_prefix_for_blocks = job_id or hashlib.md5(final_url.encode()).hexdigest()[:16]
 
-            if main_content_element_found:
-                log_isolated_snippet_raw = str(main_content_element_found)[:500]
-                log_isolated_snippet_clean = log_isolated_snippet_raw.replace('\n', ' ')
-                self.logger.debug(f"(Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}")
-                isolated_main_content_html = str(main_content_element_found)
-                soup_for_structuring = BeautifulSoup(isolated_main_content_html, 'lxml')
-            else:
-                self.logger.info("(Fallback) No specific main content container found by BS4, using full body/page for structuring.")
-                if soup_full_page.body:
-                    soup_for_structuring = BeautifulSoup(str(soup_full_page.body), 'lxml')
-                else:
-                    soup_for_structuring = soup_full_page
-        
-        # --- 0.B Remove Boilerplate Content (from the selected soup_for_structuring) ---
-        # This runs whether content is from Trafilatura or BS4 fallback
-        # print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
-        for selector_idx, selector in enumerate(BOILERPLATE_SELECTORS):
-            try:
-                # Ensure soup_for_structuring is not None before calling .select()
-                if soup_for_structuring:
-                    # print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
-                    elements_found = soup_for_structuring.select(selector)
-                    # print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
-                    
-                    for i, element in enumerate(elements_found):
-                        if element:
-                            # if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"): # Example of selective uncommenting
-                            #     print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
-                            element.decompose()
-                else:
-                    # print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
-                    pass # No need to print if it's none, just skip
-            except Exception as e_decompose:
-                # self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Optional logging
-                self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}")
-                pass
-        # print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
-        
-        # --- 1. Populate DocumentMetadata (using soup_full_page for broader context like <head>) ---
-        doc_title: Optional[str] = None
-        if soup_full_page.title and soup_full_page.title.string:
-            doc_title = soup_full_page.title.string.strip()
-        
-        og_title_tag = soup_full_page.find('meta', property='og:title')
-        if og_title_tag and isinstance(og_title_tag, Tag) and og_title_tag.get('content'):
-            og_title = str(og_title_tag['content']).strip()
-            if og_title: doc_title = og_title
-
-        og_description_tag = soup_full_page.find('meta', property='og:description')
-        og_description = str(og_description_tag['content']).strip() if og_description_tag and isinstance(og_description_tag, Tag) and og_description_tag.get('content') else None
-        
-        meta_description_tag = soup_full_page.find('meta', attrs={'name': 'description'})
-        meta_description = str(meta_description_tag['content']).strip() if meta_description_tag and isinstance(meta_description_tag, Tag) and meta_description_tag.get('content') else None
-        
-        description = og_description or meta_description
-
-        source_identifier_for_gcs = final_url 
-        source_type_for_gcs = "url"
-        doc_job_id = job_id or f"web_{uuid.uuid4().hex[:8]}"
-
-        document_metadata_obj = DocumentMetadata(
-            document_id=doc_job_id, 
+        # --- Document Metadata Creation ---
+        doc_meta_obj = DocumentMetadata(
+            document_id=job_id,
+            user_id=user_id,
             source_identifier=final_url,
             source_type="url",
             final_url=final_url,
-            title=doc_title,
-            custom_fields={"description": description} if description else {},
-            extracted_at=datetime.utcnow()
+            extracted_at=datetime.utcnow(),
+            title=None,
+            author=None,
+            subject=None,
+            keywords=[],
+            creation_date=None,
+            modification_date=None,
+            total_pages=None,
+            language_detected=None,
+            custom_fields={}
         )
 
-        # --- 2. Extract RawImageInput objects (if full_content) ---
-        # Always use the original full HTML for image extraction
+        soup_for_metadata = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
+        if soup_for_metadata.title and soup_for_metadata.title.string:
+            doc_meta_obj.title = soup_for_metadata.title.string.strip()
+        else:
+            doc_meta_obj.title = urlparse(final_url).path.split('/')[-1] or urlparse(final_url).hostname
+        
+        meta_author = soup_for_metadata.find("meta", attrs={"name": re.compile(r"author", re.I)})
+        if meta_author and meta_author.get("content"):
+            doc_meta_obj.author = meta_author.get("content").strip()
+        
+        # --- Comprehensive Image Extraction ---
         if processing_level == "full_content":
             raw_images_list = await self._extract_images_from_html(
                 html_content_str=full_html_content_for_metadata_and_images, 
                 base_url=final_url, 
-                job_id=doc_job_id,
-                original_source_identifier_for_gcs_path=source_identifier_for_gcs,
-                source_type_for_gcs_path=source_type_for_gcs
+                job_id=job_id,
+                original_source_identifier_for_gcs_path=final_url,
+                source_type_for_gcs_path="url"
             )
 
-        # Ensure soup_for_structuring is not None before iterating
-        iterable_elements = []
-        if soup_for_structuring:
-            iterable_elements = soup_for_structuring.find_all(True, recursive=True) 
-        else:
-            self.logger.error("soup_for_structuring is None before block extraction loop. No blocks will be generated.")
+        # --- Main Content Parsing into PreliminaryBlocks (NEW LOGIC) ---
+        current_block_order = 0 # This variable is not strictly needed if order is len(blocks) at append
+        main_content_soup = BeautifulSoup(html_to_parse, 'lxml') # Parse the (potentially Trafilatura-cleaned) main HTML
 
-        processed_elements = set() 
-        block_order = 0 
+        # Create a lookup map for image_id_ref from the comprehensive raw_images_list
+        # Key: absolute image URL, Value: image_id from RawImageInput
+        raw_image_id_map_by_url: Dict[str, str] = {}
+        raw_image_alt_map_by_url: Dict[str, Optional[str]] = {}
+        if processing_level == "full_content":
+            for raw_img in raw_images_list:
+                if raw_img.source_url: # source_url should be the absolute URL of the image
+                     raw_image_id_map_by_url[raw_img.source_url] = raw_img.image_id
+                     raw_image_alt_map_by_url[raw_img.source_url] = raw_img.alt_text
 
-        # Variables for block data - initialize outside loop for clarity if needed for complex types
-        heading_level_val: Optional[int] = None
-        list_item_data_val: Optional[Any] = None
-        list_level_val: Optional[int] = None
-        list_ordered_val: Optional[bool] = None
-        code_content_val: Optional[str] = None
-        code_language_val: Optional[str] = None
-        table_html_content_val: Optional[str] = None
-        image_id_ref_val: Optional[str] = None
-
-        for element_idx, element in enumerate(iterable_elements):
-            # print(f"\nDEBUG WebAcquisitionService: --- Element Loop Start [#{element_idx + 1}/{len(iterable_elements)}] --- Tag: <{element.name}> ---")
-            
-            if element in processed_elements:
-                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> already processed. Skipping.")
-                continue
-            if not element.name:
-                # print(f"DEBUG WebAcquisitionService: Element has no name. Skipping.")
-                continue
-
-            tags_to_skip_directly = ['script', 'style', 'meta', 'link', 'noscript', 'header', 'footer', 'nav', 'aside', 'form', 'button', 'input', 'select', 'textarea', 'label', 'option', 'doc', 'main']
-            if element.name in tags_to_skip_directly:
-                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> is in direct skip list. Skipping.")
-                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
-                processed_elements.add(element)
-                continue
-
-            block_type: Optional[str] = None
-            text_content: Optional[str] = None
-            # Reset specific attributes for each element
-            heading_level_val = None; list_item_data_val = None; list_level_val = None; list_ordered_val = None; code_content_val = None; code_language_val = None; table_html_content_val = None; image_id_ref_val = None
-
-            current_element_text_content = element.get_text(separator=' ', strip=True)
-            # print(f"DEBUG WebAcquisitionService: Element <{element.name}> extracted text (first 100 chars): '{current_element_text_content[:100]}'")
-
-            if element.name == 'p':
-                block_type = "text"; text_content = current_element_text_content
-            elif element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-                block_type = "heading"; text_content = current_element_text_content
-                heading_level_val = int(element.name[1:])
-            elif element.name == 'pre':
-                block_type = "code_snippet"
-                code_tag = element.find('code')
-                code_content_val = code_tag.get_text(strip=True) if code_tag else current_element_text_content
-                # Basic language detection from class (can be improved)
-                lang_class = element.get('class', []) + (code_tag.get('class', []) if code_tag else [])
-                for cls in lang_class:
-                    if cls.startswith('language-'): code_language_val = cls.replace('language-', ''); break
-                    if cls.startswith('lang-'): code_language_val = cls.replace('lang-', ''); break
-            elif element.name == 'table':
-                block_type = "table_placeholder"; table_html_content_val = str(element)
-            elif element.name == 'li':
-                block_type = "list_item"; text_content = current_element_text_content
-                list_item_data_val = current_element_text_content
-                parent_list = element.find_parent(['ul', 'ol'])
-                list_ordered_val = parent_list.name == 'ol' if parent_list else False
-                list_level_val = sum(1 for _ in element.find_parents(['ul', 'ol']))
-            elif element.name in ['ul', 'ol']:
-                # print(f"DEBUG WebAcquisitionService: Element <{element.name}> is list container. Individual <li> will be processed. Skipping direct block for <{element.name}>.")
-                # Mark children as processed to avoid creating blocks from them AND their parent list tag
-                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
-                processed_elements.add(element) # Mark the list tag itself as processed
-                continue # Explicitly skip creating a block for <ul>/<ol> itself
-            
-            # Fallback: if it has significant text and isn't one of the above structural tags AND not a container of them
-            elif current_element_text_content and len(current_element_text_content) > 20: # Min length for fallback text block
-                is_container_of_handled_types = False
-                for child in element.children:
-                    if isinstance(child, Tag) and child.name in ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'ul', 'ol', 'li']:
-                        is_container_of_handled_types = True; break
-                if not is_container_of_handled_types:
-                    block_type = "text"; text_content = current_element_text_content
-                    # print(f"DEBUG WebAcquisitionService: Element <{element.name}> processed by FALLBACK text logic.")
-                else:
-                    # print(f"DEBUG WebAcquisitionService: Element <{element.name}> has text but is a container of other handled types. Skipping direct block creation.")
-                    pass # No need to print, just skip
-            
-            # print(f"DEBUG WebAcquisitionService: After type decision for <{element.name}>: block_type='{block_type}', text_content present: {text_content is not None}")
-
-            if block_type and (text_content or list_item_data_val or code_content_val or table_html_content_val or block_type == 'image_placeholder'):
-                block_id = f"{job_id if job_id else 'doc'}_b{block_order}"
-                prelim_block_data = {
-                    "block_id": block_id, "type": block_type, "order": block_order,
-                    "text_content": text_content, "page_number": None, "bbox": None,
-                    "heading_level": heading_level_val, "list_item_data": list_item_data_val,
-                    "list_level": list_level_val, "list_ordered": list_ordered_val,
-                    "code_content": code_content_val, "code_language": code_language_val,
-                    "custom_attributes": {"html_content": table_html_content_val} if table_html_content_val else None,
-                    "image_id_ref": image_id_ref_val
-                }
-                # Filter out None values before passing to Pydantic model
-                final_prelim_block_data = {k: v for k, v in prelim_block_data.items() if v is not None}
-                
-                # Limited debug print for created blocks
-                debug_content_preview = ""
-                if text_content: debug_content_preview = text_content[:70] + "..." if len(text_content) > 70 else text_content
-                elif list_item_data_val: debug_content_preview = str(list_item_data_val)[:70] + "..." if len(str(list_item_data_val)) > 70 else str(list_item_data_val)
-                elif code_content_val: debug_content_preview = code_content_val[:70] + "..." if len(code_content_val) > 70 else code_content_val
-                
-                if block_order < 5 or block_order % 10 == 0 : # Print for first 5 and then every 10th block
-                    self.logger.debug(f"CREATED PrelimBlock for <{element.name}>: ID {block_id}, Type '{block_type}', Order {block_order}. Content: '{debug_content_preview}'")
-                
-                preliminary_blocks.append(PreliminaryBlock(**final_prelim_block_data)) # type: ignore
-                block_order += 1
-                # Mark the element and all its descendants as processed
-                for desc in element.find_all(True, recursive=True): processed_elements.add(desc)
-                processed_elements.add(element)
-
-        # After loop, add image placeholders based on raw_images_list (extracted from full HTML)
-        # This assumes raw_images_list is populated correctly by _extract_images_from_html
-        if raw_images_list:
-            self.logger.debug(f"Adding {len(raw_images_list)} image placeholders as PreliminaryBlocks.")
-        for img_raw_input in raw_images_list:
-            block_id = f"{job_id if job_id else 'doc'}_img_b{block_order}"
-            preliminary_blocks.append(PreliminaryBlock(
-                block_id=block_id,
-                type="image_placeholder",
-                image_id_ref=img_raw_input.image_id,
-                order=block_order,
-                page_number=img_raw_input.page_number, # Will be None for web
-                bbox=img_raw_input.bbox # Will be None for web
-                # alt_text and caption from RawImageInput are not directly part of PreliminaryBlock for image_placeholder
-                # They are associated via EnrichedImageMetadata later.
-            ))
-            block_order += 1
-            self.logger.debug(f"CREATED image_placeholder PreliminaryBlock: ID {block_id}, ImageRef {img_raw_input.image_id}, Order {block_order-1}.")
-
-        self.logger.info(f"_parse_and_structure_html finished. Total PreliminaryBlocks created: {len(preliminary_blocks)} (incl. images).")
-        # Ensure preliminary_blocks are sorted by order before returning
-        preliminary_blocks.sort(key=lambda b: b.order)
+        # Determine the starting point for iteration
+        elements_to_iterate: List[Tag] = []
+        if main_content_soup.body:
+            elements_to_iterate = [child for child in main_content_soup.body.children if isinstance(child, Tag)]
+            self.logger.debug(f"Parsing main content from body. Found {len(elements_to_iterate)} direct child Tags.")
+        else: 
+            elements_to_iterate = [child for child in main_content_soup.children if isinstance(child, Tag)]
+            self.logger.debug(f"Parsing main content from fragment root. Found {len(elements_to_iterate)} direct child Tags.")
         
-        # Filter boilerplate text blocks AFTER all blocks (including images) have been ordered
-        if preliminary_blocks: # Only filter if there are any blocks
-            self.logger.debug(f"Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks)} blocks.")
-            preliminary_blocks = self._filter_boilerplate_preliminary_blocks(preliminary_blocks, final_url)
-            self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks)} blocks remaining.")
+        # If no direct children tags were found, but the soup is not empty, 
+        # it might be a case where trafilatura returns a list of tags not under a single root,
+        # or a single root tag whose children we want (like <doc> -> <p>, <h1>)
+        # So, if elements_to_iterate is empty but main_content_soup has *some* tags, let's try to get them all.
+        if not elements_to_iterate and main_content_soup.find(True): # find(True) checks if any tag exists
+            self.logger.debug("No direct children Tags found for iteration, attempting to find all relevant block-level tags recursively from main_content_soup root.")
+            # This will get all specified tags, regardless of depth from main_content_soup root
+            elements_to_iterate = main_content_soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'figure', 'pre', 'ul', 'ol', 'table', 'div'], recursive=True)
+            self.logger.debug(f"Found {len(elements_to_iterate)} tags via recursive find_all as a fallback.")
 
-        return preliminary_blocks, document_metadata_obj, raw_images_list
+        for element in elements_to_iterate:
+            # Call the recursive processor for each top-level element found or all relevant tags if using fallback
+            # The _process_html_element function will append to preliminary_blocks and handle order internally.
+            await self._process_html_element(element, final_url, doc_id_prefix_for_blocks, preliminary_blocks, raw_image_id_map_by_url, raw_image_alt_map_by_url)
+
+        # Fallback if no blocks were created (e.g., very unusual HTML structure or empty trafilatura output)
+        if not preliminary_blocks and html_to_parse.strip():
+            self.logger.warning(f"_parse_and_structure_html for {final_url}: No blocks created from main content parsing. Creating a single text block as fallback.")
+            fallback_text = BeautifulSoup(html_to_parse, 'lxml').get_text(separator='\\n', strip=True)
+            if fallback_text:
+                preliminary_blocks.append(PreliminaryBlock(
+                    block_id=f"{doc_id_prefix_for_blocks}_b0",
+                    type="text",
+                    text_content=fallback_text,
+                    order=0
+                ))
+        
+        self.logger.debug(f"_parse_and_structure_html returning {len(preliminary_blocks)} preliminary_blocks for job_id {job_id}. Title: {doc_meta_obj.title}")
+
+        # Log the HTML structure being parsed
+        self.logger.debug(f"_parse_and_structure_html: About to process the following HTML structure from Trafilatura:\\n{main_content_soup.prettify()}") # ADDED LOG
+
+        # --- Add any remaining images from raw_images_list that weren't turned into placeholders ---
+        # This handles cases where Trafilatura might have stripped image tags processed by _extract_images_from_html
+        if processing_level == "full_content":
+            processed_image_ids_in_blocks = set()
+            for pb in preliminary_blocks:
+                if pb.type == 'image_placeholder' and pb.image_id_ref:
+                    processed_image_ids_in_blocks.add(pb.image_id_ref)
+            
+            self.logger.debug(f"Image IDs already processed into blocks by _process_html_element: {processed_image_ids_in_blocks}")
+
+            for raw_img in raw_images_list:
+                if raw_img.image_id not in processed_image_ids_in_blocks:
+                    self.logger.debug(f"Adding image {raw_img.image_id} ({raw_img.source_url}) from raw_images_list as it was not found in Trafilatura-processed blocks.")
+                    new_block_order = len(preliminary_blocks)
+                    block_id_str = f"{doc_id_prefix_for_blocks}_b{new_block_order}"
+                    
+                    custom_attrs_for_raw_img = {}
+                    if raw_img.alt_text:
+                        custom_attrs_for_raw_img['alt_text'] = raw_img.alt_text
+                    if raw_img.caption: # Assuming RawImageInput might have a caption
+                        custom_attrs_for_raw_img['caption'] = raw_img.caption
+                    
+                    preliminary_blocks.append(PreliminaryBlock(
+                        block_id=block_id_str,
+                        type='image_placeholder',
+                        image_id_ref=raw_img.image_id,
+                        order=new_block_order,
+                        custom_attributes=custom_attrs_for_raw_img if custom_attrs_for_raw_img else None
+                    ))
+            self.logger.debug(f"Total preliminary_blocks after adding remaining raw images: {len(preliminary_blocks)}")
+        # --- End of adding remaining images ---
+        
+        return preliminary_blocks, doc_meta_obj, raw_images_list
+
+    async def _process_html_element(self, element: Tag, base_url: str, doc_id_prefix: str, 
+                                    blocks: List[PreliminaryBlock], 
+                                    image_id_map: Dict[str, str], 
+                                    image_alt_map: Dict[str, Optional[str]]):
+        """
+        Recursively processes an HTML element to create PreliminaryBlock objects.
+        Appends new blocks to the `blocks` list.
+        Order is determined by the length of the blocks list at the time of append.
+        """
+        self.logger.debug(f"_process_html_element CALLED with tag: <{element.name}>") # ENTRY LOGGING
+        # block_id_str will use the current length of blocks for its suffix.
+        # Order for the new block will also be the current length of blocks.
+        # This ensures sequential block_ids and order values.
+        
+        tag_name = element.name
+        custom_attrs = {}
+
+        # Check if this element (or its significant content) has already been processed 
+        # by a parent that decided to consume it (e.g. a <p> that contains only an <img>)
+        # This is a complex problem to solve perfectly. A simple check could be based on element attributes or source line.
+        # For now, we rely on the parsing logic not to duplicate; e.g. if <p><img></p>, the 'p' handler might call for 'img'.
+
+        if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            text_content = element.get_text(strip=True)
+            if text_content:
+                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=block_id_str,
+                    type='heading',
+                    text_content=text_content,
+                    heading_level=int(tag_name[1]),
+                    order=len(blocks) # Order is current size before append
+                ))
+        elif tag_name == 'p':
+            # Handle <p> tags. If a <p> only contains an <img>, process <img> directly.
+            # Otherwise, create a text block.
+            children_tags = [child for child in element.children if isinstance(child, Tag)]
+            text_content_direct = (''.join(c.string for c in element.children if isinstance(c, str) and c.string)).strip()
+            
+            if len(children_tags) == 1 and children_tags[0].name == 'img' and not text_content_direct:
+                # Paragraph contains only an image and no other text content
+                # self.logger.debug(f"Paragraph contains only an image. Processing image: {children_tags[0]}")
+                await self._process_html_element(children_tags[0], base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
+            else:
+                full_text_content = element.get_text(strip=True)
+                if full_text_content: # Only add if there's actual text
+                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                    blocks.append(PreliminaryBlock(
+                        block_id=block_id_str,
+                        type='text',
+                        text_content=full_text_content,
+                        order=len(blocks)
+                    ))
+        elif tag_name == 'img':
+            src = element.get('src') or element.get('data-src')
+            if src:
+                abs_img_url = urljoin(base_url, src.strip())
+                self.logger.debug(f"IMG tag: Attempting to find image_id for abs_img_url: '{abs_img_url}'. Map keys: {list(image_id_map.keys())}") # DEBUG LOGGING
+                image_id_ref = image_id_map.get(abs_img_url)
+                alt_text = image_alt_map.get(abs_img_url, element.get('alt','').strip())
+
+                if not image_id_ref: 
+                    self.logger.warning(f"Image {abs_img_url} in main content but not in pre-scanned raw_images_list. Generating temp ID.")
+                    image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
+                
+                current_custom_attrs = {'alt_text': alt_text} # Use a fresh dict for each block
+                
+                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=block_id_str,
+                    type='image_placeholder',
+                    image_id_ref=image_id_ref,
+                    order=len(blocks),
+                    custom_attributes=current_custom_attrs
+                ))
+
+        elif tag_name == 'figure':
+            img_in_figure = element.find('img')
+            figcaption_text: Optional[str] = None
+            figcaption_tag = element.find('figcaption')
+            if figcaption_tag:
+                figcaption_text = figcaption_tag.get_text(strip=True)
+
+            if img_in_figure:
+                # If figure contains an image, prioritize the image block.
+                # The caption will be part of the image block's custom_attributes.
+                src = img_in_figure.get('src') or img_in_figure.get('data-src')
+                if src:
+                    abs_img_url = urljoin(base_url, src.strip())
+                    self.logger.debug(f"FIGURE tag: Attempting to find image_id for abs_img_url: '{abs_img_url}'. Map keys: {list(image_id_map.keys())}") # DEBUG LOGGING
+                    image_id_ref = image_id_map.get(abs_img_url)
+                    alt_text = image_alt_map.get(abs_img_url, img_in_figure.get('alt','').strip())
+
+                    if not image_id_ref:
+                        self.logger.warning(f"Image {abs_img_url} in figure not in pre-scanned list. Generating temp ID.")
+                        image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
+                    
+                    current_custom_attrs = {'alt_text': alt_text}
+                    if figcaption_text:
+                        current_custom_attrs['caption'] = figcaption_text
+
+                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                    blocks.append(PreliminaryBlock(
+                        block_id=block_id_str,
+                        type='image_placeholder',
+                        image_id_ref=image_id_ref,
+                        order=len(blocks),
+                        custom_attributes=current_custom_attrs
+                    ))
+            elif figcaption_text: # Figure with caption but no image? Treat as text.
+                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=block_id_str,
+                    type='text',
+                    text_content=figcaption_text,
+                    order=len(blocks)
+                ))
+            # else: Figure with neither, or complex content not handled by this simple parser.
+            # Could add recursion here if figures can contain other block types: 
+            # for child in element.children: if isinstance(child, Tag) and child not in [img_in_figure, figcaption_tag]: await self._process_html_element(...)
+            
+        elif tag_name == 'pre':
+            code_content = element.get_text() 
+            lang = None
+            # Look for class="language-xxx" on <pre> or a child <code> tag
+            lang_classes = element.get('class', [])
+            if element.code and element.code.get('class'):
+                lang_classes.extend(element.code.get('class'))
+            
+            for c in lang_classes:
+                if c.startswith('language-'):
+                    lang = c.replace('language-', '')
+                    break
+            block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+            blocks.append(PreliminaryBlock(
+                block_id=block_id_str,
+                type='code_snippet',
+                text_content=code_content, 
+                code_language=lang, 
+                order=len(blocks)
+            ))
+
+        elif tag_name in ['ul', 'ol']:
+            # Each <li> will become a separate 'list_item' block.
+            # The parent <ul>/<ol> itself does not become a block.
+            for li in element.find_all('li', recursive=False):
+                # Process children of li to handle nested structures or complex li content
+                await self._process_html_element(li, base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
+        
+        elif tag_name == 'li': # Handle <li> elements when called directly (e.g. from ul/ol loop)
+            # For <li>, we create a block for its content. 
+            # If <li> contains further block elements (like a <p> or another <ul>), 
+            # the recursive calls for its children will handle them.
+            # What constitutes the "text" of the li? If it has a <p>, that p's text is usually primary.
+            # This simplified version takes all text from the <li>.
+            item_text = element.get_text(strip=True)
+            if item_text:
+                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=block_id_str,
+                    type='list_item',
+                    text_content=item_text,
+                    list_ordered=(element.parent.name == 'ol' if element.parent else None),
+                    order=len(blocks)
+                ))
+            # After creating the list_item block for the direct text, recurse for complex children if any
+            for child in element.children:
+                 if isinstance(child, Tag) and child.name not in ['ul','ol']: # Avoid double processing ul/ol within li if li itself makes a block
+                    # This recursion part for <li> children needs care to avoid duplicating content
+                    # If the get_text() above already captured children's text, this might be redundant
+                    # This is where parsing gets very tricky. For now, let's assume get_text() is sufficient for simple list items.
+                    # More complex <li> with <p> and <img> would need the child recursion.
+                    pass # Simplified: rely on get_text for <li> content for now.
+
+        elif tag_name == 'table':
+            current_custom_attrs = {'html_table_content': str(element)}
+            block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+            blocks.append(PreliminaryBlock(
+                block_id=block_id_str,
+                type='table_placeholder', 
+                text_content="[Table Content]", 
+                order=len(blocks),
+                custom_attributes=current_custom_attrs
+            ))
+        
+        # Generic container processing: if a div/section etc. has direct text not part of a sub-block, make a text block.
+        # Must be careful not to re-process elements that created their own blocks (p, h1, img etc.)
+        # The primary loop in _parse_and_structure_html iterates, and this _process_html_element is called for each.
+        # If `element` is one of p, h1, img etc., it's handled above. 
+        # If `element` is div, section, etc., we then recurse for its children below.
+        # This `elif` is for cases where a div might have text directly like <div>Text</div>, not <div><p>Text</p></div>
+        elif tag_name in ['div', 'span', 'section', 'article', 'main', 'aside'] and not element.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'figure', 'pre', 'ul', 'ol', 'table'], recursive=False):
+            # Only consider if it has no known block-level children, but might have direct text.
+            # This check is a heuristic.
+            direct_text = (''.join(c.string for c in element.children if isinstance(c, str) and c.string)).strip()
+            if direct_text:
+                # Avoid creating blocks for divs that are just wrappers around elements we will process via recursion
+                # This requires checking if any child tag would form a block itself.
+                # This heuristic is tricky. For now, if direct_text exists, make a block.
+                # It might lead to some duplication if children are also block-formers.
+                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=block_id_str,
+                    type='text',
+                    text_content=direct_text, 
+                    order=len(blocks)
+                ))
+
+        # Recursive call for children of the CURRENT element, 
+        # IF the current element itself didn't form a block that consumed all its relevant content
+        # OR if it's a known container type.
+        # This is the most complex part to get right to avoid duplicates and missed content.
+        if tag_name in ['div', 'section', 'article', 'main', 'aside', 'details', 'summary', 'blockquote', 'body', 'doc']:
+            # For these container tags, always try to process their children.
+            # (Removed 'li' from here as its direct content should form a block, and its children handling needs to be more specific)
+            for child in element.children:
+                if isinstance(child, Tag):
+                    # Pass the same image_id_map and image_alt_map down
+                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
 
     def _filter_boilerplate_preliminary_blocks(self, blocks: List[PreliminaryBlock], source_url_for_logging: str) -> List[PreliminaryBlock]:
         """ 
@@ -678,53 +764,51 @@ class WebAcquisitionService(BaseService):
         return filtered_blocks
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
-        request_start_time = time.time()
-        url = web_input.url
-        job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
-        processing_level = web_input.processing_level
+        start_time = time.time()
+        current_job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
+        current_user_id = web_input.user_id
 
-        # Initialize variables that will be part of the successful return tuple
-        preliminary_blocks_list: List[PreliminaryBlock] = []
-        raw_images_list: List[RawImageInput] = [] # Use raw_images_list consistently
-        
-        # Initialize document_metadata_obj early and fully for consistent error returns
-        document_metadata_obj = DocumentMetadata(
-            document_id=job_id,
-            source_identifier=url, # Use the input URL as the primary identifier
-            source_type='url', 
-            extracted_at=datetime.utcnow()
+        preliminary_blocks_default: List[PreliminaryBlock] = []
+        document_metadata_default = DocumentMetadata(
+            document_id=current_job_id,
+            user_id=current_user_id,
+            source_identifier=web_input.url,
+            source_type="url",
+            extracted_at=datetime.utcnow(),
+            title=urlparse(web_input.url).path.split('/')[-1] or urlparse(web_input.url).hostname
         )
+        raw_images_default: List[RawImageInput] = []
         
         html_content_str: Optional[str] = None
-        final_url_val: str = url # Start with input URL, will be updated by redirects if fetch occurs
+        final_url_val: str = web_input.url # Start with input URL, will be updated by redirects if fetch occurs
         pdf_bytes_val: Optional[bytes] = None
         temp_pdf_file_path: Optional[str] = None
 
         # --- Cache Check ---
         current_time = time.time()
-        if url in self.html_cache:
-            cached_html, fetch_time = self.html_cache[url]
+        if web_input.url in self.html_cache:
+            cached_html, fetch_time = self.html_cache[web_input.url]
             if (current_time - fetch_time) < self.cache_ttl_seconds:
-                self.logger.info(f"HTML cache HIT for {url}")
+                self.logger.info(f"HTML cache HIT for {web_input.url}")
                 html_content_str = cached_html
                 # final_url_val remains 'url' (original input) if from cache
             else:
-                self.logger.info(f"HTML cache STALE for {url}")
-                del self.html_cache[url]
+                self.logger.info(f"HTML cache STALE for {web_input.url}")
+                del self.html_cache[web_input.url]
 
         # --- If cache miss or stale, proceed to fetch and then process ---
         if html_content_str is None: 
-            self.logger.info(f"HTML cache MISS for {url}. Fetching...")
+            self.logger.info(f"HTML cache MISS for {web_input.url}. Fetching...")
             
-            normalized_url = url 
+            normalized_url = web_input.url 
             if normalized_url.startswith("chrome-extension://"):
                 match = re.search(r"(https?:\\\\/\\\\/[^\\\\s]+)", normalized_url)
                 if match:
                     normalized_url = match.group(1)
                 else:
                     return ServiceResult.failure(
-                        error_message=f"Cannot fetch local file from chrome-extension URL: {url}",
-                        error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                        error_message=f"Cannot fetch local file from chrome-extension URL: {web_input.url}",
+                        error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
                     )
             
             parsed_normalized_url = urlparse(normalized_url)
@@ -733,25 +817,25 @@ class WebAcquisitionService(BaseService):
                     normalized_url = f"https://{normalized_url}"
                 else:
                      return ServiceResult.failure(
-                        error_message=f"Invalid URL format (cannot determine scheme): {url}",
-                        error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                        error_message=f"Invalid URL format (cannot determine scheme): {web_input.url}",
+                        error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
                     )
             elif parsed_normalized_url.scheme not in ["http", "https"]:
                 return ServiceResult.failure(
                     error_message=f"Unsupported URL scheme '{parsed_normalized_url.scheme}' in URL: {normalized_url}",
-                    error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)}
+                    error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
                 )
 
             try: # This try is for the network fetching part
                 parsed_url_for_domain_check = urlparse(normalized_url) # Use normalized for domain checks
                 if not all([parsed_url_for_domain_check.scheme, parsed_url_for_domain_check.netloc]):
-                     return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                     return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
                 domain = self._get_domain(normalized_url)
                 if self._check_domain_in_set(domain, UNSUPPORTED_URL_TYPE_DOMAINS):
                     is_allowed_social = any(re.search(pattern, normalized_url, re.IGNORECASE) for pattern in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
                     if not is_allowed_social:
-                        return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                        return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
                 async with aiohttp.ClientSession() as session:
                     headers = {
@@ -761,10 +845,10 @@ class WebAcquisitionService(BaseService):
                     }
                     async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response:
                         final_url_val = str(response.url) # Update final_url_val after actual fetch
-                        document_metadata_obj.final_url = final_url_val # Update metadata with the truly final URL
+                        document_metadata_default.final_url = final_url_val # Update metadata with the truly final URL
 
                         if response.status != 200:
-                            return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                            return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
                         content_type = response.headers.get('Content-Type', '').lower()
                         if 'application/pdf' in content_type:
@@ -772,17 +856,17 @@ class WebAcquisitionService(BaseService):
                         elif 'text/html' in content_type or 'application/xhtml+xml' in content_type or not content_type:
                             html_content_str = await response.text()
                             if html_content_str: # Store non-empty HTML in cache
-                                self.html_cache[url] = (html_content_str, time.time()) # Use original 'url' as key
-                                self.logger.info(f"Stored HTML in cache for {url}")
+                                self.html_cache[web_input.url] = (html_content_str, time.time()) # Use original 'url' as key
+                                self.logger.info(f"Stored HTML in cache for {web_input.url}")
                         else:
-                            return ServiceResult.failure(error_message=f"Unsupported content type: {content_type} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                            return ServiceResult.failure(error_message=f"Unsupported content type: {content_type} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
             
             except aiohttp.ClientError as e_net:
-                return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e_net)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e_net)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
             except asyncio.TimeoutError:
-                return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
             except Exception as e_fetch_prep: # Catch other errors during pre-fetch or fetch setup
-                return ServiceResult.failure(error_message=f"Error during URL fetch preparation for {url}: {str(e_fetch_prep)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                return ServiceResult.failure(error_message=f"Error during URL fetch preparation for {web_input.url}: {str(e_fetch_prep)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
         
         # --- Content Processing (PDF or HTML) ---
         # This block executes if html_content_str was from cache OR successfully fetched and set.
@@ -796,12 +880,13 @@ class WebAcquisitionService(BaseService):
                         temp_pdf_file_path = tmpfile.name
                     
                     pdf_acq_service = PDFAcquisitionService(settings=self.settings) # Assuming settings can be passed
-                    pdf_input_obj = PDFAcquisitionServiceInput(
+                    pdf_acq_input = PDFAcquisitionServiceInput(
                         file_path=temp_pdf_file_path,
-                        job_id=job_id, # Pass along the job_id
-                        processing_level=processing_level # Pass along processing_level
+                        processing_level=web_input.processing_level,
+                        job_id=current_job_id,
+                        user_id=current_user_id
                     )
-                    pdf_service_result = await pdf_acq_service.execute(pdf_input_obj)
+                    pdf_service_result = await pdf_acq_service.execute(pdf_acq_input)
 
                     if pdf_service_result.success and pdf_service_result.data:
                         preliminary_blocks_list, pdf_doc_metadata, raw_images_list = pdf_service_result.data
@@ -809,33 +894,33 @@ class WebAcquisitionService(BaseService):
                         # Merge DocumentMetadata: Keep original web URL, update with PDF specific info if valuable
                         # The document_metadata_obj is already initialized with web source info.
                         # We can enrich it with PDF-specific metadata if needed.
-                        if document_metadata_obj and pdf_doc_metadata:
-                            document_metadata_obj.title = pdf_doc_metadata.title or document_metadata_obj.title
-                            document_metadata_obj.author = pdf_doc_metadata.author or document_metadata_obj.author
-                            document_metadata_obj.subject = pdf_doc_metadata.subject or document_metadata_obj.subject
-                            document_metadata_obj.keywords = pdf_doc_metadata.keywords or document_metadata_obj.keywords
-                            document_metadata_obj.creation_date = pdf_doc_metadata.creation_date or document_metadata_obj.creation_date
-                            document_metadata_obj.modification_date = pdf_doc_metadata.modification_date or document_metadata_obj.modification_date
-                            document_metadata_obj.total_pages = pdf_doc_metadata.total_pages
+                        if document_metadata_default and pdf_doc_metadata:
+                            document_metadata_default.title = pdf_doc_metadata.title or document_metadata_default.title
+                            document_metadata_default.author = pdf_doc_metadata.author or document_metadata_default.author
+                            document_metadata_default.subject = pdf_doc_metadata.subject or document_metadata_default.subject
+                            document_metadata_default.keywords = pdf_doc_metadata.keywords or document_metadata_default.keywords
+                            document_metadata_default.creation_date = pdf_doc_metadata.creation_date or document_metadata_default.creation_date
+                            document_metadata_default.modification_date = pdf_doc_metadata.modification_date or document_metadata_default.modification_date
+                            document_metadata_default.total_pages = pdf_doc_metadata.total_pages
                             # Ensure source_identifier remains the original URL, source_type 'url'
-                            document_metadata_obj.source_type = "pdf_from_url" # Or keep as 'url' and add custom field? Let's mark as pdf_from_url
+                            document_metadata_default.source_type = "pdf_from_url" # Or keep as 'url' and add custom field? Let's mark as pdf_from_url
                         
                         # Job ID in PreliminaryBlocks and RawImageInput from PDFAcquisitionService should already be set
                         # based on the job_id passed to it.
 
                     else: # PDF service failed
                         error_msg = f"PDFAcquisitionService failed for PDF from URL {final_url_val}: {pdf_service_result.error_message if pdf_service_result else 'Unknown error'}"
-                        if document_metadata_obj:
-                            document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
-                            document_metadata_obj.custom_fields["pdf_processing_error"] = error_msg
-                        return ServiceResult.failure(error_message=error_msg, error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                        if document_metadata_default:
+                            document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
+                            document_metadata_default.custom_fields["pdf_processing_error"] = error_msg
+                        return ServiceResult.failure(error_message=error_msg, error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
                 except Exception as e_pdf_route:
                     # self.logger.error(f"Error routing PDF from {final_url_val} to PDFAcquisitionService: {e_pdf_route}", exc_info=True) # Optional logging
-                    if document_metadata_obj:
-                        document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
-                        document_metadata_obj.custom_fields["pdf_processing_error"] = f"Routing/Tempfile error: {str(e_pdf_route)}"
-                    return ServiceResult.failure(error_message=f"Error processing PDF from URL {final_url_val} via PDFAcquisitionService: {str(e_pdf_route)}", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                    if document_metadata_default:
+                        document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
+                        document_metadata_default.custom_fields["pdf_processing_error"] = f"Routing/Tempfile error: {str(e_pdf_route)}"
+                    return ServiceResult.failure(error_message=f"Error processing PDF from URL {final_url_val} via PDFAcquisitionService: {str(e_pdf_route)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
                 finally:
                     if temp_pdf_file_path and os.path.exists(temp_pdf_file_path):
                         try:
@@ -890,9 +975,9 @@ class WebAcquisitionService(BaseService):
                         if any(keyword in text_lower_for_paywall for keyword in PAYWALL_KEYWORDS): # Use text_lower_for_paywall
                             is_paywalled = True
                 
-                if is_paywalled and document_metadata_obj:
-                    document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
-                    document_metadata_obj.custom_fields["paywall_detected"] = True
+                if is_paywalled and document_metadata_default:
+                    document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
+                    document_metadata_default.custom_fields["paywall_detected"] = True
                 
                 # Determine what HTML to pass for parsing
                 html_for_parsing: str
@@ -906,17 +991,18 @@ class WebAcquisitionService(BaseService):
                     is_trafilatura_content=is_trafilatura_content_available, # Pass the flag
                     full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
-                    job_id=job_id,
-                    processing_level=processing_level
+                    job_id=current_job_id,
+                    user_id=current_user_id,
+                    processing_level=web_input.processing_level
                 )
             else:
                 # Should not happen if fetching was successful and content type was one of the above
-                return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)})
+                return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
-            processing_duration = time.time() - request_start_time
-            if document_metadata_obj: # Ensure metadata is not None
-                document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
-                document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
+            processing_duration = time.time() - start_time
+            if document_metadata_default: # Ensure metadata is not None
+                document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
+                document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
             
             # Ensure preliminary_blocks are sorted by order before returning
             preliminary_blocks_list.sort(key=lambda b: b.order)
@@ -927,21 +1013,21 @@ class WebAcquisitionService(BaseService):
                 preliminary_blocks_list = self._filter_boilerplate_preliminary_blocks(preliminary_blocks_list, final_url_val)
                 self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks_list)} blocks remaining.")
 
-            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
+            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_default, raw_images_list))
 
         except Exception as e_process: # Catch errors from PDF routing or HTML parsing/structuring
-            processing_duration = time.time() - request_start_time
-            if document_metadata_obj: 
-                 document_metadata_obj.custom_fields = document_metadata_obj.custom_fields or {}
-                 document_metadata_obj.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
-                 document_metadata_obj.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}"
+            processing_duration = time.time() - start_time
+            if document_metadata_default: 
+                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
+                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
+                 document_metadata_default.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}"
             self.logger.exception(f"WEB_SERVICE_CONTENT_PROCESSING_ERROR for {final_url_val}", exc_info=True) # Use logger.exception for traceback
             return ServiceResult.failure(
                 error_message=f"WEB_SERVICE_CONTENT_PROCESSING_ERROR: {type(e_process).__name__} for {final_url_val}. Details: {str(e_process)}",
                 error_details={
-                    "original_url": url,
+                    "original_url": web_input.url,
                     "final_url_at_failure": final_url_val,
                     "exception_type": type(e_process).__name__,
-                    "original_data": (preliminary_blocks_list, document_metadata_obj, raw_images_list)
+                    "original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)
                 }
             )

@@ -19,6 +19,7 @@ class PDFAcquisitionServiceInput(BaseModel):
     file_path: str = Field(..., description="Path to the PDF file to process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking.")
+    user_id: Optional[str] = Field(None, description="Optional user ID for tracking and associating with metadata.")
     # original_source_identifier_for_gcs_path will be derived from file_path
     # source_type_for_gcs_path will be 'pdf'
     # job_id_for_gcs_path will be job_id
@@ -80,6 +81,7 @@ class PDFAcquisitionService(BaseService):
 
             document_metadata = DocumentMetadata(
                 document_id=job_id,
+                user_id=pdf_input.user_id,
                 source_identifier=pdf_input.file_path,
                 source_type="pdf",
                 title=pdf_meta.get('title') if pdf_meta else pdf_filename,

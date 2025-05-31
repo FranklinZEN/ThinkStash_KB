@@ -15,6 +15,7 @@ class ContentBlock(BaseModel):
     block_id: str = Field(..., description="Unique ID for this block, inherited from PreliminaryBlock.")
     tmp_id: Optional[str] = Field(None, description="Temporary ID used during processing, can be same as block_id or different.")
     user_id: Optional[str] = Field(None, description="Identifier of the user associated with this content block.")
+    document_id: Optional[str] = Field(None, description="Identifier of the source document, linking this block to its origin.")
     type: str = Field(..., description="Type of content (e.g., 'text', 'heading', 'list', 'image', 'code_snippet', 'math_text', 'table').")
     order_index: Optional[int] = Field(None, description="Sequential order of the block in the reconstructed content.")
     
@@ -66,6 +67,8 @@ class OrchestrationStatusCodeEnum(str, enum.Enum):
 
 class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])
+    user_id: Optional[str] = Field(default=None, description="User identifier for the entire orchestration, if available.")
+    document_id: Optional[str] = Field(default=None, description="Document identifier (job_id) for the entire orchestration, if available.")
     source_identifier: str
     source_type: str
     processing_level_used: str

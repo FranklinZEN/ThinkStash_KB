@@ -34,8 +34,8 @@ def datetime_serializer(obj):
 # Initialize logger at module level
 logger = logging.getLogger(__name__)
 
-async def run_single_e2e_test(orchestrator: ParallelOrchestrator, source_identifier: str, source_type_hint: Optional[str] = None):
-    logger.info(f"\n{'='*30} RUNNING E2E TEST FOR: {source_identifier} ({source_type_hint or 'auto-detect'}) {'='*30}")
+async def run_single_e2e_test(orchestrator: ParallelOrchestrator, source_identifier: str, source_type_hint: Optional[str] = None, user_id_to_test: Optional[str] = None):
+    logger.info(f"\n{'='*30} RUNNING E2E TEST FOR: {source_identifier} ({source_type_hint or 'auto-detect'}) UserID: {user_id_to_test or 'NotProvided'} {'='*30}")
     job_id = f"e2e_job_{uuid.uuid4().hex[:8]}"
     # Define output filename based on source_identifier for clarity, sanitizing it
     sanitized_identifier = "".join(c if c.isalnum() else "_" for c in source_identifier[:50]) # Take first 50 chars
@@ -45,6 +45,7 @@ async def run_single_e2e_test(orchestrator: ParallelOrchestrator, source_identif
         source_identifier=source_identifier,
         source_type=source_type_hint,
         job_id=job_id,
+        user_id=user_id_to_test,
         processing_level="full_content" # Or other relevant level
     )
 
@@ -106,17 +107,20 @@ async def run_single_e2e_test(orchestrator: ParallelOrchestrator, source_identif
 
 async def main():
     # Configure logging
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                         handlers=[logging.StreamHandler(sys.stdout)]) # Ensure logs go to stdout
+
+    # Specific logger level settings are removed as Settings(debug_mode=True) will handle it.
 
     parser = argparse.ArgumentParser(description="Run end-to-end tests for the orchestration pipeline.")
     parser.add_argument("source_identifier", type=str, help="The source URL or local file path to process.")
     parser.add_argument("--source_type", type=str, help="Optional: Hint for the source type (e.g., 'url', 'pdf', 'txt', 'md', 'docx'). Auto-detected if not provided.", default=None)
+    parser.add_argument("--user_id", type=str, help="Optional: User ID to associate with the processing request.", default=None)
     args = parser.parse_args()
 
     # --- Instantiate REAL services ---
-    settings = Settings()
+    settings = Settings(debug_mode=True) # Pass debug_mode=True
 
     routing_service = RoutingService(settings=settings)
     web_acquisition_service = WebAcquisitionService(settings=settings)
@@ -138,6 +142,7 @@ async def main():
     # --- Run test based on command-line arguments ---
     source_identifier_arg = args.source_identifier
     source_type_hint_arg = args.source_type
+    user_id_arg = args.user_id
 
     is_url = source_identifier_arg.startswith("http://") or source_identifier_arg.startswith("https://") or source_identifier_arg.startswith("chrome-extension://")
     if not is_url and not os.path.exists(source_identifier_arg):
@@ -147,7 +152,7 @@ async def main():
         
     # Run the test once
     logger.info("\n--- E2E Test - Single Run ---")
-    await run_single_e2e_test(orchestrator, source_identifier_arg, source_type_hint_arg)
+    await run_single_e2e_test(orchestrator, source_identifier_arg, source_type_hint_arg, user_id_arg)
 
 if __name__ == "__main__":
     try:

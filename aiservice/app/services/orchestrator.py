@@ -105,14 +105,16 @@ class ParallelOrchestrator(BaseService):
             web_acq_input = WebAcquisitionServiceInput(
                 url=orchestrator_input.source_identifier,
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.web_acquisition_service.execute(web_acq_input)
         elif determined_service_name == "PDFAcquisitionService":
             pdf_acq_input = PDFAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier, # Can be path or URL if service handles downloads
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input)
         elif determined_service_name == "FileAcquisitionService":
@@ -120,7 +122,8 @@ class ParallelOrchestrator(BaseService):
                 file_path=orchestrator_input.source_identifier,
                 source_content_type=initial_source_type_for_routing, # file service might refine this
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.file_acquisition_service.execute(file_acq_input)
         else:
@@ -249,6 +252,8 @@ class ParallelOrchestrator(BaseService):
 
         return OrchestrationOutput(
             status_code=status,
+            user_id=doc_meta.user_id if doc_meta else None,
+            document_id=doc_meta.document_id if doc_meta else None,
             source_identifier=inp.source_identifier,
             # Use actual_source_type if available, otherwise fallback or keep as is from input
             source_type=actual_source_type or inp.source_type or "unknown", 

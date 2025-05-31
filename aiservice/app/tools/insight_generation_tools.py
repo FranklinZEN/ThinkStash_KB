@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 # import openai # No longer using direct openai client here for default
 import uuid # Added for generating block_ids
+import json # Add json import
 
 from crewai.tools import BaseTool # Fourth attempt - trying from crewai.tools
 
@@ -101,11 +102,12 @@ class OptimizedLLMInteractionTool(BaseTool):
             
             # If the llm_client is ChatOpenAI, it should have a model_name attribute.
             # The self.model_name is used for consistency if we were to switch clients, but ChatOpenAI uses its own model_name.
-            print(f"OptimizedLLMInteractionTool: Invoking LLM. Model: {self.llm_client.model_name if hasattr(self.llm_client, 'model_name') else 'N/A'}")
+            print(f"OptimizedLLMInteractionTool: Invoking LLM. Model: {self.llm_client.model_name if hasattr(self.llm_client, 'model_name') else 'N/A'}. Requested max_tokens: {max_tokens}, temperature: {temperature}")
             
             response = self.llm_client.invoke(
                 lc_messages,
-                # model_kwargs={'max_tokens': max_tokens} # Example if endpoint supports it this way
+                max_tokens=max_tokens, # Pass max_tokens here
+                temperature=temperature # Pass temperature here
             )
             
             if hasattr(response, 'content'):
@@ -124,7 +126,10 @@ class FastContentBlockProcessorToolInput(BaseModel):
     content_blocks: Optional[List[ContentBlock]] = Field(default=None, description="Optional list of ContentBlock objects to process. Primarily used by operations like 'concatenate_text' or 'extract_image_metadata'. Not used by 'reconstruct_content_from_summary' if 'summarized_text' is provided.")
     operation: str = Field(description="The processing operation to perform.") # Removed default to make it explicit
     summarized_text: Optional[str] = Field(None, description="The summarized text string, used by 'reconstruct_content_from_summary'.")
-    image_metadata_list: Optional[List[Dict[str, Any]]] = Field(None, description="List of essential image metadata dictionaries, used by 'reconstruct_content_from_summary'.")
+    # Changed to accept JSON strings
+    image_metadata_list_json: Optional[str] = Field(None, description="JSON string representation of the list of essential image metadata dictionaries, used by 'reconstruct_content_from_summary'. The tool will prioritize 'full_image_context_json' if available.")
+    document_id: Optional[str] = Field(None, description="The document ID to be assigned to newly reconstructed content blocks.")
+    full_image_context_json: Optional[str] = Field(None, description="JSON string representation of the full, original list of image metadata dictionaries from the crew's context. This is the preferred source of truth for image details.")
 
 class FastContentBlockProcessorTool(BaseTool):
     name: str = "Fast Content Block Processor"
@@ -140,7 +145,7 @@ class FastContentBlockProcessorTool(BaseTool):
         self.user_id = user_id
         print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}") # For debugging
 
-    def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list: Optional[List[Dict[str, Any]]] = None) -> Any: # Added new optional args
+    def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list_json: Optional[str] = None, document_id: Optional[str] = None, full_image_context_json: Optional[str] = None) -> Any:
         """Processes content blocks based on the specified operation."""
         
         # --- REVERTED DEBUG/SAFEGUARD ---
@@ -199,17 +204,69 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
+            # --- Parse JSON string inputs for image metadata ---
+            image_metadata_list: List[Dict[str, Any]] = []
+            if image_metadata_list_json:
+                try:
+                    image_metadata_list = json.loads(image_metadata_list_json)
+                    if not isinstance(image_metadata_list, list): # Ensure it's a list
+                        print(f"Warning: Parsed 'image_metadata_list_json' is not a list. Found type: {type(image_metadata_list)}. Defaulting to empty list.")
+                        image_metadata_list = []
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding 'image_metadata_list_json': {e}. Defaulting to empty list.")
+                    image_metadata_list = []
+            
+            full_image_context: List[Dict[str, Any]] = []
+            if full_image_context_json:
+                try:
+                    full_image_context = json.loads(full_image_context_json)
+                    if not isinstance(full_image_context, list): # Ensure it's a list
+                        print(f"Warning: Parsed 'full_image_context_json' is not a list. Found type: {type(full_image_context)}. Defaulting to empty list.")
+                        full_image_context = []
+                except json.JSONDecodeError as e:
+                    print(f"Error decoding 'full_image_context_json': {e}. Defaulting to empty list.")
+                    full_image_context = []
+            # --- END JSON Parsing ---
+
+            # --- ADDED DEBUG LOG ---
+            print(f"DEBUG TOOL reconstruct_content_from_summary: Parsed image_metadata_list (type: {type(image_metadata_list)}): {str(image_metadata_list)[:500]}")
+            print(f"DEBUG TOOL reconstruct_content_from_summary: Parsed full_image_context (type: {type(full_image_context)}): {str(full_image_context)[:500]}")
+            print(f"DEBUG TOOL reconstruct_content_from_summary: Received document_id: {document_id}")
+            # --- END ADDED DEBUG LOG ---
+
             # User ID will be taken from self.user_id set during __init__
-            if summarized_text is None or image_metadata_list is None: # image_metadata_list can be an empty list
-                return "Error: 'summarized_text' and 'image_metadata_list' are required for 'reconstruct_content_from_summary'."
+            if summarized_text is None: 
+                return "Error: 'summarized_text' is required for 'reconstruct_content_from_summary'."
+            if image_metadata_list is None: # If it's None, default it to an empty list
+                image_metadata_list = []
+
+            # Ensure document_id is available if the operation requires it.
+            # For reconstruction, it's good practice to have it.
+            if not document_id:
+                # Consider if this should be a hard error or a logged warning with a fallback.
+                # For now, let's log a warning and proceed if possible, but ideally, it should be provided.
+                print(f"Warning: document_id not provided for 'reconstruct_content_from_summary' in FastContentBlockProcessorTool. Blocks will not have it.")
+                # Fallback to None if not provided, ContentBlock model allows Optional[str]
 
             reconstructed_blocks_dicts: List[Dict[str, Any]] = [] # Changed to store dicts
             order_idx_counter = 0
             processed_image_ids = set() # To track images inserted via placeholders
 
-            # Create a quick lookup for image metadata by gcs_url or image_id_ref
-            image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in image_metadata_list if meta.get('gcs_url')}
-            image_meta_lookup_id = {meta.get('image_id_ref'): meta for meta in image_metadata_list if meta.get('image_id_ref')}
+            # Determine the definitive source for image metadata lookup
+            definitive_image_pool: List[Dict[str, Any]] = [] # Ensure type hint consistency
+            if full_image_context: # Prioritize full_image_context if provided (already parsed)
+                print("DEBUG TOOL: Using 'full_image_context' (parsed from JSON) as the definitive image pool.")
+                definitive_image_pool = full_image_context
+            elif image_metadata_list: # Fallback to image_metadata_list (already parsed)
+                print("DEBUG TOOL: 'full_image_context' (parsed from JSON) not available or empty, falling back to 'image_metadata_list' (parsed from JSON). Image details might be incomplete.")
+                definitive_image_pool = image_metadata_list
+            else:
+                print("DEBUG TOOL: Neither 'full_image_context' nor 'image_metadata_list' provided. No image metadata available for lookup.")
+                definitive_image_pool = []
+
+            # Create a quick lookup for image metadata by gcs_url or image_id_ref FROM THE DEFINITIVE POOL
+            image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in definitive_image_pool if meta.get('gcs_url')}
+            image_meta_lookup_id = {meta.get('image_id_ref'): meta for meta in definitive_image_pool if meta.get('image_id_ref')}
 
             # Simple placeholder strategy: [IMAGE: <identifier>] where identifier can be gcs_url or image_id_ref
             # This regex will find placeholders and capture the identifier.
@@ -239,6 +296,10 @@ class FastContentBlockProcessorTool(BaseTool):
             # or a GCS URL (starts with gs://, can contain various characters)
             placeholder_pattern = r'\[IMAGE:\s*([^\s\]]+)\s*\]'
 
+            # --- ADDED DEBUG LOG FOR REGEX PATTERN ---
+            print(f"DEBUG TOOL reconstruct_content_from_summary: Using placeholder_pattern: '{placeholder_pattern}'")
+            # --- END ADDED DEBUG LOG ---
+
             for match in re.finditer(placeholder_pattern, summarized_text):
                 start_match, end_match = match.span()
                 placeholder_identifier = match.group(1)
@@ -250,6 +311,7 @@ class FastContentBlockProcessorTool(BaseTool):
                         block_id=uuid.uuid4().hex,
                         tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
                         user_id=current_user_id, # Use current_user_id
+                        document_id=document_id,
                         type="text",
                         content=text_before_placeholder,
                         order_index=order_idx_counter
@@ -259,16 +321,18 @@ class FastContentBlockProcessorTool(BaseTool):
                 
                 # Find and add image block
                 img_meta_to_use = None
+                # Lookup in the definitive pool
                 if placeholder_identifier in image_meta_lookup_id:
                     img_meta_to_use = image_meta_lookup_id[placeholder_identifier]
                 elif placeholder_identifier in image_meta_lookup_gcs:
                     img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
                 
-                if img_meta_to_use:
+                if img_meta_to_use: # This is now from the definitive_image_pool
                     image_block = ContentBlock(
                         block_id=uuid.uuid4().hex,
                         tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
                         user_id=current_user_id, # Use current_user_id
+                        document_id=document_id,
                         type="image",
                         image_id_ref=img_meta_to_use.get("image_id_ref"),
                         gcs_url=img_meta_to_use.get("gcs_url"),
@@ -301,6 +365,7 @@ class FastContentBlockProcessorTool(BaseTool):
                     block_id=uuid.uuid4().hex,
                     tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
                     user_id=current_user_id, # Use current_user_id
+                    document_id=document_id,
                     type="text",
                     content=remaining_text,
                     order_index=order_idx_counter
@@ -315,6 +380,7 @@ class FastContentBlockProcessorTool(BaseTool):
                     block_id=uuid.uuid4().hex,
                     tmp_id=uuid.uuid4().hex,
                     user_id=current_user_id,
+                    document_id=document_id,
                     type="text",
                     content=summarized_text,
                     order_index=order_idx_counter
@@ -323,7 +389,11 @@ class FastContentBlockProcessorTool(BaseTool):
                  order_idx_counter += 1
             
             # Append any images from image_metadata_list that were not processed via placeholders
-            for img_meta in image_metadata_list:
+            # THIS LOGIC NEEDS TO USE definitive_image_pool AS WELL
+            # And should only append if truly not captured by a placeholder from the summary.
+            # For now, the primary fix is placeholder resolution. This part might need refinement later
+            # if the summarizer omits placeholders for images that *should* be included.
+            for img_meta in definitive_image_pool: # CHANGED to definitive_image_pool
                 img_id_ref = img_meta.get("image_id_ref")
                 gcs_url = img_meta.get("gcs_url")
 
@@ -340,6 +410,7 @@ class FastContentBlockProcessorTool(BaseTool):
                             block_id=uuid.uuid4().hex,
                             tmp_id=uuid.uuid4().hex,
                             user_id=current_user_id,
+                            document_id=document_id,
                             type="image",
                             image_id_ref=img_id_ref,
                             gcs_url=gcs_url,
@@ -409,13 +480,13 @@ if __name__ == '__main__':
     reconstructed_with_placeholders = processor_tool._run(
         operation='reconstruct_content_from_summary',
         summarized_text=sample_summary_text_with_placeholders,
-        image_metadata_list=essential_images_for_reconstruction
+        image_metadata_list_json=json.dumps(essential_images_for_reconstruction)
     )
     print(f"Reconstructed (with placeholders): {reconstructed_with_placeholders}")
 
     reconstructed_no_placeholders = processor_tool._run(
         operation='reconstruct_content_from_summary',
         summarized_text=sample_summary_text_no_placeholders,
-        image_metadata_list=essential_images_for_reconstruction 
+        image_metadata_list_json=json.dumps(essential_images_for_reconstruction) 
     )
     print(f"Reconstructed (no placeholders, images not directly added unless policy changes): {reconstructed_no_placeholders}") 
