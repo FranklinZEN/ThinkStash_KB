@@ -39,7 +39,7 @@ class ContentRewriteCrewManager:
         elif self.rewrite_input.user_id: # Fallback to user_id on RewriteContentInput if present
             self.user_id = self.rewrite_input.user_id
         
-        print(f"ContentRewriteCrewManager initialized with user_id: {self.user_id}") # For debugging
+        print(f"INFO: ContentRewriteCrewManager initialized with user_id: {self.user_id}") # Retained: Useful high-level info
         self.agents_factory = ContentRewriteAgents(user_id=self.user_id) # Pass user_id
 
     def setup_crew(self, concatenated_text: str, essential_image_metadata: List[Dict[str, Any]]) -> Crew:
@@ -101,14 +101,14 @@ class ContentRewriteCrewManager:
         try:
             # Attempt to parse as a Python literal first (handles single quotes, etc.)
             # Safely evaluates if it's a Python literal like list, dict, tuple, string, number, bool, None.
-            print(f"DEBUG: _try_json_parse attempting ast.literal_eval for: {data_str[:200]}...")
+            # print(f"DEBUG: _try_json_parse attempting ast.literal_eval for: {data_str[:200]}...")
             evaluated_data = ast.literal_eval(data_str)
-            print(f"DEBUG: ast.literal_eval successful. Type: {type(evaluated_data)}")
+            # print(f"DEBUG: ast.literal_eval successful. Type: {type(evaluated_data)}")
             return evaluated_data
         except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError) as e_ast:
             # ast.literal_eval failed, likely not a simple Python literal or too complex.
             # This can happen if it's actual JSON (with null, true, false) or malformed.
-            print(f"DEBUG: ast.literal_eval failed: {e_ast}. Falling back to json.loads for: {data_str[:200]}...")
+            # print(f"DEBUG: ast.literal_eval failed: {e_ast}. Falling back to json.loads for: {data_str[:200]}...")
             try:
                 return json.loads(data_str)
             except json.JSONDecodeError:
@@ -116,19 +116,19 @@ class ContentRewriteCrewManager:
                 match = re.search(r'(\\[.*?\\])', data_str, re.DOTALL) # Made regex non-greedy for the content within brackets
                 if match:
                     json_like_part = match.group(1)
-                    print(f"DEBUG: Found JSON-like part with regex: {json_like_part[:200]}...")
+                    # print(f"DEBUG: Found JSON-like part with regex: {json_like_part[:200]}...")
                     try:
                         return json.loads(json_like_part)
                     except json.JSONDecodeError as e_inner:
-                        print(f"WARNING: Found JSON-like part but failed to parse with json.loads: {json_like_part[:200]}. Error: {e_inner}")
+                        print(f"WARNING: Found JSON-like part but failed to parse with json.loads: {json_like_part[:200]}. Error: {e_inner}") # Retained: Important warning
                         return None
-                print(f"WARNING: Failed to decode with json.loads directly and no parsable array found via regex from string: {data_str[:200]}")
+                print(f"WARNING: Failed to decode with json.loads directly and no parsable array found via regex from string: {data_str[:200]}") # Retained: Important warning
                 return None
             except Exception as e_json_other: # Catch other potential errors from json.loads
-                print(f"ERROR: Unexpected error during json.loads fallback: {e_json_other}. Data: {data_str[:200]}")
+                print(f"ERROR: Unexpected error during json.loads fallback: {e_json_other}. Data: {data_str[:200]}") # Retained: Important error
                 return None
         except Exception as e_outer: # Catch any other unexpected errors
-            print(f"ERROR: Unexpected error in _try_json_parse: {e_outer}. Data: {data_str[:200]}")
+            print(f"ERROR: Unexpected error in _try_json_parse: {e_outer}. Data: {data_str[:200]}") # Retained: Important error
             return None
 
     def safe_parse_to_content_blocks(self, data: Any, field_name: str) -> List[ContentBlock]:
@@ -143,12 +143,12 @@ class ContentRewriteCrewManager:
         """
         parsed_blocks: List[ContentBlock] = []
         if not isinstance(data, list):
-            print(f"ERROR: Data for '{field_name}' is not a list, but type {type(data)}. Cannot parse into ContentBlocks.")
+            print(f"ERROR: Data for '{field_name}' is not a list, but type {type(data)}. Cannot parse into ContentBlocks.") # Retained: Important error
             return []
 
         for i, item in enumerate(data):
             if not isinstance(item, dict):
-                print(f"ERROR: Item {i} in '{field_name}' is not a dictionary, but type {type(item)}. Skipping.")
+                print(f"ERROR: Item {i} in '{field_name}' is not a dictionary, but type {type(item)}. Skipping.") # Retained: Important error
                 continue
             try:
                 # Ensure block_id is present, generate if missing (as per ContentBlock model default_factory)
@@ -160,7 +160,7 @@ class ContentRewriteCrewManager:
                     if 'content' in item and isinstance(item['content'], str):
                          item['type'] = 'text' # Sensible default if text content exists
                     else:
-                        print(f"WARNING: Item {i} in '{field_name}' is missing 'type' and cannot infer. Skipping. Item: {str(item)[:100]}")
+                        print(f"WARNING: Item {i} in '{field_name}' is missing 'type' and cannot infer. Skipping. Item: {str(item)[:100]}") # Retained: Important warning
                         continue
 
 
@@ -168,18 +168,19 @@ class ContentRewriteCrewManager:
                 block = ContentBlock(**item)
                 parsed_blocks.append(block)
             except Exception as e: # Catch Pydantic ValidationError and other potential errors
-                print(f"ERROR: Failed to validate item {i} in '{field_name}' as ContentBlock. Error: {e}. Item: {str(item)[:200]}")
+                print(f"ERROR: Failed to validate item {i} in '{field_name}' as ContentBlock. Error: {e}. Item: {str(item)[:200]}") # Retained: Important error
         
         if data and not parsed_blocks:
-             print(f"WARNING: Input data for '{field_name}' was non-empty but resulted in zero successfully parsed ContentBlocks.")
+             print(f"WARNING: Input data for '{field_name}' was non-empty but resulted in zero successfully parsed ContentBlocks.") # Retained: Important warning
         elif not data:
-            print(f"INFO: Input data for '{field_name}' was empty or None. Returning empty list of ContentBlocks.")
+             # print(f"INFO: Input data for '{field_name}' was empty or None. Returning empty list of ContentBlocks.") # Optional info, can be removed
+             pass
 
         return parsed_blocks
 
     def run(self) -> RewriteContentOutput:
         start_time = time.time()
-        print(f"INFO: ContentRewriteCrewManager run initiated for user_id: {self.user_id}")
+        print(f"INFO: ContentRewriteCrewManager run initiated for user_id: {self.user_id}") # Retained: Useful high-level info
 
         # 1. Pre-process input: Concatenate text and extract essential image metadata
         concatenated_text = ""
@@ -203,8 +204,8 @@ class ContentRewriteCrewManager:
                 essential_image_metadata.append({k: v for k, v in essential_meta.items() if v is not None})
         concatenated_text = "\n\n".join(text_parts)
 
-        print(f"DEBUG: Preprocessed concatenated text length: {len(concatenated_text)}")
-        print(f"DEBUG: Preprocessed essential image metadata count: {len(essential_image_metadata)}")
+        # print(f"DEBUG: Preprocessed concatenated text length: {len(concatenated_text)}")
+        # print(f"DEBUG: Preprocessed essential image metadata count: {len(essential_image_metadata)}")
 
         crew_inputs = {
             "concatenated_text": concatenated_text,
@@ -216,7 +217,7 @@ class ContentRewriteCrewManager:
             k: (v[:500] + '...' if isinstance(v, str) and len(v) > 500 else v)
             for k, v in crew_inputs.items()
         }
-        print(f"DEBUG: Crew Inputs being passed to kickoff: {loggable_crew_inputs}")
+        # print(f"DEBUG: Crew Inputs being passed to kickoff: {loggable_crew_inputs}")
 
         # 2. Setup and run the Crew
         crew = self.setup_crew(concatenated_text, essential_image_metadata)
@@ -229,7 +230,7 @@ class ContentRewriteCrewManager:
         try:
             crew_result = crew.kickoff(inputs=crew_inputs)
         except Exception as e:
-            print(f"ERROR: Exception during crew.kickoff(): {e}")
+            print(f"ERROR: Exception during crew.kickoff(): {e}") # Retained: Important error
             final_status_code = OrchestrationStatusCodeEnum.ERROR_CREW_EXECUTION_FAILED
             final_error_message = f"Exception during crew kickoff: {str(e)}"
             # Construct usage_metrics_dict here as well for the error case
@@ -237,12 +238,14 @@ class ContentRewriteCrewManager:
             usage_metrics_dict_error_case: Optional[Dict[str, Any]] = None
             if crew and hasattr(crew, 'usage_metrics') and crew.usage_metrics:
                 um_error = crew.usage_metrics
-                print(f"DEBUG: [Error Path] Converting crew.usage_metrics. Type: {type(um_error)}, Value: {um_error}")
+                # print(f"DEBUG: [Error Path] Converting crew.usage_metrics. Type: {type(um_error)}, Value: {um_error}")
                 temp_metrics_dict_error = {}
                 known_attrs_error = ['total_tokens', 'prompt_tokens', 'completion_tokens', 'successful_requests']
                 for attr_err in known_attrs_error:
                     if hasattr(um_error, attr_err):
                         temp_metrics_dict_error[attr_err] = getattr(um_error, attr_err)
+                    else:
+                        pass # Attribute not found, do nothing
                 if isinstance(um_error, dict):
                     usage_metrics_dict_error_case = {**um_error, **temp_metrics_dict_error}
                 elif temp_metrics_dict_error:
@@ -273,8 +276,8 @@ class ContentRewriteCrewManager:
             actual_crew_object_for_metrics = getattr(crew_result, 'crew', crew) # Prefer crew from CrewOutput if available, else fallback to the one we ran
             if actual_crew_object_for_metrics and hasattr(actual_crew_object_for_metrics, 'usage_metrics') and actual_crew_object_for_metrics.usage_metrics:
                 um = actual_crew_object_for_metrics.usage_metrics
-                print(f"DEBUG: [Primary Path] Converting crew.usage_metrics. Type: {type(um)}, Value: {um}")
-                print(f"DEBUG: [Primary Path] Attributes of um: {dir(um)}")
+                # print(f"DEBUG: [Primary Path] Converting crew.usage_metrics. Type: {type(um)}, Value: {um}")
+                # print(f"DEBUG: [Primary Path] Attributes of um: {dir(um)}")
 
                 temp_metrics_dict = {}
                 known_attrs = ['total_tokens', 'prompt_tokens', 'completion_tokens', 'successful_requests']
@@ -283,62 +286,66 @@ class ContentRewriteCrewManager:
                     if hasattr(um, attr):
                         value = getattr(um, attr)
                         temp_metrics_dict[attr] = value
-                        print(f"DEBUG: [Primary Path] Added to metrics dict: {{'{attr}': {value} (type: {type(value)})}}")
+                        # print(f"DEBUG: [Primary Path] Added to metrics dict: {{'{attr}': {value} (type: {type(value)})}}")
                     else:
-                        print(f"DEBUG: [Primary Path] Attribute '{attr}' not found in usage_metrics object.")
+                        # print(f"DEBUG: [Primary Path] Attribute '{attr}' not found in usage_metrics object.")
+                        pass # Attribute not found, do nothing
                 
                 if isinstance(um, dict):
-                    print("DEBUG: [Primary Path] crew.usage_metrics is already a dict. Merging with known_attrs if any were missed.")
+                    # print("DEBUG: [Primary Path] crew.usage_metrics is already a dict. Merging with known_attrs if any were missed.")
                     usage_metrics_dict = {**um, **temp_metrics_dict}
                 elif temp_metrics_dict:
                     usage_metrics_dict = temp_metrics_dict
                 else:
-                    print(f"WARNING: [Primary Path] Could not convert usage_metrics of type {type(um)} to dict using known attributes or direct dict check. Trying vars().")
+                    # print(f"WARNING: [Primary Path] Could not convert usage_metrics of type {type(um)} to dict using known attributes or direct dict check. Trying vars().")
                     try:
                         usage_metrics_dict = vars(um)
-                        print(f"DEBUG: [Primary Path] vars(um) result: {usage_metrics_dict}")
+                        # print(f"DEBUG: [Primary Path] vars(um) result: {usage_metrics_dict}")
                     except TypeError:
                         print(f"ERROR: [Primary Path] vars(um) failed for type {type(um)}. usage_metrics will be None.")
                         usage_metrics_dict = None
                 
-                print(f"DEBUG: [Primary Path] Final usage_metrics_dict: {usage_metrics_dict}, Type: {type(usage_metrics_dict)}")
+                # print(f"DEBUG: [Primary Path] Final usage_metrics_dict: {usage_metrics_dict}, Type: {type(usage_metrics_dict)}")
                 
                 if not isinstance(usage_metrics_dict, dict) and usage_metrics_dict is not None:
-                    print(f"CRITICAL WARNING: [Primary Path] usage_metrics_dict is NOT a dict after conversion attempts. Type: {type(usage_metrics_dict)}. Setting to None.")
+                    print(f"CRITICAL WARNING: [Primary Path] usage_metrics_dict is NOT a dict after conversion attempts. Type: {type(usage_metrics_dict)}. Setting to None.") # Retained: Critical warning
                     usage_metrics_dict = None
             else:
-                print("DEBUG: [Primary Path] No usage_metrics found on crew_result.crew or the initial crew object.")
+                # print("DEBUG: [Primary Path] No usage_metrics found on crew_result.crew or the initial crew object.")
+                pass
         else:
-            print("DEBUG: [Primary Path] crew_result is None, skipping usage_metrics conversion.")
+            # print("DEBUG: [Primary Path] crew_result is None, skipping usage_metrics conversion.")
+            pass
         # --- End of Moved Usage Metrics Conversion Block ---
 
         if crew_result:
-            print(f"DEBUG: Full crew_result object (type {type(crew_result)}): {str(crew_result)[:1000]}...")
+            # print(f"DEBUG: Full crew_result object (type {type(crew_result)}): {str(crew_result)[:1000]}...")
             crew_result_raw = getattr(crew_result, 'raw', None)
-            if crew_result_raw:
-                print(f"DEBUG: crew_result.raw (type {type(crew_result_raw)}): {str(crew_result_raw)[:1000]}...")
-            else:
-                print("DEBUG: crew_result has no .raw attribute or it is empty.")
+            # if crew_result_raw:
+                # print(f"DEBUG: crew_result.raw (type {type(crew_result_raw)}): {str(crew_result_raw)[:1000]}...")
+            # else:
+                # print("DEBUG: crew_result has no .raw attribute or it is empty.")
 
             # Attempt to get final_agent_output directly from crew_result.raw
             if isinstance(crew_result_raw, list):
-                print("INFO: Using crew_result.raw directly as it is a list.")
+                # print("INFO: Using crew_result.raw directly as it is a list.")
                 final_agent_output = crew_result_raw
             elif isinstance(crew_result_raw, str):
-                print(f"INFO: crew_result.raw is a string. Attempting to parse: {crew_result_raw[:500]}...")
+                # print(f"INFO: crew_result.raw is a string. Attempting to parse: {crew_result_raw[:500]}...")
                 parsed_raw_output = self._try_json_parse(crew_result_raw)
                 if isinstance(parsed_raw_output, list):
                     final_agent_output = parsed_raw_output
-                    print("INFO: Successfully parsed crew_result.raw string into a list.")
+                    # print("INFO: Successfully parsed crew_result.raw string into a list.")
                 else:
-                    print(f"WARNING: Failed to parse crew_result.raw string into a list. Parsed data type: {type(parsed_raw_output)}")
+                    # print(f"WARNING: Failed to parse crew_result.raw string into a list. Parsed data type: {type(parsed_raw_output)}")
+                    pass
             
             # Fallback to tasks_output ONLY if crew_result.raw didn't yield a list for final_agent_output
             if final_agent_output is None:
                 if crew_result.tasks_output and len(crew_result.tasks_output) > 0:
-                    print("INFO: crew_result.raw did not yield a list. Falling back to inspecting tasks_output.")
+                    print("INFO: crew_result.raw did not yield a list. Falling back to inspecting tasks_output.") # Retained: Useful info if this path is taken
                     last_task_output = crew_result.tasks_output[-1]
-                    print(f"DEBUG: last_task_output (type {type(last_task_output)}): {str(last_task_output)[:1000]}...")
+                    # print(f"DEBUG: last_task_output (type {type(last_task_output)}): {str(last_task_output)[:1000]}...")
 
                     raw_output_data = getattr(last_task_output, 'raw_output', None)
                     pydantic_output_data = getattr(last_task_output, 'pydantic_output', None)
@@ -346,58 +353,64 @@ class ContentRewriteCrewManager:
                     agent_output_data = getattr(last_task_output, 'agent_output', None)
                     output_data = getattr(last_task_output, 'output', None)
 
-                    print(f"DEBUG: last_task_output.raw_output type: {type(raw_output_data)}, content (first 200): {str(raw_output_data)[:200]}")
-                    print(f"DEBUG: last_task_output.pydantic_output type: {type(pydantic_output_data)}, content (first 200): {str(pydantic_output_data)[:200]}")
-                    print(f"DEBUG: last_task_output.exported_output type: {type(exported_output_data)}, content (first 200): {str(exported_output_data)[:200]}")
-                    print(f"DEBUG: last_task_output.agent_output type: {type(agent_output_data)}, content (first 200): {str(agent_output_data)[:200]}")
-                    print(f"DEBUG: last_task_output.output type: {type(output_data)}, content (first 200): {str(output_data)[:200]}")
+                    # print(f"DEBUG: last_task_output.raw_output type: {type(raw_output_data)}, content (first 200): {str(raw_output_data)[:200]}")
+                    # print(f"DEBUG: last_task_output.pydantic_output type: {type(pydantic_output_data)}, content (first 200): {str(pydantic_output_data)[:200]}")
+                    # print(f"DEBUG: last_task_output.exported_output type: {type(exported_output_data)}, content (first 200): {str(exported_output_data)[:200]}")
+                    # print(f"DEBUG: last_task_output.agent_output type: {type(agent_output_data)}, content (first 200): {str(agent_output_data)[:200]}")
+                    # print(f"DEBUG: last_task_output.output type: {type(output_data)}, content (first 200): {str(output_data)[:200]}")
 
                     if isinstance(pydantic_output_data, list):
                         final_agent_output = pydantic_output_data
-                        print("INFO: Using pydantic_output from last task.")
+                        # print("INFO: Using pydantic_output from last task.")
                     elif isinstance(exported_output_data, list):
                         final_agent_output = exported_output_data
-                        print("INFO: Using exported_output from last task.")
+                        # print("INFO: Using exported_output from last task.")
                     elif isinstance(agent_output_data, list):
                         final_agent_output = agent_output_data
-                        print("INFO: Using agent_output from last task.")
+                        # print("INFO: Using agent_output from last task.")
                     elif isinstance(raw_output_data, list):
                         final_agent_output = raw_output_data
-                        print("INFO: Using raw_output from last task (as list).")
+                        # print("INFO: Using raw_output from last task (as list).")
                     elif isinstance(raw_output_data, str):
-                        print(f"INFO: Attempting to parse raw_output_data (string from last task): {raw_output_data[:500]}...")
+                        # print(f"INFO: Attempting to parse raw_output_data (string from last task): {raw_output_data[:500]}...")
                         parsed_data = self._try_json_parse(raw_output_data)
                         if isinstance(parsed_data, list):
                             final_agent_output = parsed_data
-                            print("INFO: Successfully parsed raw_output_data string (from last task) into a list.")
+                            # print("INFO: Successfully parsed raw_output_data string (from last task) into a list.")
                         else:
-                            print(f"WARNING: Failed to parse raw_output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                            # print(f"WARNING: Failed to parse raw_output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                            pass
                     elif isinstance(output_data, list):
                         final_agent_output = output_data
-                        print("INFO: Using output_data from last task (as list).")
+                        # print("INFO: Using output_data from last task (as list).")
                     elif isinstance(output_data, str):
-                        print(f"INFO: Attempting to parse output_data (string from last task): {output_data[:500]}...")
+                        # print(f"INFO: Attempting to parse output_data (string from last task): {output_data[:500]}...")
                         parsed_data = self._try_json_parse(output_data)
                         if isinstance(parsed_data, list):
                             final_agent_output = parsed_data
-                            print("INFO: Successfully parsed output_data string (from last task) into a list.")
+                            # print("INFO: Successfully parsed output_data string (from last task) into a list.")
                         else:
-                            print(f"WARNING: Failed to parse output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                            # print(f"WARNING: Failed to parse output_data string (from last task) into a list. Parsed data type: {type(parsed_data)}")
+                            pass
                     else: # Fallback if no specific attribute yielded a list
                         final_output_attr_val = getattr(last_task_output, 'output', None)
                         if isinstance(final_output_attr_val, str):
-                            print(f"INFO: Attempting to parse last_task_output.output (string attribute): {final_output_attr_val[:500]}...")
+                            # print(f"INFO: Attempting to parse last_task_output.output (string attribute): {final_output_attr_val[:500]}...")
                             parsed_data = self._try_json_parse(final_output_attr_val)
                             if isinstance(parsed_data, list):
                                 final_agent_output = parsed_data
-                                print("INFO: Successfully parsed last_task_output.output string attribute into a list.")
+                                # print("INFO: Successfully parsed last_task_output.output string attribute into a list.")
+                                pass
                             else:
-                                print(f"WARNING: Failed to parse last_task_output.output string attribute. Parsed data type: {type(parsed_data)}")
+                                # print(f"WARNING: Failed to parse last_task_output.output string attribute. Parsed data type: {type(parsed_data)}")
+                                pass
                         elif isinstance(final_output_attr_val, list):
                             final_agent_output = final_output_attr_val
-                            print("INFO: Using last_task_output.output directly as it is a list attribute.")
+                            # print("INFO: Using last_task_output.output directly as it is a list attribute.")
+                            pass # Added pass
                 else: # No crew_result.tasks_output or it's empty, and crew_result.raw processing failed to produce a list
-                    print("INFO: Neither crew_result.raw (after parsing attempts) nor tasks_output yielded a usable list. Cannot determine final agent output.")
+                    # print("INFO: Neither crew_result.raw (after parsing attempts) nor tasks_output yielded a usable list. Cannot determine final agent output.")
+                    pass
             # If final_agent_output is still None here, it means no valid output was found through any method.
             # The existing error handling below will catch this.
 
@@ -409,7 +422,7 @@ class ContentRewriteCrewManager:
                     f"Final processed output type: {type(final_agent_output)}. Final processed output (first 1000 chars): {str(final_agent_output)[:1000]}. "
                     f"Checked crew_result.raw and relevant attributes of last_task_output if available."
                 )
-                print(f"ERROR: Error in crew execution: {error_msg_detail}")
+                print(f"ERROR: Error in crew execution: {error_msg_detail}") # Retained: Important error
                 final_error_message = error_msg_detail
                 # This return was part of the user's snippet, effectively ending processing here on error.
                 end_time_task_error = time.time()
@@ -425,25 +438,25 @@ class ContentRewriteCrewManager:
                 )
             
             # If we reach here, final_agent_output is a list (could be empty)
-            print(f"INFO: Final agent output determined to be a list with {len(final_agent_output)} items.")
+            # print(f"INFO: Final agent output determined to be a list with {len(final_agent_output)} items.")
             parsed_content_blocks = self.safe_parse_to_content_blocks(final_agent_output, "ai_rewritten_content_blocks")
             
             if not parsed_content_blocks and final_agent_output: # It was a non-empty list, but parsing failed
                 final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION
                 final_error_message = "Crew output was a list of dictionaries, but failed Pydantic validation into ContentBlocks."
-                print(f"ERROR: {final_error_message} Input list (first item): {str(final_agent_output[0])[:500] if final_agent_output else 'Empty List'}")
+                print(f"ERROR: {final_error_message} Input list (first item): {str(final_agent_output[0])[:500] if final_agent_output else 'Empty List'}") # Retained: Important error
             elif not parsed_content_blocks and not final_agent_output: # It was an empty list, parsing resulted in empty
-                 print("INFO: Crew returned an empty list of content blocks, successfully processed as such.")
+                 # print("INFO: Crew returned an empty list of content blocks, successfully processed as such.")
                  final_status_code = OrchestrationStatusCodeEnum.SUCCESS
                  final_error_message = None
             elif parsed_content_blocks: # Successfully parsed non-empty list
-                print(f"INFO: Successfully parsed {len(parsed_content_blocks)} content blocks from crew output.")
+                # print(f"INFO: Successfully parsed {len(parsed_content_blocks)} content blocks from crew output.")
                 final_status_code = OrchestrationStatusCodeEnum.SUCCESS
                 final_error_message = None
             else: # Should be covered, but as a fallback
                 final_status_code = OrchestrationStatusCodeEnum.ERROR_UNKNOWN 
                 final_error_message = "Unknown error after attempting to parse final agent output."
-                print(f"ERROR: {final_error_message} Final agent output: {str(final_agent_output)[:500]}")
+                print(f"ERROR: {final_error_message} Final agent output: {str(final_agent_output)[:500]}") # Retained: Important error
 
         elif not crew_result: # If crew_result itself is None from the kickoff exception
             # final_status_code and final_error_message are already set by the except block
@@ -451,11 +464,11 @@ class ContentRewriteCrewManager:
         else: # No crew_result.tasks_output or it's empty
             final_status_code = OrchestrationStatusCodeEnum.ERROR_NO_OUTPUT_FROM_CREW
             final_error_message = "Crew execution did not produce any usable task outputs."
-            print(f"ERROR: {final_error_message}. Crew Result: {crew_result}")
+            print(f"ERROR: {final_error_message}. Crew Result: {str(crew_result)[:500]}") # Retained: Important error, truncated crew_result
         
         end_time = time.time()
         processing_time_ms = (end_time - start_time) * 1000
-        print(f"INFO: ContentRewriteCrewManager run finished in {processing_time_ms/1000:.2f} seconds. Status: {final_status_code}")
+        print(f"INFO: ContentRewriteCrewManager run finished in {processing_time_ms/1000:.2f} seconds. Status: {final_status_code}") # Retained: Useful high-level info
 
         # 4. Construct and return the output Pydantic model
         return RewriteContentOutput(

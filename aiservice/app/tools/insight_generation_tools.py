@@ -204,7 +204,9 @@ class FastContentBlockProcessorTool(BaseTool):
                 return "Error: 'summarized_text' and 'image_metadata_list' are required for 'reconstruct_content_from_summary'."
 
             reconstructed_blocks_dicts: List[Dict[str, Any]] = [] # Changed to store dicts
-            
+            order_idx_counter = 0
+            processed_image_ids = set() # To track images inserted via placeholders
+
             # Create a quick lookup for image metadata by gcs_url or image_id_ref
             image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in image_metadata_list if meta.get('gcs_url')}
             image_meta_lookup_id = {meta.get('image_id_ref'): meta for meta in image_metadata_list if meta.get('image_id_ref')}
@@ -229,7 +231,7 @@ class FastContentBlockProcessorTool(BaseTool):
                 print("Warning: user_id not set in FastContentBlockProcessorTool for reconstruct_content_from_summary. Using placeholder.")
                 current_user_id = "tool_reconstruct_fallback_user"
 
-            current_text_segment = ""
+            # current_text_segment = "" # Not used
             last_idx = 0
             
             # Regex to find [IMAGE: <identifier>]
@@ -249,9 +251,11 @@ class FastContentBlockProcessorTool(BaseTool):
                         tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
                         user_id=current_user_id, # Use current_user_id
                         type="text",
-                        content=text_before_placeholder
+                        content=text_before_placeholder,
+                        order_index=order_idx_counter
                     )
                     reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
+                    order_idx_counter += 1
                 
                 # Find and add image block
                 img_meta_to_use = None
@@ -271,9 +275,13 @@ class FastContentBlockProcessorTool(BaseTool):
                         alt_text=img_meta_to_use.get("alt_text"),
                         caption=img_meta_to_use.get("caption"),
                         width=img_meta_to_use.get("width"),
-                        height=img_meta_to_use.get("height")
+                        height=img_meta_to_use.get("height"),
+                        order_index=order_idx_counter
                     )
                     reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
+                    order_idx_counter += 1
+                    # Add the identifier that was actually used for matching from the placeholder
+                    processed_image_ids.add(placeholder_identifier) 
                 else:
                     # If placeholder image not found, could insert a warning text block or skip
                     print(f"Warning: Image for placeholder '{placeholder_identifier}' not found in provided metadata.")
@@ -294,23 +302,60 @@ class FastContentBlockProcessorTool(BaseTool):
                     tmp_id=uuid.uuid4().hex, # Ensure tmp_id is also unique
                     user_id=current_user_id, # Use current_user_id
                     type="text",
-                    content=remaining_text
+                    content=remaining_text,
+                    order_index=order_idx_counter
                 )
                 reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
+                order_idx_counter += 1
             
-            # If no placeholders were found at all, the whole summarized_text is one block
+            # If no placeholders were found at all, and no prior text blocks were added,
+            # the whole summarized_text is one block
             if not reconstructed_blocks_dicts and summarized_text:
-                 reconstructed_blocks_dicts.append(ContentBlock(
+                 text_block = ContentBlock(
                     block_id=uuid.uuid4().hex,
+                    tmp_id=uuid.uuid4().hex,
+                    user_id=current_user_id,
                     type="text",
-                    content=summarized_text
-                ).model_dump(mode='json'))
+                    content=summarized_text,
+                    order_index=order_idx_counter
+                )
+                 reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
+                 order_idx_counter += 1
             
-            # Fallback: if summary had no placeholders, and we're supposed to add images,
-            # we might append them here if the design requires it.
-            # However, the current logic relies on placeholders. If no placeholders, no images are interspersed.
-            # If essential_image_metadata was meant to be included regardless of placeholders, that logic would be different (e.g. append all at end)
-            # For now, sticking to placeholder-driven insertion.
+            # Append any images from image_metadata_list that were not processed via placeholders
+            for img_meta in image_metadata_list:
+                img_id_ref = img_meta.get("image_id_ref")
+                gcs_url = img_meta.get("gcs_url")
+
+                # Determine if this image was already processed
+                was_processed = False
+                if img_id_ref and img_id_ref in processed_image_ids:
+                    was_processed = True
+                elif gcs_url and gcs_url in processed_image_ids: # Check GCS URL if ID was used in placeholder
+                    was_processed = True
+                
+                if not was_processed:
+                    if img_id_ref: # If it has an ID and wasn't processed, add it
+                        image_block = ContentBlock(
+                            block_id=uuid.uuid4().hex,
+                            tmp_id=uuid.uuid4().hex,
+                            user_id=current_user_id,
+                            type="image",
+                            image_id_ref=img_id_ref,
+                            gcs_url=gcs_url,
+                            alt_text=img_meta.get("alt_text"),
+                            caption=img_meta.get("caption"),
+                            width=img_meta.get("width"),
+                            height=img_meta.get("height"),
+                            order_index=order_idx_counter
+                        )
+                        reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
+                        order_idx_counter += 1
+                        processed_image_ids.add(img_id_ref) # Add its ID to prevent re-adding
+                    else:
+                        # No img_id_ref and was not processed by its gcs_url placeholder either.
+                        # This is where the warning for truly unidentifiable/unprocessed images without ID should be.
+                        print(f"Warning: Image metadata found without an 'image_id_ref' and was not matched by placeholder. Skipping: {gcs_url}")
 
             return reconstructed_blocks_dicts # Return list of dicts
 

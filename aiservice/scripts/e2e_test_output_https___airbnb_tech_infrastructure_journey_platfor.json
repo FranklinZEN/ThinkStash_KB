@@ -1,5 +1,6 @@
 {
   "status_code": "success",
+  "user_id": "franklin_try",
   "source_identifier": "https://airbnb.tech/infrastructure/journey-platform-a-low-code-tool-for-creating-interactive-user-workflows/",
   "source_type": "url",
   "processing_level_used": "full_content",
