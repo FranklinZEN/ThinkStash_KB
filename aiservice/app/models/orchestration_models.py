@@ -15,7 +15,7 @@ class ContentBlock(BaseModel):
     block_id: str = Field(..., description="Unique ID for this block, inherited from PreliminaryBlock.")
     tmp_id: Optional[str] = Field(None, description="Temporary ID used during processing, can be same as block_id or different.")
     user_id: Optional[str] = Field(None, description="Identifier of the user associated with this content block.")
-    document_id: Optional[str] = Field(None, description="Identifier of the source document, linking this block to its origin.")
+    document_id: Optional[str] = Field(None, description="Identifier of the source document from DocumentMetadata.")
     type: str = Field(..., description="Type of content (e.g., 'text', 'heading', 'list', 'image', 'code_snippet', 'math_text', 'table').")
     order_index: Optional[int] = Field(None, description="Sequential order of the block in the reconstructed content.")
     
@@ -71,6 +71,8 @@ class OrchestrationOutput(BaseModel):
     document_id: Optional[str] = Field(default=None, description="Document identifier (job_id) for the entire orchestration, if available.")
     source_identifier: str
     source_type: str
+    user_id: Optional[str] = Field(None, description="Identifier of the user who initiated the request, mirrored from input or document_metadata.")
+    document_id: Optional[str] = Field(None, description="Unique identifier for the processed document instance, mirrored from document_metadata.")
     processing_level_used: str
     extracted_title: Optional[str] = None
     is_long_article: bool = False

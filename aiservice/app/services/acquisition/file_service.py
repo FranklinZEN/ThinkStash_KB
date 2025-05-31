@@ -31,7 +31,7 @@ class FileAcquisitionServiceInput(BaseModel):
     # job_id_for_gcs_path will be job_id
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking.")
-    user_id: Optional[str] = Field(None, description="Optional user ID for tracking and associating with metadata.")
+    user_id: Optional[str] = None # Added user_id
 
 # Removed ProcessedFileImage and FileAcquisitionServiceOutput models
 
@@ -384,12 +384,13 @@ class FileAcquisitionService(BaseService):
         
         # Initialize DocumentMetadata with job_id and user_id early
         document_metadata = DocumentMetadata(
-            document_id=current_job_id,         # USE current_job_id
-            user_id=current_user_id,          # USE current_user_id
-            source_identifier=file_input.file_path,
-            source_type=file_input.source_content_type,
-            extracted_at=datetime.utcnow(),
-            title=os.path.basename(file_input.file_path) # Default title to filename
+            document_id=job_id,
+            user_id=file_input.user_id or "unknown_user_file_service", # Use provided user_id
+            source_identifier=file_path,
+            source_type=file_type,
+            title=os.path.basename(file_path), # Default title
+            extracted_at=datetime.utcnow()
+            # Other fields will be populated by specific processors
         )
 
         if not os.path.exists(file_input.file_path):

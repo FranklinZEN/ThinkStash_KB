@@ -1,6 +1,7 @@
 import time
 from typing import Optional, List, Dict, Union, Any
 import logging
+import uuid # Added for generating new block_ids
 
 from pydantic import BaseModel, Field
 
@@ -30,171 +31,171 @@ class ContentStructuringService(BaseService):
 
     async def execute(self, service_input: ContentStructuringServiceInput) -> ServiceResult[List[ContentBlock]]:
         start_time = time.time()
-        self.logger.debug(f"CSS: Logger effective level: {logging.getLevelName(self.logger.getEffectiveLevel())}") # DEBUG LOGGER LEVEL
+        final_content_blocks: List[ContentBlock] = []
         try: 
-            final_content_blocks: List[ContentBlock] = []
-            
             if not service_input:
                 self.logger.error("Service input is None.")
                 return ServiceResult.failure(data=[], error_message="Service input is None.")
+
+            current_user_id = service_input.user_id
+            current_document_id = service_input.document_metadata.document_id if service_input.document_metadata else None
+            if not current_document_id and service_input.job_id:
+                 self.logger.warning(f"document_metadata.document_id not found, using job_id {service_input.job_id} as document_id.")
+                 current_document_id = service_input.job_id
 
             if service_input.preliminary_blocks is None:
                 self.logger.error("service_input.preliminary_blocks is None.")
                 return ServiceResult.failure(data=[], error_message="Preliminary blocks list is None.")
 
-            if service_input.enriched_images is None:
-                self.logger.warning("Enriched images list is None. This might cause issues with image linking.")
-                enriched_images_map: Dict[str, EnrichedImageMetadata] = {}
+            enriched_images_map: Dict[str, EnrichedImageMetadata] = {}
+            if service_input.enriched_images:
+                enriched_images_map = {img.image_id: img for img in service_input.enriched_images}
             else:
-                enriched_images_map: Dict[str, EnrichedImageMetadata] = \
-                    {img.image_id: img for img in service_input.enriched_images}
-            self.logger.debug(f"CSS: enriched_images_map created. Keys: {list(enriched_images_map.keys())}") # DEBUG LOG
+                self.logger.warning("Enriched images list is None or empty. This might cause issues with image linking.")
+                
 
             if not service_input.preliminary_blocks:
                 return ServiceResult.success(data=[])
 
-            # --- Refactored List Handling Logic ---
-            # active_lists_stack will hold dictionaries representing lists currently being built.
-            # Each dict: {'level': int, 'ordered': bool, 'items': List[Union[str, Dict]], 
-            #             'block_id_prefix': str, 'page_number': Optional[int], 'bbox': Optional[List[float]]}
             active_lists_stack: List[Dict[str, Any]] = []
+            
+            def get_common_block_args(p_block: PreliminaryBlock) -> Dict[str, Any]:
+                return {
+                    "tmp_id": p_block.block_id,
+                    "user_id": current_user_id,
+                    "document_id": current_document_id,
+                    "order_index": p_block.order,
+                    "page_number": p_block.page_number,
+                    "bbox": p_block.bbox
+                }
 
-            def create_list_content_block(list_data: Dict[str, Any]) -> ContentBlock:
+            def create_list_content_block(list_data: Dict[str, Any], first_list_item_p_block: PreliminaryBlock) -> ContentBlock:
+                common_args = get_common_block_args(first_list_item_p_block)
+                # For list block, tmp_id can reference the p_block.block_id of the first item that started the list
+                common_args["tmp_id"] = list_data['block_id_prefix'] # p_block.block_id of the first list item
+
                 return ContentBlock(
-                    block_id=f"{list_data['block_id_prefix']}_list",
+                    block_id=str(uuid.uuid4()),
                     type='list',
                     items=list_data['items'],
                     ordered=list_data['ordered'],
-                    page_number=list_data['page_number'],
-                    bbox=list_data['bbox']
+                    **common_args 
                 )
 
             try:
+                first_p_block_for_current_list: Optional[PreliminaryBlock] = None
+
                 for p_block in sorted(service_input.preliminary_blocks, key=lambda b: b.order):
-                    # --- Handle List Finalization based on p_block type OR level change ---
+                    common_args = get_common_block_args(p_block)
+
                     if p_block.type != 'list_item':
-                        # If we encounter a non-list item, finalize ALL active lists.
+                        first_p_block_for_current_list = None 
                         while active_lists_stack:
                             final_list_data = active_lists_stack.pop()
-                            list_cb = create_list_content_block(final_list_data)
-                            if active_lists_stack: # If there's a parent list
+                            p_block_ref_for_list = final_list_data.get('p_block_ref')
+                            if not p_block_ref_for_list:
+                                self.logger.error(f"Could not find p_block_ref for list_data: {final_list_data.get('block_id_prefix')}. Using potentially inaccurate metadata for list block.")
+                                # This case should be rare if p_block_ref is always set when a list starts
+                                # As a last resort, we might not have a specific p_block for the list's overall metadata
+                                # However, create_list_content_block expects one.
+                                # For now, this will likely cause an error if p_block_ref is None.
+                                # A robust fallback might involve taking metadata from the p_block that *closed* the list,
+                                # or the first item in final_list_data if it's a ContentBlock itself.
+                                # For now, we rely on p_block_ref being present.
+                                continue # Skip this list if essential ref is missing
+                            
+                            list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
+                            if active_lists_stack:
                                 active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
-                            else: # This was a top-level list
+                            else:
                                 final_content_blocks.append(list_cb)
                     
-                    # --- Process PreliminaryBlock ---
                     if p_block.type == 'text':
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='text', content=p_block.text_content,
-                            page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='text', content=p_block.text_content, **common_args))
                     elif p_block.type == 'heading':
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='heading', content=p_block.text_content,
-                            level=p_block.heading_level, page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='heading', content=p_block.text_content, level=p_block.heading_level, **common_args))
                     elif p_block.type == 'code_snippet':
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='code_snippet', content=p_block.code_content,
-                            language=p_block.code_language, page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
-                    elif p_block.type == 'math_text': # Assuming 'math_text' in PreliminaryBlock maps to 'math' in ContentBlock
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='math', content=p_block.text_content, # ContentBlock calls it 'math'
-                            page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='code_snippet', content=p_block.code_content, language=p_block.code_language, **common_args))
+                    elif p_block.type == 'math_text': 
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='math', content=p_block.text_content, **common_args))
                     elif p_block.type == 'image_placeholder':
                         self.logger.debug(f"CSS: Processing image_placeholder. p_block.image_id_ref: '{p_block.image_id_ref}'") # DEBUG LOG
                         if p_block.image_id_ref and p_block.image_id_ref in enriched_images_map:
                             enriched_img = enriched_images_map[p_block.image_id_ref]
                             final_content_blocks.append(ContentBlock(
-                                block_id=p_block.block_id, # Use prelim block's ID for the image block
+                                block_id=str(uuid.uuid4()), 
                                 type='image',
-                                image_id_ref=enriched_img.image_id, # Corresponds to EnrichedImageMetadata.image_id
+                                image_id_ref=enriched_img.image_id, 
                                 gcs_url=enriched_img.gcs_url,
                                 alt_text=enriched_img.alt_text,
                                 caption=enriched_img.caption,
                                 llm_description=enriched_img.llm_description,
                                 width=enriched_img.width,
                                 height=enriched_img.height,
-                                page_number=p_block.page_number, # From placeholder
-                                bbox=p_block.bbox              # From placeholder
+                                **common_args
                             ))
                         else:
-                            # Placeholder for an image whose metadata wasn't found
-                            final_content_blocks.append(ContentBlock(
-                                block_id=p_block.block_id, type='text', 
-                                content=f"[Image Placeholder: ID {p_block.image_id_ref} not found in enriched_images]",
-                                page_number=p_block.page_number, bbox=p_block.bbox
-                            ))
+                            final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='text', content=f"[Image Placeholder: ID {p_block.image_id_ref} not found in enriched_images]", **common_args))
                     elif p_block.type == 'table_placeholder':
                         table_html = p_block.custom_attributes.get('html_content') if p_block.custom_attributes else None
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='table', content=table_html, # Store HTML content
-                            page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='table', content=table_html, **common_args))
                     elif p_block.type == 'list_item':
                         item_content = p_block.list_item_data if p_block.list_item_data is not None else p_block.text_content
                         if item_content is None: item_content = ""
 
                         current_item_level = p_block.list_level if p_block.list_level is not None else 0
                         
-                        # 1. Finalize lists deeper than current item's level
                         while active_lists_stack and active_lists_stack[-1]['level'] > current_item_level:
                             final_list_data = active_lists_stack.pop()
-                            list_cb = create_list_content_block(final_list_data)
-                            if active_lists_stack: # Must have a parent if its level was > current_item_level
+                            p_block_ref_for_list = final_list_data.get('p_block_ref')
+                            if not p_block_ref_for_list: continue # Should have been logged before
+                            list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
+                            if active_lists_stack:
                                 active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
-                            else: # This should ideally not happen if logic is correct (popped too much)
-                                self.logger.warning(f"Popped a list (ID prefix: {final_list_data['block_id_prefix']}) that had no parent during level reduction.")
+                            else:
                                 final_content_blocks.append(list_cb)
 
-                        # 2. If stack is empty, or current item starts a new list (different level or type)
                         if not active_lists_stack or \
                            active_lists_stack[-1]['level'] != current_item_level or \
                            active_lists_stack[-1]['ordered'] != p_block.list_ordered:
                             
-                            # If it's a new list at the same level (e.g. ul then another ul), finalize previous one at this level
                             if active_lists_stack and active_lists_stack[-1]['level'] == current_item_level:
                                 final_list_data = active_lists_stack.pop()
-                                list_cb = create_list_content_block(final_list_data)
-                                if active_lists_stack: # Parent list
+                                p_block_ref_for_list = final_list_data.get('p_block_ref')
+                                if not p_block_ref_for_list: continue
+                                list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
+                                if active_lists_stack:
                                      active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
-                                else: # Top-level list
+                                else:
                                     final_content_blocks.append(list_cb)
+                            
+                            first_p_block_for_current_list = p_block 
 
-                            # Start a new list for the current item's level
                             new_list_data = {
                                 'level': current_item_level,
                                 'ordered': p_block.list_ordered,
                                 'items': [],
                                 'block_id_prefix': p_block.block_id.rsplit('_li', 1)[0] if '_li' in p_block.block_id else p_block.block_id,
-                                'page_number': p_block.page_number,
-                                'bbox': p_block.bbox # Bbox of the first item serves as initial list bbox
+                                'p_block_ref': first_p_block_for_current_list 
                             }
                             active_lists_stack.append(new_list_data)
                         
-                        # 3. Add item to the current list (top of the stack)
                         active_lists_stack[-1]['items'].append(str(item_content))
 
-                    else: # Other block types (non-text, non-list_item, already handled above for list finalization)
-                        final_content_blocks.append(ContentBlock(
-                            block_id=p_block.block_id, type='text',
-                            content=f"[Unsupported PreliminaryBlock Type: {p_block.type}] {p_block.text_content or p_block.code_content or ''}".strip(),
-                            page_number=p_block.page_number, bbox=p_block.bbox
-                        ))
+                    else: 
+                        final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='text', content=f"[Unsupported PreliminaryBlock Type: {p_block.type}] {p_block.text_content or p_block.code_content or ''}".strip(), **common_args))
 
-                # Finalize any remaining lists at the end of all blocks
                 while active_lists_stack:
                     final_list_data = active_lists_stack.pop()
-                    list_cb = create_list_content_block(final_list_data)
-                    if active_lists_stack: # If there's a parent list
+                    p_block_ref_for_list = final_list_data.get('p_block_ref')
+                    if not p_block_ref_for_list: continue
+                    list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
+                    if active_lists_stack: 
                         active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
-                    else: # This was a top-level list
+                    else: 
                         final_content_blocks.append(list_cb)
 
             except Exception as e_structuring_loop:
-                # Log the problematic block and the exception
                 problematic_block_details = "Unknown (p_block not available or error before first iteration)"
                 if 'p_block' in locals() and p_block:
                     try:
@@ -204,7 +205,7 @@ class ContentStructuringService(BaseService):
                 
                 error_msg = f"Error during content structuring loop. Last processed/problematic p_block (approx): {problematic_block_details}. Exception: {type(e_structuring_loop).__name__}: {e_structuring_loop}"
                 self.logger.critical(f"{error_msg}", exc_info=True)
-                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg)
+                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg) # Return partially processed blocks if any
             
             duration = time.time() - start_time
             self.logger.info(f"ContentStructuringService finished successfully in {duration:.2f}s. Blocks created: {len(final_content_blocks)}.")
@@ -212,7 +213,6 @@ class ContentStructuringService(BaseService):
 
         except Exception as e_outer_execute:
             error_message = f"Outer exception in ContentStructuringService.execute: {type(e_outer_execute).__name__}: {str(e_outer_execute)}"
-            # Attempt to get service_input details if available
             input_summary = "service_input was None or unavailable for summary"
             if 'service_input' in locals() and service_input:
                 try:
@@ -222,7 +222,7 @@ class ContentStructuringService(BaseService):
             
             full_error_message = f"{error_message}. Input summary: {input_summary}"
             self.logger.critical(f"FATAL ERROR in ContentStructuringService: {full_error_message}", exc_info=True)
-            return ServiceResult.failure(data=[], error_message=full_error_message) 
+            return ServiceResult.failure(data=final_content_blocks, error_message=full_error_message) # Return partially processed blocks if any
 
 # Example usage (conceptual, not run as part of the service file)
 # if __name__ == '__main__':

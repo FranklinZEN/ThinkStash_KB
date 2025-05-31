@@ -28,10 +28,9 @@ class ContentRewriteAgents:
         self.user_id = user_id # Store user_id
         print(f"ContentRewriteAgents initialized with user_id: {self.user_id}") # For debugging
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm) 
-        self.content_processor_tool = FastContentBlockProcessorTool(
-            user_id=self.user_id,
-            result_as_answer=True
-        )
+        self.content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id) # Pass user_id
+        self.summarizer_temperature = 0.0
+        self.summarizer_max_tokens = 5000
 
     def summarization_agent(self) -> Agent:
         """

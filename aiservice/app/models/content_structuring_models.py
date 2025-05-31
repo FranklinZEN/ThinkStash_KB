@@ -28,6 +28,7 @@ class ContentStructuringServiceInput(BaseModel):
     enriched_images: List[EnrichedImageMetadata] = Field(..., description="List of enriched image metadata from ImageProcessingService.")
     document_metadata: DocumentMetadata = Field(..., description="Document metadata from acquisition services.")
     job_id: Optional[str] = Field(None, description="Optional job identifier.")
+    user_id: Optional[str] = Field(None, description="Identifier of the user who initiated the process.")
 
 # Output model for ContentStructuringService is implicitly List[ContentBlock]
 # from aiservice.app.models.orchestration_models.py, so no specific output model here. 

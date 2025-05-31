@@ -28,7 +28,7 @@ class WebAcquisitionServiceInput(BaseModel):
     url: str = Field(..., description="The URL to fetch and process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images. 'full_content' enables image extraction.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking or unique ID generation.")
-    user_id: Optional[str] = Field(None, description="Optional user ID for tracking and associating with metadata.")
+    user_id: Optional[str] = None # Added user_id
 
 # --- Configuration Data (adapted from WebContentFetcherTool) ---
 UNSUPPORTED_URL_TYPE_DOMAINS: Set[str] = {
@@ -340,113 +340,123 @@ class WebAcquisitionService(BaseService):
         is_trafilatura_content: bool,
         full_html_content_for_metadata_and_images: str,
         final_url: str, 
-        job_id: Optional[str], 
-        user_id: Optional[str],
+        job_id: Optional[str],
+        user_id: Optional[str], # Added user_id parameter
         processing_level: str
     ) -> Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]:
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images_list: List[RawImageInput] = []
         
-        self.logger.debug(f"_parse_and_structure_html called for URL: {final_url}, job_id: {job_id}, user_id: {user_id}")
+        # Full page soup for metadata and image extraction - always from original full HTML
+        soup_full_page = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
+        
+        isolated_main_content_html: Optional[str] = None # Will be set if not using Trafilatura content
+        main_content_element_found: Optional[Tag] = None # Will be set if not using Trafilatura content
+        soup_for_structuring: Optional[Union[BeautifulSoup, Tag]] = None # Can be the whole doc or a specific tag
 
-        doc_id_prefix_for_blocks = job_id or hashlib.md5(final_url.encode()).hexdigest()[:16]
+        if is_trafilatura_content and html_to_parse:
+            self.logger.info("Using Trafilatura's extracted HTML snippet for structuring.")
+            temp_soup = BeautifulSoup(html_to_parse, 'lxml')
+            main_tag_in_snippet = temp_soup.find('main')
+            if main_tag_in_snippet:
+                soup_for_structuring = main_tag_in_snippet 
+            elif temp_soup.find('doc'): # Trafilatura often uses <doc>
+                doc_tag_in_snippet = temp_soup.find('doc')
+                soup_for_structuring = doc_tag_in_snippet
+            else:
+                soup_for_structuring = temp_soup 
+        else:
+            self.logger.info("Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.")
+            # --- Start Fallback Main Content Isolation using BeautifulSoup Selectors ---
+            main_content_element_found: Optional[Tag] = None
+            for selector in self.MAIN_CONTENT_SELECTORS:
+                try:
+                    candidate_element = soup_full_page.select_one(selector)
+                    if candidate_element:
+                        if candidate_element.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']) and len(candidate_element.get_text(strip=True)) > 200:
+                            main_content_element_found = candidate_element
+                            log_snippet_raw = str(main_content_element_found)[:500]
+                            log_snippet_clean = log_snippet_raw.replace('\n', ' ')
+                            self.logger.debug(f"(Fallback) Selected main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}")
+                            break
+                except Exception as e_select:
+                    self.logger.warning(f"(Fallback) Selector error ('{selector}') during main content isolation: {e_select}")
+                    pass
+            self.logger.debug("Finished Main Content Isolation (Fallback BS4).")
 
-        # --- Document Metadata Creation ---
-        doc_meta_obj = DocumentMetadata(
-            document_id=job_id,
-            user_id=user_id,
+            if main_content_element_found:
+                log_isolated_snippet_raw = str(main_content_element_found)[:500]
+                log_isolated_snippet_clean = log_isolated_snippet_raw.replace('\n', ' ')
+                self.logger.debug(f"(Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}")
+                isolated_main_content_html = str(main_content_element_found)
+                soup_for_structuring = BeautifulSoup(isolated_main_content_html, 'lxml')
+            else:
+                self.logger.info("(Fallback) No specific main content container found by BS4, using full body/page for structuring.")
+                if soup_full_page.body:
+                    soup_for_structuring = BeautifulSoup(str(soup_full_page.body), 'lxml')
+                else:
+                    soup_for_structuring = soup_full_page
+        
+        # --- 0.B Remove Boilerplate Content (from the selected soup_for_structuring) ---
+        # This runs whether content is from Trafilatura or BS4 fallback
+        # print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
+        for selector_idx, selector in enumerate(BOILERPLATE_SELECTORS):
+            try:
+                # Ensure soup_for_structuring is not None before calling .select()
+                if soup_for_structuring:
+                    # print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
+                    elements_found = soup_for_structuring.select(selector)
+                    # print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
+                    
+                    for i, element in enumerate(elements_found):
+                        if element:
+                            # if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"): # Example of selective uncommenting
+                            #     print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
+                            element.decompose()
+                else:
+                    # print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
+                    pass # No need to print if it's none, just skip
+            except Exception as e_decompose:
+                # self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Optional logging
+                self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}")
+                pass
+        # print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
+        
+        # --- 1. Populate DocumentMetadata (using soup_full_page for broader context like <head>) ---
+        doc_title: Optional[str] = None
+        if soup_full_page.title and soup_full_page.title.string:
+            doc_title = soup_full_page.title.string.strip()
+        
+        og_title_tag = soup_full_page.find('meta', property='og:title')
+        if og_title_tag and isinstance(og_title_tag, Tag) and og_title_tag.get('content'):
+            og_title = str(og_title_tag['content']).strip()
+            if og_title: doc_title = og_title
+
+        og_description_tag = soup_full_page.find('meta', property='og:description')
+        og_description = str(og_description_tag['content']).strip() if og_description_tag and isinstance(og_description_tag, Tag) and og_description_tag.get('content') else None
+        
+        meta_description_tag = soup_full_page.find('meta', attrs={'name': 'description'})
+        meta_description = str(meta_description_tag['content']).strip() if meta_description_tag and isinstance(meta_description_tag, Tag) and meta_description_tag.get('content') else None
+        
+        description = og_description or meta_description
+
+        source_identifier_for_gcs = final_url 
+        source_type_for_gcs = "url"
+        doc_job_id = job_id or f"web_{uuid.uuid4().hex[:8]}"
+
+        document_metadata_obj = DocumentMetadata(
+            document_id=doc_job_id, 
+            user_id=user_id or "unknown_user_web_service", # Use passed user_id
             source_identifier=final_url,
             source_type="url",
             final_url=final_url,
-            extracted_at=datetime.utcnow(),
-            title=None,
-            author=None,
-            subject=None,
-            keywords=[],
-            creation_date=None,
-            modification_date=None,
-            total_pages=None,
-            language_detected=None,
-            custom_fields={}
+            title=doc_title,
+            custom_fields={"description": description} if description else {},
+            extracted_at=datetime.utcnow()
         )
 
-        soup_for_metadata = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
-        if soup_for_metadata.title and soup_for_metadata.title.string:
-            doc_meta_obj.title = soup_for_metadata.title.string.strip()
-        else:
-            doc_meta_obj.title = urlparse(final_url).path.split('/')[-1] or urlparse(final_url).hostname
-        
-        meta_author = soup_for_metadata.find("meta", attrs={"name": re.compile(r"author", re.I)})
-        if meta_author and meta_author.get("content"):
-            doc_meta_obj.author = meta_author.get("content").strip()
-        
-        # --- Comprehensive Image Extraction ---
-        if processing_level == "full_content":
-            raw_images_list = await self._extract_images_from_html(
-                html_content_str=full_html_content_for_metadata_and_images, 
-                base_url=final_url, 
-                job_id=job_id,
-                original_source_identifier_for_gcs_path=final_url,
-                source_type_for_gcs_path="url"
-            )
-
-        # --- Main Content Parsing into PreliminaryBlocks (NEW LOGIC) ---
-        current_block_order = 0 # This variable is not strictly needed if order is len(blocks) at append
-        main_content_soup = BeautifulSoup(html_to_parse, 'lxml') # Parse the (potentially Trafilatura-cleaned) main HTML
-
-        # Create a lookup map for image_id_ref from the comprehensive raw_images_list
-        # Key: absolute image URL, Value: image_id from RawImageInput
-        raw_image_id_map_by_url: Dict[str, str] = {}
-        raw_image_alt_map_by_url: Dict[str, Optional[str]] = {}
-        if processing_level == "full_content":
-            for raw_img in raw_images_list:
-                if raw_img.source_url: # source_url should be the absolute URL of the image
-                     raw_image_id_map_by_url[raw_img.source_url] = raw_img.image_id
-                     raw_image_alt_map_by_url[raw_img.source_url] = raw_img.alt_text
-
-        # Determine the starting point for iteration
-        elements_to_iterate: List[Tag] = []
-        if main_content_soup.body:
-            elements_to_iterate = [child for child in main_content_soup.body.children if isinstance(child, Tag)]
-            self.logger.debug(f"Parsing main content from body. Found {len(elements_to_iterate)} direct child Tags.")
-        else: 
-            elements_to_iterate = [child for child in main_content_soup.children if isinstance(child, Tag)]
-            self.logger.debug(f"Parsing main content from fragment root. Found {len(elements_to_iterate)} direct child Tags.")
-        
-        # If no direct children tags were found, but the soup is not empty, 
-        # it might be a case where trafilatura returns a list of tags not under a single root,
-        # or a single root tag whose children we want (like <doc> -> <p>, <h1>)
-        # So, if elements_to_iterate is empty but main_content_soup has *some* tags, let's try to get them all.
-        if not elements_to_iterate and main_content_soup.find(True): # find(True) checks if any tag exists
-            self.logger.debug("No direct children Tags found for iteration, attempting to find all relevant block-level tags recursively from main_content_soup root.")
-            # This will get all specified tags, regardless of depth from main_content_soup root
-            elements_to_iterate = main_content_soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'figure', 'pre', 'ul', 'ol', 'table', 'div'], recursive=True)
-            self.logger.debug(f"Found {len(elements_to_iterate)} tags via recursive find_all as a fallback.")
-
-        for element in elements_to_iterate:
-            # Call the recursive processor for each top-level element found or all relevant tags if using fallback
-            # The _process_html_element function will append to preliminary_blocks and handle order internally.
-            await self._process_html_element(element, final_url, doc_id_prefix_for_blocks, preliminary_blocks, raw_image_id_map_by_url, raw_image_alt_map_by_url)
-
-        # Fallback if no blocks were created (e.g., very unusual HTML structure or empty trafilatura output)
-        if not preliminary_blocks and html_to_parse.strip():
-            self.logger.warning(f"_parse_and_structure_html for {final_url}: No blocks created from main content parsing. Creating a single text block as fallback.")
-            fallback_text = BeautifulSoup(html_to_parse, 'lxml').get_text(separator='\\n', strip=True)
-            if fallback_text:
-                preliminary_blocks.append(PreliminaryBlock(
-                    block_id=f"{doc_id_prefix_for_blocks}_b0",
-                    type="text",
-                    text_content=fallback_text,
-                    order=0
-                ))
-        
-        self.logger.debug(f"_parse_and_structure_html returning {len(preliminary_blocks)} preliminary_blocks for job_id {job_id}. Title: {doc_meta_obj.title}")
-
-        # Log the HTML structure being parsed
-        self.logger.debug(f"_parse_and_structure_html: About to process the following HTML structure from Trafilatura:\\n{main_content_soup.prettify()}") # ADDED LOG
-
-        # --- Add any remaining images from raw_images_list that weren't turned into placeholders ---
-        # This handles cases where Trafilatura might have stripped image tags processed by _extract_images_from_html
+        # --- 2. Extract RawImageInput objects (if full_content) ---
+        # Always use the original full HTML for image extraction
         if processing_level == "full_content":
             processed_image_ids_in_blocks = set()
             for pb in preliminary_blocks:
@@ -764,20 +774,23 @@ class WebAcquisitionService(BaseService):
         return filtered_blocks
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
-        start_time = time.time()
-        current_job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
-        current_user_id = web_input.user_id
+        request_start_time = time.time()
+        url = web_input.url
+        job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
+        processing_level = web_input.processing_level
 
-        preliminary_blocks_default: List[PreliminaryBlock] = []
-        document_metadata_default = DocumentMetadata(
-            document_id=current_job_id,
-            user_id=current_user_id,
-            source_identifier=web_input.url,
-            source_type="url",
-            extracted_at=datetime.utcnow(),
-            title=urlparse(web_input.url).path.split('/')[-1] or urlparse(web_input.url).hostname
+        # Initialize variables that will be part of the successful return tuple
+        preliminary_blocks_list: List[PreliminaryBlock] = []
+        raw_images_list: List[RawImageInput] = [] # Use raw_images_list consistently
+        
+        # Initialize document_metadata_obj early and fully for consistent error returns
+        document_metadata_obj = DocumentMetadata(
+            document_id=job_id,
+            user_id=web_input.user_id or "unknown_user_web_service", # Use provided user_id
+            source_identifier=url,
+            source_type='url', # Initial type, may change if it's a direct PDF link
+            extracted_at=datetime.utcnow()
         )
-        raw_images_default: List[RawImageInput] = []
         
         html_content_str: Optional[str] = None
         final_url_val: str = web_input.url # Start with input URL, will be updated by redirects if fetch occurs
@@ -991,9 +1004,9 @@ class WebAcquisitionService(BaseService):
                     is_trafilatura_content=is_trafilatura_content_available, # Pass the flag
                     full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
-                    job_id=current_job_id,
-                    user_id=current_user_id,
-                    processing_level=web_input.processing_level
+                    job_id=job_id,
+                    user_id=web_input.user_id, # Pass user_id here
+                    processing_level=processing_level
                 )
             else:
                 # Should not happen if fetching was successful and content type was one of the above

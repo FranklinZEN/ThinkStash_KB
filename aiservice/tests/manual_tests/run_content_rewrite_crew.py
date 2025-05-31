@@ -39,6 +39,8 @@ from crewai import Task, Crew
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents # To get the agent
 from aiservice.app.config.llm_config import get_configured_llm, reset_llm_client # For direct LLM if needed for agent
 
+JSON_INPUT_FILE_PATH = os.path.join(PROJECT_ROOT, "aiservice", "scripts", "e2e_test_output_https___www_uber_com_blog_deepeta_how_uber_predict.json")
+
 def main():
     # ADDED ArgumentParser setup
     parser = argparse.ArgumentParser(description="Manual test script for ContentRewriteCrew.")
