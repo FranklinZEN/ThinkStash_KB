@@ -28,6 +28,7 @@ class WebAcquisitionServiceInput(BaseModel):
     url: str = Field(..., description="The URL to fetch and process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images. 'full_content' enables image extraction.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking or unique ID generation.")
+    user_id: Optional[str] = None # Added user_id
 
 # --- Configuration Data (adapted from WebContentFetcherTool) ---
 UNSUPPORTED_URL_TYPE_DOMAINS: Set[str] = {
@@ -339,7 +340,8 @@ class WebAcquisitionService(BaseService):
         is_trafilatura_content: bool, # Flag to indicate the source of html_to_parse
         full_html_content_for_metadata_and_images: str, # Always the original full HTML
         final_url: str, 
-        job_id: Optional[str], 
+        job_id: Optional[str],
+        user_id: Optional[str], # Added user_id parameter
         processing_level: str
     ) -> Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]:
         
@@ -445,6 +447,7 @@ class WebAcquisitionService(BaseService):
 
         document_metadata_obj = DocumentMetadata(
             document_id=doc_job_id, 
+            user_id=user_id or "unknown_user_web_service", # Use passed user_id
             source_identifier=final_url,
             source_type="url",
             final_url=final_url,
@@ -690,8 +693,9 @@ class WebAcquisitionService(BaseService):
         # Initialize document_metadata_obj early and fully for consistent error returns
         document_metadata_obj = DocumentMetadata(
             document_id=job_id,
-            source_identifier=url, # Use the input URL as the primary identifier
-            source_type='url', 
+            user_id=web_input.user_id or "unknown_user_web_service", # Use provided user_id
+            source_identifier=url,
+            source_type='url', # Initial type, may change if it's a direct PDF link
             extracted_at=datetime.utcnow()
         )
         
@@ -907,6 +911,7 @@ class WebAcquisitionService(BaseService):
                     full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
                     job_id=job_id,
+                    user_id=web_input.user_id, # Pass user_id here
                     processing_level=processing_level
                 )
             else:

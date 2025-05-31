@@ -105,14 +105,16 @@ class ParallelOrchestrator(BaseService):
             web_acq_input = WebAcquisitionServiceInput(
                 url=orchestrator_input.source_identifier,
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.web_acquisition_service.execute(web_acq_input)
         elif determined_service_name == "PDFAcquisitionService":
             pdf_acq_input = PDFAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier, # Can be path or URL if service handles downloads
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input)
         elif determined_service_name == "FileAcquisitionService":
@@ -120,7 +122,8 @@ class ParallelOrchestrator(BaseService):
                 file_path=orchestrator_input.source_identifier,
                 source_content_type=initial_source_type_for_routing, # file service might refine this
                 processing_level=orchestrator_input.processing_level,
-                job_id=job_id
+                job_id=job_id,
+                user_id=orchestrator_input.user_id
             )
             acq_result = await self.file_acquisition_service.execute(file_acq_input)
         else:
@@ -178,7 +181,8 @@ class ParallelOrchestrator(BaseService):
             preliminary_blocks=preliminary_blocks,
             enriched_images=enriched_images_list, 
             document_metadata=document_metadata_obj,
-            job_id=job_id
+            job_id=job_id,
+            user_id=orchestrator_input.user_id
         )
 
         structuring_result = await self.content_structuring_service.execute(structuring_input)
@@ -247,11 +251,23 @@ class ParallelOrchestrator(BaseService):
         # Otherwise, the OrchestrationOutput.document_metadata will be None or a minimal default.
         # The current structure passes document_metadata_obj which could be None if acquisition fully failed early.
 
+        output_user_id = None
+        output_document_id = None
+        if doc_meta:
+            output_user_id = doc_meta.user_id
+            output_document_id = doc_meta.document_id
+        elif inp: # Fallback to input if doc_meta is not available
+            output_user_id = inp.user_id
+            # document_id might be inp.job_id if doc_meta is not there
+            output_document_id = inp.job_id 
+
         return OrchestrationOutput(
             status_code=status,
             source_identifier=inp.source_identifier,
             # Use actual_source_type if available, otherwise fallback or keep as is from input
             source_type=actual_source_type or inp.source_type or "unknown", 
+            user_id=output_user_id, # Populate top-level user_id
+            document_id=output_document_id, # Populate top-level document_id
             processing_level_used=inp.processing_level,
             extracted_title=title,
             is_long_article=False, # Placeholder: Implement logic if needed
