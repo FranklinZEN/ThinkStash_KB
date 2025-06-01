@@ -263,8 +263,6 @@ class ParallelOrchestrator(BaseService):
 
         return OrchestrationOutput(
             status_code=status,
-            user_id=doc_meta.user_id if doc_meta else None,
-            document_id=doc_meta.document_id if doc_meta else None,
             source_identifier=inp.source_identifier,
             # Use actual_source_type if available, otherwise fallback or keep as is from input
             source_type=actual_source_type or inp.source_type or "unknown", 

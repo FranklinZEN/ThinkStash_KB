@@ -30,7 +30,7 @@ class ContentRewriteAgents:
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm) 
         self.content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id) # Pass user_id
         self.summarizer_temperature = 0.0
-        self.summarizer_max_tokens = 5000
+        self.summarizer_max_tokens = 500000
 
     def summarization_agent(self) -> Agent:
         """
@@ -74,8 +74,8 @@ class ContentRewriteAgents:
                 "You do not engage in creative writing or summarization yourself. Your sole function is to "
                 "accurately process inputs through your designated tool and return the tool's direct output."
             ),
-            tools=[self.content_processor_tool], # Ensures it uses the tool configured with result_as_answer=True
-            llm=self.llm, # MODIFIED: Explicitly assign the configured LLM
+            tools=[self.content_processor_tool],
+            llm=self.llm, # Assign the configured LLM to prevent OpenAI client instantiation issues
             allow_delegation=False,
             verbose=True,
         )

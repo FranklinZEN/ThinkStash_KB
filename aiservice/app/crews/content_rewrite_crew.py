@@ -41,6 +41,12 @@ class ContentRewriteCrewManager:
         elif hasattr(self.rewrite_input, 'user_id') and self.rewrite_input.user_id: # Fallback to user_id on RewriteContentInput if present
             self.user_id = self.rewrite_input.user_id
         
+        # Initialize document_id_to_pass, providing a default if not available
+        self.document_id_to_pass = "default_doc_id_manager" # Default value
+        if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.document_id:
+            self.document_id_to_pass = self.rewrite_input.document_metadata.document_id
+        # No direct fallback for document_id on RewriteContentInput like user_id, assuming it comes from metadata primarily.
+
         print(f"INFO: ContentRewriteCrewManager initialized with user_id: {self.user_id}, document_id: {self.document_id_to_pass}")
         self.agents_factory = ContentRewriteAgents(user_id=self.user_id) # Pass user_id
         self.crew: Optional[Crew] = None # To store the initialized crew
@@ -78,14 +84,18 @@ class ContentRewriteCrewManager:
         )
 
         task_reconstruct_output = Task(
-            description=(
-                "Reconstruct content blocks using the 'FastContentBlockProcessorTool'.\\n"
-                "Operation: 'reconstruct_content_from_summary'.\\n"
-                "Summarized text: Use the output from the 'task_summarize_content'.\\n"
-                "Image metadata list (JSON string): {{reconstructor_image_metadata_list_json}}\\n"
-                "Document ID: {{reconstructor_document_id}}\\n"
-                "Your output for this task MUST be the direct, unaltered result from the tool call."
-            ),
+            description=dedent("""
+                CRITICAL INSTRUCTION: Your ONLY function is to use the 'FastContentBlockProcessorTool' ONCE and IMMEDIATELY return its exact output.
+                DO NOT add any commentary, explanation, or any text other than the direct tool output.
+                
+                Tool Call Parameters:
+                1. 'operation': Use the exact string 'reconstruct_content_from_summary'.
+                2. 'summarized_text': Use the 'summarized_text' you received from the 'task_summarize_content' output.
+                3. 'image_metadata_list_json': Use the exact JSON string provided in the '{{reconstructor_image_metadata_list_json}}' crew kickoff input variable.
+                4. 'document_id': Use the exact string value provided in the '{{reconstructor_document_id}}' crew kickoff input variable.
+                
+                Your final answer for this task MUST be the direct, unaltered, raw output from the 'FastContentBlockProcessorTool'.
+                """),
             expected_output="A list of ContentBlock dictionaries, reconstructed from the summary and image metadata, as returned by the FastContentBlockProcessorTool.",
             agent=output_constructor_agent, # Agent has the tool
             context=[task_summarize_content]
@@ -176,9 +186,11 @@ class ContentRewriteCrewManager:
             if block.type == "text" and block.content:
                 text_parts.append(block.content)
             elif block.type == "image" and block.image_id_ref:
+                # Normalize gcs_url: replace backslashes with forward slashes
+                normalized_gcs_url = block.gcs_url.replace("\\", "/") if block.gcs_url else None
                 essential_meta = {
                     "image_id_ref": block.image_id_ref,
-                    "gcs_url": block.gcs_url,
+                    "gcs_url": normalized_gcs_url, # Use normalized URL
                     "alt_text": block.alt_text,
                     "caption": block.caption,
                     "llm_description": block.llm_description,
@@ -247,63 +259,124 @@ class ContentRewriteCrewManager:
                     usage_metrics_dict = None
             
             # 6. Process crew output
-            if crew_result_raw:
+            if crew_result_raw: # crew.kickoff() should ideally return the last task's output directly
                 if isinstance(crew_result_raw, list):
                     final_agent_output = crew_result_raw
                 elif isinstance(crew_result_raw, str):
+                    # If it's a string, it might be a JSON representation of the list
                     parsed_raw_output = self._try_json_parse(crew_result_raw)
                     if isinstance(parsed_raw_output, list):
                         final_agent_output = parsed_raw_output
-                
-                # Fallback to tasks_output if crew_result_raw didn't yield a list
-                if (final_agent_output is None and 
-                    hasattr(self.crew, 'tasks_output') and 
-                    self.crew.tasks_output and 
-                    len(self.crew.tasks_output) > 0):
-                    print("INFO: crew_result_raw did not yield a list. Falling back to inspecting tasks_output.") # Retained
-                    last_task_output = self.crew.tasks_output[-1]
-                    
-                    # Prioritize attributes that are more likely to contain the desired list structure
-                    potential_outputs = [
-                        getattr(last_task_output, 'pydantic_output', None),
-                        getattr(last_task_output, 'exported_output', None),
-                        getattr(last_task_output, 'agent_output', None),
-                        getattr(last_task_output, 'raw_output', None), # Raw might be string or list
-                        getattr(last_task_output, 'output', None)    # Generic output
-                    ]
+                    else:
+                        print(f"WARNING: crew_result_raw was a string but did not parse to a list: {crew_result_raw[:500]}") # Retained
+                # Check if crew_result_raw is a CrewOutput object and try to extract from tasks_output
+                elif hasattr(crew_result_raw, 'tasks_output') and crew_result_raw.tasks_output:
+                    print("INFO: crew_result_raw is a CrewOutput object. Attempting to extract from the last task's output.") # Retained
+                    last_task_output_obj = crew_result_raw.tasks_output[-1]
+                    candidate_data = None
+                    if hasattr(last_task_output_obj, 'output') and last_task_output_obj.output is not None:
+                        candidate_data = last_task_output_obj.output
+                        print(f"INFO: Found last_task_output_obj.output. Type: {type(candidate_data)}") # Retained
+                    elif hasattr(last_task_output_obj, 'exported_output') and last_task_output_obj.exported_output is not None:
+                        candidate_data = last_task_output_obj.exported_output
+                        print(f"INFO: Found last_task_output_obj.exported_output. Type: {type(candidate_data)}") # Retained
+                    elif hasattr(last_task_output_obj, 'raw_output') and last_task_output_obj.raw_output is not None:
+                        candidate_data = last_task_output_obj.raw_output
+                        print(f"INFO: Found last_task_output_obj.raw_output. Type: {type(candidate_data)}") # Retained
+                    # Fallback: Try converting the TaskOutput object itself to string if other attributes are None
+                    elif last_task_output_obj is not None: # Check if the object itself exists
+                        print(f"INFO: Trying str(last_task_output_obj) as candidate. Current type of last_task_output_obj: {type(last_task_output_obj)}") # Retained
+                        try:
+                            candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
+                            print(f"INFO: str(last_task_output_obj) successful. Type: {type(candidate_data)}") # Retained
+                        except Exception as e_str_conv:
+                            print(f"WARNING: str(last_task_output_obj) failed: {e_str_conv}") # Retained
 
-                    for out_candidate in potential_outputs:
-                        if isinstance(out_candidate, list):
-                            final_agent_output = out_candidate
-                            break
-                        elif isinstance(out_candidate, str):
-                            parsed_data = self._try_json_parse(out_candidate)
-                            if isinstance(parsed_data, list):
-                                final_agent_output = parsed_data
-                                break
-                    
-                if final_agent_output is None or not isinstance(final_agent_output, list):
-                    final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_TYPE
-                    error_msg_detail = (
-                        f"Crew finished, but the final processed output was not a list as expected. "
-                        f"Output type: {type(final_agent_output)}. Output (first 1000 chars): {str(final_agent_output)[:1000]}."
-                    )
-                    print(f"ERROR: Error in crew execution: {error_msg_detail}") # Retained
-                    final_error_message = error_msg_detail
+                    if candidate_data is not None:
+                        if isinstance(candidate_data, list):
+                            final_agent_output = candidate_data
+                        elif isinstance(candidate_data, str):
+                            parsed_candidate = self._try_json_parse(candidate_data)
+                            if isinstance(parsed_candidate, list):
+                                final_agent_output = parsed_candidate
+                            else:
+                                print(f"WARNING: Last task's output candidate was a string but did not parse to a list: {candidate_data[:500]}") # Retained
+                        else:
+                            print(f"WARNING: Last task's output candidate was not a list or string. Type: {type(candidate_data)}. Value: {str(candidate_data)[:500]}") # Retained
+                    else:
+                        print("WARNING: Could not find a suitable output attribute (output, exported_output, raw_output) on the last task object.") # Retained
+                # Fallback: if crew_result_raw is a CrewOutput object and has a 'raw' attribute which is a string
+                elif hasattr(crew_result_raw, 'raw') and isinstance(crew_result_raw.raw, str):
+                    print("INFO: crew_result_raw is a CrewOutput object. Attempting to parse crew_result_raw.raw") # Retained
+                    parsed_raw_output = self._try_json_parse(crew_result_raw.raw)
+                    if isinstance(parsed_raw_output, list):
+                        final_agent_output = parsed_raw_output
+                    else:
+                        print(f"WARNING: crew_result_raw.raw was a string but did not parse to a list: {crew_result_raw.raw[:500]}") # Retained
                 else:
-                    parsed_content_blocks = self.safe_parse_to_content_blocks(final_agent_output, "ai_rewritten_content_blocks")
-                    if not parsed_content_blocks and final_agent_output: # Non-empty list, but parsing failed
-                        final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION
-                        final_error_message = "Crew output was a list, but failed Pydantic validation into ContentBlocks."
-                        print(f"ERROR: {final_error_message} Input list (first item): {str(final_agent_output[0])[:500] if final_agent_output else 'Empty List'}") # Retained
-                    elif parsed_content_blocks or not final_agent_output: # Successfully parsed or empty list output
-                        final_status_code = OrchestrationStatusCodeEnum.SUCCESS
-                        final_error_message = None
-            else: # crew_result_raw is None or empty
-                final_status_code = OrchestrationStatusCodeEnum.ERROR_NO_OUTPUT_FROM_CREW
-                final_error_message = "Crew execution did not produce any raw result."
-                print(f"ERROR: {final_error_message}") # Retained
+                    print(f"WARNING: crew_result_raw was not a list, string, or CrewOutput object with usable attributes, type: {type(crew_result_raw)}. Value: {str(crew_result_raw)[:500]}") # Retained
+            
+            # Fallback: If final_agent_output is still None (e.g. if crew_result_raw itself was None or previous checks failed)
+            # and self.crew (the Crew object itself) exists and has tasks_output
+            if final_agent_output is None and self.crew and hasattr(self.crew, 'tasks_output') and self.crew.tasks_output:
+                print("INFO: final_agent_output still None. Attempting to extract from self.crew.tasks_output[-1].") # Retained
+                last_task_output_obj = self.crew.tasks_output[-1]
+                
+                # The .output attribute of a TaskOutput often holds the final result from the agent.
+                # For agents that are supposed to return direct tool output, this should be the raw tool output.
+                # CrewAI might also place it in 'exported_output' or 'raw_output'
+                # Let's prioritize .output, then .exported_output, then .raw_output
+                
+                candidate_data = None
+                if hasattr(last_task_output_obj, 'output') and last_task_output_obj.output is not None:
+                    candidate_data = last_task_output_obj.output
+                    print(f"INFO: Found last_task_output_obj.output. Type: {type(candidate_data)}") # Retained
+                elif hasattr(last_task_output_obj, 'exported_output') and last_task_output_obj.exported_output is not None:
+                    candidate_data = last_task_output_obj.exported_output
+                    print(f"INFO: Found last_task_output_obj.exported_output. Type: {type(candidate_data)}") # Retained
+                elif hasattr(last_task_output_obj, 'raw_output') and last_task_output_obj.raw_output is not None:
+                    candidate_data = last_task_output_obj.raw_output
+                    print(f"INFO: Found last_task_output_obj.raw_output. Type: {type(candidate_data)}") # Retained
+                # Fallback: Try converting the TaskOutput object itself to string if other attributes are None
+                elif last_task_output_obj is not None: # Check if the object itself exists
+                    print(f"INFO: Trying str(last_task_output_obj) as candidate. Current type of last_task_output_obj: {type(last_task_output_obj)}") # Retained
+                    try:
+                        candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
+                        print(f"INFO: str(last_task_output_obj) successful. Type: {type(candidate_data)}") # Retained
+                    except Exception as e_str_conv:
+                        print(f"WARNING: str(last_task_output_obj) failed: {e_str_conv}") # Retained
 
+                if candidate_data is not None:
+                    if isinstance(candidate_data, list):
+                        final_agent_output = candidate_data
+                    elif isinstance(candidate_data, str):
+                        parsed_candidate = self._try_json_parse(candidate_data)
+                        if isinstance(parsed_candidate, list):
+                            final_agent_output = parsed_candidate
+                        else:
+                            print(f"WARNING: Last task's output candidate was a string but did not parse to a list: {candidate_data[:500]}") # Retained
+                    else:
+                        print(f"WARNING: Last task's output candidate was not a list or string. Type: {type(candidate_data)}. Value: {str(candidate_data)[:500]}") # Retained
+                else:
+                    print("WARNING: Could not find a suitable output attribute (output, exported_output, raw_output) on the last task object.") # Retained
+
+            if final_agent_output is None or not isinstance(final_agent_output, list):
+                final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_TYPE
+                error_msg_detail = (
+                    f"Crew finished, but the final processed output was not a list as expected. "
+                    f"Output type: {type(final_agent_output)}. Output (first 1000 chars): {str(final_agent_output)[:1000]}."
+                )
+                print(f"ERROR: Error in crew execution: {error_msg_detail}") # Retained
+                final_error_message = error_msg_detail
+            else:
+                parsed_content_blocks = self.safe_parse_to_content_blocks(final_agent_output, "ai_rewritten_content_blocks")
+                if not parsed_content_blocks and final_agent_output: # Non-empty list, but parsing failed
+                    final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION
+                    final_error_message = "Crew output was a list, but failed Pydantic validation into ContentBlocks."
+                    print(f"ERROR: {final_error_message} Input list (first item): {str(final_agent_output[0])[:500] if final_agent_output else 'Empty List'}") # Retained
+                elif parsed_content_blocks or not final_agent_output: # Successfully parsed or empty list output
+                    final_status_code = OrchestrationStatusCodeEnum.SUCCESS
+                    final_error_message = None
         except Exception as e:
             final_status_code = OrchestrationStatusCodeEnum.ERROR_CREW_EXECUTION_FAILED
             final_error_message = f"An exception occurred during crew kickoff or processing: {str(e)}"
