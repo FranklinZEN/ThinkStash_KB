@@ -78,29 +78,37 @@ def test_e2e_title_generation_with_json_file(e2e_content_blocks: List[ContentBlo
     print(f"Starting E2E title generation test for file: {json_file_name}")
     print(f"Loaded {len(e2e_content_blocks)} content blocks.")
     
-    title_crew = GeneralPurposeTitleGenerationCrew(user_id="e2e_test_user")
+    # The user_id is handled by TitleGenerationAgents if needed.
+    # The crew's __init__ now takes an optional request_model, which we are not using here.
+    title_crew = GeneralPurposeTitleGenerationCrew()
     
     print("Running GeneralPurposeTitleGenerationCrew for E2E test...")
-    generated_title = title_crew.run(content_blocks=e2e_content_blocks)
+    # The run method expects a list of dictionaries, not ContentBlock objects directly.
+    # Convert ContentBlock objects to dictionaries using model_dump() for Pydantic v2.
+    # The argument name in the run method is content_block_dicts.
+    generated_title_output = title_crew.run(content_block_dicts=[block.model_dump() for block in e2e_content_blocks])
     
-    print(f"Raw generated title from crew: \"{generated_title}\"")
+    print(f"Raw generated title from crew: \"{generated_title_output.suggested_title}\"")
     
+    generated_title = generated_title_output.suggested_title # Extract the string
+
     assert generated_title is not None, "Generated title should not be None"
     assert isinstance(generated_title, str), "Generated title should be a string"
     
     # Temporarily expect the specific error message, since the tool call is still failing
-    expected_error_message = "Error: No content available for title generation."
-    assert generated_title == expected_error_message, \
-        f"Expected error message '{expected_error_message}', but got '{generated_title}'"
+    # expected_error_message = "Error: No content available for title generation."
+    # assert generated_title == expected_error_message, \
+    #     f"Expected error message '{expected_error_message}', but got '{generated_title}'"
     
     # Comment out original assertions for when a real title is expected
-    # assert "Error:" not in generated_title, f"Title generation should not result in an error string: {generated_title}"
-    # assert len(generated_title.strip()) > 0, "Generated title should not be empty"
+    assert "Error:" not in generated_title, f"Title generation should not result in an error string: {generated_title}"
+    assert len(generated_title.strip()) > 0, "Generated title should not be empty"
 
     print(f"\n==> E2E Test Suggested Title for {json_file_name}: {generated_title}\n")
 
     # Example of a more specific assertion if you know the expected topic of the E2E data
     # For instance, if the e2e data is about "AI in Healthcare":
     # expected_keywords = ["ai", "healthcare", "medical"]
+    # expected_keywords = ["uber", "blog", "session"] # Example for the Uber blog
     # assert any(keyword in generated_title.lower() for keyword in expected_keywords), \
     #     f"Generated title \"{generated_title}\" does not seem related to the expected topic." 

@@ -384,11 +384,11 @@ class FileAcquisitionService(BaseService):
         
         # Initialize DocumentMetadata with job_id and user_id early
         document_metadata = DocumentMetadata(
-            document_id=job_id,
-            user_id=file_input.user_id or "unknown_user_file_service", # Use provided user_id
-            source_identifier=file_path,
-            source_type=file_type,
-            title=os.path.basename(file_path), # Default title
+            document_id=current_job_id,
+            user_id=current_user_id or "unknown_user_file_service",
+            source_identifier=file_input.file_path,
+            source_type=file_input.source_content_type,
+            title=os.path.basename(file_input.file_path),
             extracted_at=datetime.utcnow()
             # Other fields will be populated by specific processors
         )

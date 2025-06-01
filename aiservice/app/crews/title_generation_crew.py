@@ -8,12 +8,16 @@ Aligns with V2.6 Development Plan - Iteration 1.2.
 
 from crewai import Crew, Process, Task
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
 
 from aiservice.app.agents.title_generation_agents import TitleGenerationAgents
 from aiservice.app.models.orchestration_models import ContentBlock
 from crewai.crews.crew_output import CrewOutput # Import CrewOutput
+from aiservice.app.models.insight_generation_models import TitleGenerationRequest
+from aiservice.app.models.task_output_models import TitleGenerationOutput
+from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool # Added for direct use
+from aiservice.app.config.settings import Settings # Corrected class name
 
 class TitleOutput(BaseModel):
     """Pydantic model for the expected output of the title generation task."""
@@ -22,185 +26,179 @@ class TitleOutput(BaseModel):
 class GeneralPurposeTitleGenerationCrew:
     """Creates and runs a CrewAI crew for generating titles from content blocks."""
 
-    def __init__(self, user_id: str = "default_crew_user"):
+    def __init__(self, request_model: Optional[TitleGenerationRequest] = None):
         """
         Initializes the crew.
         Args:
-            user_id: Identifier for the user, can be used for logging or if agents need it.
+            request_model: Optional TitleGenerationRequest object, not used in the current implementation.
         """
-        self.user_id = user_id
-        # Agents factory can be initialized here if it doesn't need per-run parameters
-        # or if user_id is the only parameter needed at init time.
-        self.agents_factory = TitleGenerationAgents() # Pass user_id if TitleGenerationAgents expects it
+        print("Initializing GeneralPurposeTitleGenerationCrew...")
+        self.request_model = request_model
+        # Initialize agents and tools here if they are to be reused across runs
+        # or if their initialization is expensive.
+        self.title_agents = TitleGenerationAgents()
+        self.full_text_extractor_tool = FullTextContentExtractorTool() # Instantiate for direct use
+        self.settings = Settings() # Corrected class name
+        self.llm = self.settings.get_crew_llm()
 
-    def _create_title_task(self, agent: Any) -> Task:
-        """
-        Creates the title generation task for the given agent.
-        The task description guides the agent to use its tools sequentially and handle errors:
-        1. FullTextContentExtractorTool to process 'content_block_dicts'.
-        2. Check if text was extracted; if not, output error in 'generated_title'.
-        3. OptimizedLLMInteractionTool to generate the title using the extracted text with temperature 0.1.
-        """
+        # Agent
+        self.title_crafting_agent = self.title_agents.title_crafting_agent()
+        print(f"Title Crafting Agent Tools: {[tool.name for tool in self.title_crafting_agent.tools]}")
+
+    def _create_title_generation_task(self, extracted_text: str) -> Task:
+        """Creates the task for the title generation agent, providing the pre-extracted text."""
         return Task(
             description=(
-                "Your primary objective is to generate a title.\\n"
-                "IMPORTANT: Your task inputs contain a key named 'content_block_dicts'. The value associated with this key is a list of dictionaries, where each dictionary is a complete representation of a content block.\\n"
-                "Step 1: You MUST use the 'FullTextContentExtractorTool'. This tool expects a single argument which is a list of content block dictionaries. "
-                "You MUST provide the list of dictionaries (obtained from the 'content_block_dicts' key in your task inputs) directly as the argument to this tool. DO NOT WRAP IT IN ANOTHER DICTIONARY. DO NOT MODIFY OR SIMPLIFY THIS LIST. "
-                "The tool will return a string. Store this string result as 'extracted_text'.\\n"
-                "Step 2: Examine the 'extracted_text'. IF 'extracted_text' is an empty string, OR IF it starts with the literal string 'Error:', THEN title generation is not possible. In this scenario, your final output for the 'generated_title' field MUST be the exact string 'Error: No content available for title generation.'.\\n"
-                "Step 3: IF 'extracted_text' is valid (not empty and not an error string), THEN use this 'extracted_text' to generate a title. Call the 'OptimizedLLMInteractionTool', providing the 'extracted_text' as input to the tool. For this LLM call, you MUST use a temperature setting of 0.1. The result should be a concise and relevant title, ideally under 15 words.\\n"
-                "Your final output MUST be a JSON object that strictly conforms to the TitleOutput Pydantic model, specifically by populating the 'generated_title' field with your result (either the generated title or the error message)."
+                f"Your primary objective is to generate a title for the following text content. "
+                f"The text has already been extracted for you.\n\n"
+                f"TEXT CONTENT TO ANALYZE:\n"
+                f"------------------------\n"
+                f"{extracted_text}\n"
+                f"------------------------\n\n"
+                f"Step 1: Carefully review the TEXT CONTENT TO ANALYZE provided above.\n"
+                f"Step 2: IF the TEXT CONTENT TO ANALYZE appears to be empty, nonsensical, or an error message, "
+                f"THEN your final output for the 'generated_title' field MUST be the exact string: "
+                f"'Error: No valid content provided for title generation.'. DO NOT attempt to generate a title.\n"
+                f"Step 3: IF the TEXT CONTENT TO ANALYZE is valid, use the 'OptimizedLLMInteractionTool' "
+                f"to generate a concise, informative, and engaging title (ideally under 15 words) "
+                f"that accurately reflects the main topic of the text. "
+                f"You MUST use a temperature setting of 0.0 for the LLM call via the tool to ensure deterministic and factual titles.\n"
+                f"Step 4: The output of the 'OptimizedLLMInteractionTool' will be the title. "
+                f"Ensure your final answer for the 'generated_title' field is ONLY this title string, or the error string from Step 2."
             ),
             expected_output=(
-                "A single string representing the generated title, or an error message if title generation was not possible. "
-                "This output must conform to the TitleOutput Pydantic model, "
-                "specifically populating the 'generated_title' field."
+                "A single string containing the generated title (e.g., 'The Future of AI in Healthcare') OR "
+                "the specific error message 'Error: No valid content provided for title generation.' if title generation is not possible."
             ),
-            agent=agent,
-            output_pydantic=TitleOutput, # Ensures the output is validated against TitleOutput
-            # async_execution=False, # Default is False, explicit if needed
+            agent=self.title_crafting_agent,
+            # No context needed as text is in description
+            # No async_execution, keep it simple for now
+            # output_json / output_pydantic can be considered later if complex structured output is needed beyond a string
+            # output_file for very long outputs, not applicable here
         )
 
-    def run(self, content_blocks: List[ContentBlock]) -> str:
-        """
-        Runs the title generation crew with the given content blocks.
+    def run(self, content_block_dicts: List[Dict[str, Any]]) -> TitleGenerationOutput:
+        print(f"GeneralPurposeTitleGenerationCrew running with {len(content_block_dicts)} content block(s).")
 
-        Args:
-            content_blocks: A list of ContentBlock objects to process.
+        # Step 1: Extract full text directly using the tool
+        # The FullTextContentExtractorTool's _run method expects List[Dict[str, Any]]
+        # Ensure the input format matches what the tool expects.
+        try:
+            print("[TitleGenerationCrew] Attempting to extract text using FullTextContentExtractorTool...")
+            # The tool's _run method needs to be called correctly. 
+            # If it's a BaseTool, it's usually agent.invoke(tool_input)
+            # If we are using it directly, we call its _run method.
+            extracted_text = self.full_text_extractor_tool._run(content_block_dicts=content_block_dicts)
+            print(f"[TitleGenerationCrew] Extracted text (first 300 chars): {extracted_text[:300]}...")
+        except Exception as e:
+            print(f"[TitleGenerationCrew ERROR] Error during direct text extraction: {e}")
+            extracted_text = "Error: Failed to extract text content for title generation."
 
-        Returns:
-            A string containing the suggested title, or an error message string.
-        """
-        title_agent = self.agents_factory.title_crafting_agent()
-        title_task = self._create_title_task(title_agent)
+        # Prepare task for the agent with the extracted text
+        title_task = self._create_title_generation_task(extracted_text=extracted_text)
 
-        crew = Crew(
-            agents=[title_agent],
+        # Setup Crew
+        title_crew = Crew(
+            agents=[self.title_crafting_agent],
             tasks=[title_task],
-            process=Process.sequential, # Tasks will be executed sequentially
-            verbose=True, # Changed from integer 2 to boolean True
-            memory=False # This crew is stateless for each run
-            # manager_llm=None, # Optional: Specify a manager LLM if needed for complex flows
+            process=Process.sequential,
+            verbose=True, # Changed from 2 to True for Pydantic boolean validation
+            # memory=False, # Default, appropriate for stateless title generation
+            # embedder configuration for Crew AI >= 0.28.0 if memory is True & using specific embeddings
+            # manager_llm can be set if using hierarchical agent structure, not for this simple crew
         )
 
-        # Inputs for the kickoff. The task description tells the agent
-        # to find 'content_block_dicts' here.
-        task_inputs = {
-            "content_block_dicts": [block.model_dump() for block in content_blocks]
-        }
+        print("Kicking off Title Generation Crew...")
+        # The result from crew.kickoff() is the raw output from the last task.
+        # We expect this to be the string containing the title or an error message.
+        crew_result = title_crew.kickoff() 
 
-        print(f"INFO: Kicking off GeneralPurposeTitleGenerationCrew for user: {self.user_id} with {len(content_blocks)} content blocks (serialized to dicts).")
-        kickoff_result = crew.kickoff(inputs=task_inputs)
-        print(f"INFO: GeneralPurposeTitleGenerationCrew kickoff complete. Result type: {type(kickoff_result)}")
+        print(f"Title Generation Crew execution finished. Raw result: {crew_result}")
 
-        if isinstance(kickoff_result, CrewOutput):
-            print(f"DEBUG: Crew returned CrewOutput. Tasks output count: {len(kickoff_result.tasks_output) if kickoff_result.tasks_output else 'N/A'}")
-            final_title_str = None
-
-            # Attempt 1: Check if CrewOutput itself has a Pydantic object (newer CrewAI versions might put the *final task's* Pydantic output here)
-            if hasattr(kickoff_result, 'pydantic') and isinstance(kickoff_result.pydantic, TitleOutput):
-                print(f"DEBUG: Extracted TitleOutput from CrewOutput.pydantic: {kickoff_result.pydantic.generated_title}")
-                final_title_str = kickoff_result.pydantic.generated_title
-            
-            # Attempt 2: Check tasks_output (usually where individual task outputs reside)
-            if final_title_str is None and kickoff_result.tasks_output:
-                task_output = kickoff_result.tasks_output[0] # Assuming the first/only task is the one we want
-                title_to_return_from_task = None
-
-                if hasattr(task_output, 'parsed_output') and isinstance(task_output.parsed_output, TitleOutput):
-                    title_pydantic_obj = task_output.parsed_output
-                    print(f"DEBUG: Extracted TitleOutput from tasks_output[0].parsed_output: {title_pydantic_obj.generated_title}")
-                    title_to_return_from_task = title_pydantic_obj.generated_title
-                
-                if title_to_return_from_task is None and hasattr(task_output, 'raw_output') and isinstance(task_output.raw_output, str):
-                    raw_title_str = task_output.raw_output
-                    print(f"DEBUG: Extracted raw_output from tasks_output[0].raw_output: {raw_title_str}")
-                    try:
-                        data = json.loads(raw_title_str)
-                        if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
-                            print("DEBUG: Parsed 'generated_title' from task's raw_output JSON string.")
-                            title_to_return_from_task = data['generated_title']
-                        else:
-                            print("DEBUG: Task's raw_output was JSON but not TitleOutput structure, using raw string.")
-                            title_to_return_from_task = raw_title_str
-                    except json.JSONDecodeError:
-                        print("DEBUG: Task's raw_output was not JSON, using raw string directly.")
-                        title_to_return_from_task = raw_title_str
-                
-                if title_to_return_from_task is not None:
-                    final_title_str = title_to_return_from_task
-
-            # Attempt 3: Check CrewOutput.raw (often contains the string output of the last task if not Pydantic)
-            if final_title_str is None and hasattr(kickoff_result, 'raw') and isinstance(kickoff_result.raw, str):
-                raw_crew_result_str = kickoff_result.raw
-                print(f"DEBUG: Extracted string from CrewOutput.raw: {raw_crew_result_str}")
-                try:
-                    data = json.loads(raw_crew_result_str)
-                    if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
-                        print("DEBUG: Parsed 'generated_title' from CrewOutput.raw JSON string.")
-                        final_title_str = data['generated_title']
-                    else:
-                        print("DEBUG: CrewOutput.raw was JSON but not TitleOutput, using raw string.")
-                        final_title_str = raw_crew_result_str # Use the raw string if JSON doesn't match
-                except json.JSONDecodeError:
-                    print("DEBUG: CrewOutput.raw was not JSON, using raw string directly.")
-                    final_title_str = raw_crew_result_str # Use the raw string if not JSON
-
-            if final_title_str is not None:
-                return final_title_str.strip('"\'')
-
-        # Fallback for older CrewAI or direct Pydantic model return (less likely)
-        if isinstance(kickoff_result, TitleOutput):
-            print(f"DEBUG: Crew returned TitleOutput directly. Title: {kickoff_result.generated_title}")
-            return kickoff_result.generated_title.strip('"\'')
-        
-        # Fallback handling for different result structures (should be less needed with CrewOutput handling)
-        raw_output_text = None
-        if hasattr(kickoff_result, 'raw_output') and isinstance(kickoff_result.raw_output, str): # e.g. if CrewOutput itself has a raw_output attr
-            raw_output_text = kickoff_result.raw_output
-        elif isinstance(kickoff_result, str):
-            raw_output_text = kickoff_result
-        elif isinstance(kickoff_result, dict):
-            if 'generated_title' in kickoff_result and isinstance(kickoff_result['generated_title'], str):
-                print("DEBUG: Crew returned dict with 'generated_title'.")
-                return kickoff_result['generated_title'].strip('"\'')
+        # Ensure the result is a string, as expected by TitleGenerationOutput
+        final_title = ""
+        if hasattr(crew_result, 'raw') and isinstance(getattr(crew_result, 'raw', None), str):
+            raw_output_str = crew_result.raw
+            print(f"Extracted raw output from CrewOutput.raw: '{raw_output_str}'")
+            if raw_output_str.startswith("Error:"):
+                final_title = raw_output_str  # Propagate agent's specific error
+            elif not raw_output_str.strip():
+                final_title = "Error: Title generation resulted in an empty string from crew."
             else:
-                try: raw_output_text = json.dumps(kickoff_result)
-                except: pass
+                final_title = raw_output_str
+        elif isinstance(crew_result, str):
+            # Fallback for older CrewAI versions or if a raw string is somehow returned
+            print(f"Crew result is already a string: '{crew_result}'")
+            if crew_result.startswith("Error:"):
+                final_title = crew_result
+            elif not crew_result.strip():
+                final_title = "Error: Title generation resulted in an empty string."
+            else:
+                final_title = crew_result
+        else:
+            print(f"[TitleGenerationCrew WARNING] Unexpected crew_result type: {type(crew_result)}. Full CrewOutput: {crew_result}")
+            # Attempt to get a meaningful string from the tasks_output if possible
+            tasks_output_str = ""
+            if hasattr(crew_result, 'tasks_output') and crew_result.tasks_output:
+                # Get the output of the last task
+                last_task_output = crew_result.tasks_output[-1]
+                if hasattr(last_task_output, 'raw_output') and isinstance(last_task_output.raw_output, str):
+                    tasks_output_str = last_task_output.raw_output
+                    print(f"Extracted raw output from last task's output: '{tasks_output_str}'")
+
+
+            if tasks_output_str and not tasks_output_str.startswith("Error:") and tasks_output_str.strip():
+                 final_title = tasks_output_str # Use last task output if it seems valid
+            elif tasks_output_str and tasks_output_str.startswith("Error:"):
+                 final_title = tasks_output_str # Propagate error from last task
+            else:
+                 final_title = "Error: Title generation failed due to an unexpected crew output format."
+
+        # If text extraction itself failed, that error should take precedence
+        # unless the agent produced a more specific error (which final_title would already hold).
+        if extracted_text.startswith("Error:"):
+            if final_title.startswith("Error:"):
+                # If both extraction and agent processing resulted in errors,
+                # prioritize the extraction error as it's earlier in the process.
+                print(f"Text extraction failed ('{extracted_text}') and agent also produced an error ('{final_title}'). Using extraction error.")
+                final_title = extracted_text
+            else:
+                # If extraction failed but agent somehow produced a non-error title (unlikely with current agent prompts)
+                print(f"Text extraction failed ('{extracted_text}'), but crew generated a title ('{final_title}'). Overriding with extraction error as it's a prerequisite.")
+                final_title = extracted_text
         
-        if raw_output_text:
-            print(f"DEBUG: Crew returned raw output text (fallback): {raw_output_text[:200]}...")
-            try:
-                data = json.loads(raw_output_text)
-                if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
-                    return data['generated_title'].strip('"\'')
-            except json.JSONDecodeError:
-                return raw_output_text.strip('"\'') 
+        return TitleGenerationOutput(suggested_title=final_title)
 
-        error_msg = f"Error: Title generation failed or produced an unexpected result structure. Type: {type(kickoff_result)}, Value: {str(kickoff_result)[:200]}..."
-        print(f"ERROR: {error_msg}")
-        return error_msg
+# Example Usage (for testing purposes, if you run this file directly):
+if __name__ == '__main__':
+    # This is a very basic example. In a real scenario, content_block_dicts
+    # would come from a proper source (e.g., an API request, a file, etc.)
+    sample_content_blocks = [
+        {'block_id': '1', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'heading', 'content': 'The Wonders of AI', 'order_index': 0, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'},
+        {'block_id': '2', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'text', 'content': 'Artificial intelligence is rapidly changing the world. It has applications in various fields.', 'order_index': 1, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'},
+        {'block_id': '3', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'text', 'content': 'From healthcare to finance, AI is making significant impacts.', 'order_index': 2, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'},
+        {'block_id': '4', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'image', 'content': {'url': 'http://example.com/image.png', 'alt_text':'AI concept image', 'caption': 'AI visualization'}, 'order_index': 3, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'}
+    ]
 
-# Example Usage (commented out, for direct testing if needed):
-# if __name__ == '__main__':
-#     from uuid import uuid4
-#     # Define or import ContentBlock for this example to run
-#     # class ContentBlock(BaseModel):
-#     #     block_id: str; tmp_id: Optional[str]; user_id: str; document_id: str; type: str; 
-#     #     order_index: Optional[int]; content: Optional[str]; level: Optional[int]; 
-#     #     items: Optional[List[Any]]; ordered: Optional[bool]; image_id_ref: Optional[str] = None
+    # Simulate a request model if your crew expects one for other purposes,
+    # otherwise, it might not be strictly necessary if run() directly takes content_blocks.
+    # For this refactoring, request_model is optional in __init__ and not directly used by run()
+    # request = TitleGenerationRequest(content_blocks=sample_content_blocks) 
+    
+    crew_runner = GeneralPurposeTitleGenerationCrew()
+    
+    # The run method now directly takes the list of content block dictionaries
+    result_output = crew_runner.run(content_block_dicts=sample_content_blocks)
+    print(f"\nSuggested Title from Crew: {result_output.suggested_title}")
 
-#     sample_blocks_data = [
-#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "heading", "order_index": 0, "content": "The Future of AI", "level": 1},
-#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "text", "order_index": 1, "content": "Artificial intelligence is rapidly changing various industries. This document explores the potential impacts and future trends."},
-#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "list", "order_index": 2, "items": ["Healthcare advancements", "Autonomous transportation", "Personalized education"], "ordered": False},
-#     ]
-#     # This assumes ContentBlock can be instantiated with these fields.
-#     # Adjust if ContentBlock definition is different or has more required fields.
-#     sample_content_blocks = [ContentBlock(**block) for block in sample_blocks_data]
+    # Test with empty content
+    empty_content_blocks = []
+    result_empty = crew_runner.run(content_block_dicts=empty_content_blocks)
+    print(f"\nSuggested Title from Crew (empty input): {result_empty.suggested_title}")
 
-#     print("Running title generation crew example...")
-#     title_crew_instance = GeneralPurposeTitleGenerationCrew(user_id="example_main_user")
-#     generated_title = title_crew_instance.run(content_blocks=sample_content_blocks)
-#     print(f"\n==> Suggested Title by Crew: {generated_title}") 
+    # Test with content that should result in an error from the agent's perspective
+    error_sim_content = [
+         {'block_id': '1', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'text', 'content': 'Error: Malformed input data detected previously.', 'order_index': 0, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'}
+    ]
+    result_error_content = crew_runner.run(content_block_dicts=error_sim_content)
+    print(f"\nSuggested Title from Crew (error content input): {result_error_content.suggested_title}") 

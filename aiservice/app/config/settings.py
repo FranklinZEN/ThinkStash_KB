@@ -1,6 +1,6 @@
 # In aiservice/app/config/settings.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional, List, Set
+from typing import Optional, List, Set, Any
 from pydantic import Field
 import os
 
@@ -97,6 +97,77 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+# --- Add get_crew_llm method to Settings class ---
+def get_crew_llm(self: Settings) -> Any: # Using Any for now, will be ChatOpenAI or similar
+    """Returns a CrewAI/Langchain compatible LLM client based on settings."""
+    if self.use_gemini_via_openai_compatibility:
+        if not self.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY must be set in .env when using Gemini via OpenAI compatibility.")
+        
+        # Ensure the langchain-openai package is installed and import ChatOpenAI
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError:
+            raise ImportError(
+                "langchain-openai package not found. "
+                "Please install it with `pip install langchain-openai` to use Gemini via OpenAI compatibility."
+            )
+        
+        print(f"[Settings] Initializing LLM for CrewAI: Gemini via OpenAI compatibility.")
+        print(f"[Settings]   API Key: {'*' * (len(self.gemini_api_key) - 4) + self.gemini_api_key[-4:] if self.gemini_api_key else 'Not Set'}")
+        print(f"[Settings]   Model: {self.gemini_text_model_compat}")
+        print(f"[Settings]   Base URL: {self.gemini_compatibility_base_url}")
+
+        # For CrewAI, it's common to pass the model instance directly.
+        # The ChatOpenAI client handles the API key via environment variable OPENAI_API_KEY by default,
+        # but when using a custom base_url for Gemini, we might need to pass it explicitly or ensure
+        # the environment is set up in a way it expects for custom providers.
+        # CrewAI/Langchain typically expect OPENAI_API_KEY, so we set it temporarily if needed.
+        # However, for Google's OpenAI-compatible endpoint, the key is passed in the Authorization header.
+        # langchain-openai ChatOpenAI should handle this if base_url is set correctly and api_key is provided.
+        
+        llm_params = {
+            "model_name": self.gemini_text_model_compat,
+            "openai_api_base": self.gemini_compatibility_base_url,
+            "openai_api_key": self.gemini_api_key,
+            "temperature": 0.2, # Default temperature, can be made configurable
+             # "max_tokens": 2048, # Optional: set a default max_tokens
+        }
+        
+        # Remove None-valued keys to avoid issues with ChatOpenAI constructor
+        llm_params = {k: v for k, v in llm_params.items() if v is not None}
+
+        try:
+            llm = ChatOpenAI(**llm_params)
+            print("[Settings] ChatOpenAI client for Gemini compatibility initialized successfully.")
+            return llm
+        except Exception as e:
+            print(f"[Settings] Error initializing ChatOpenAI for Gemini: {e}")
+            raise ValueError(f"Failed to initialize ChatOpenAI for Gemini compatibility: {e}")
+
+    else:
+        # Placeholder for other LLM configurations if needed in the future
+        # For now, this path means direct OpenAI or another LLM, which needs specific setup.
+        print(f"[Settings] WARN: Gemini via OpenAI compatibility is disabled. Attempting fallback or other LLM config.")
+        if self.openai_api_key:
+            try:
+                from langchain_openai import ChatOpenAI
+            except ImportError:
+                raise ImportError(
+                    "langchain-openai package not found. Please install it with `pip install langchain-openai`."
+                )
+            print(f"[Settings] Initializing direct OpenAI LLM: {self.default_llm_model}")
+            # This would be a direct OpenAI call if openai_api_key is set and use_gemini_via_openai_compatibility is False
+            return ChatOpenAI(model_name=self.default_llm_model, openai_api_key=self.openai_api_key, temperature=0.2)
+        else:
+            raise ValueError(
+                "LLM configuration error: use_gemini_via_openai_compatibility is False, "
+                "and no other LLM provider (e.g., direct OpenAI API key) is configured."
+            )
+
+# Bind the method to the class
+Settings.get_crew_llm = get_crew_llm
 
 # Remove all debug prints
 

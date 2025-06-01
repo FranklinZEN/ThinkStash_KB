@@ -15,4 +15,8 @@ class SummarizerTaskOutput(BaseModel):
     # e.g., image_references_made: Optional[List[str]] = None
     # For now, keeping it simple to just the summary string as per the plan.
 
-# Add other task-specific output models here as needed. 
+# Add other task-specific output models here as needed.
+
+class TitleGenerationOutput(BaseModel):
+    """Pydantic model for the output of the title generation task."""
+    suggested_title: str = Field(..., description="The AI-generated title for the content, or an error message.") 

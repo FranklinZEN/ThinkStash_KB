@@ -244,39 +244,152 @@ class FullTextContentExtractorTool(BaseTool):
         Returns:
             A single string concatenating all extracted textual content, separated by newlines.
         """
+        input_repr = str(content_block_dicts)
+        print(f"[FullTextContentExtractorTool DEBUG] Received content_block_dicts (first 1000 chars): {input_repr[:1000]}{'...' if len(input_repr) > 1000 else ''}")
+
         full_text: List[str] = []
         
-        # Convert dicts to ContentBlock instances for easier and safer access
-        try:
-            actual_content_blocks: List[ContentBlock] = [ContentBlock(**cb_dict) for cb_dict in content_block_dicts]
-        except Exception as e:
-            # Consider if this should be a hard fail or a more graceful degradation
-            error_msg = f"Error: Could not parse one or more content_block_dicts into ContentBlock models: {e}. Input type: {type(content_block_dicts)}. Sample: {str(content_block_dicts[:1])[:200]}"
-            print(f"ERROR in FullTextContentExtractorTool: {error_msg}")
-            # Returning the error message so the agent knows something went wrong.
-            # Alternatively, could raise an exception or return empty string if that's preferred for errors.
-            return error_msg 
+        if not isinstance(content_block_dicts, list):
+            error_msg = f"Error: Input content_block_dicts is not a list. Received type: {type(content_block_dicts)}."
+            print(f"[FullTextContentExtractorTool ERROR] {error_msg}")
+            return error_msg
 
-        for block in actual_content_blocks:
-            if block.type in ["text", "heading", "code_snippet", "math_text", "table"]:
-                if block.content and isinstance(block.content, str) and block.content.strip(): # Ensure content exists, is string and not empty
-                    full_text.append(block.content.strip())
-            elif block.type == "list":
-                if block.items:
-                    for item in block.items:
-                        if isinstance(item, str) and item.strip(): # Ensure item is string and not empty
-                            full_text.append(item.strip())
-                        elif isinstance(item, dict) and 'content' in item and isinstance(item['content'], str) and item['content'].strip(): # Ensure content exists, is string and not empty
-                            full_text.append(item['content'].strip())
-            # Add other block types if they contain extractable text
-            # e.g., alt_text or caption from image blocks if relevant
-            # elif block.type == "image":
-            #     if block.alt_text and block.alt_text.strip():
-            #         full_text.append(block.alt_text.strip())
-            #     if block.caption and block.caption.strip():
-            #         full_text.append(block.caption.strip())
+        parsed_content_blocks: List[ContentBlock] = [] 
+        for i, cb_dict in enumerate(content_block_dicts):
+            if not isinstance(cb_dict, dict):
+                dict_repr = str(cb_dict)
+                print(f"[FullTextContentExtractorTool WARNING] Item at index {i} in content_block_dicts is not a dictionary. Skipping. Item (first 200 chars): {dict_repr[:200]}{'...' if len(dict_repr) > 200 else ''}")
+                continue
+            try:
+                block = ContentBlock(**cb_dict)
+                parsed_content_blocks.append(block)
+            except Exception as e:
+                dict_repr = str(cb_dict)
+                print(f"[FullTextContentExtractorTool WARNING] Failed to parse content_block_dict at index {i} into ContentBlock: {e}. Dict (first 200 chars): {dict_repr[:200]}{'...' if len(dict_repr) > 200 else ''}. Skipping this block.")
+                continue
 
-        return "\n\n".join(full_text) # Join with double newlines for better separation between distinct blocks
+        if not parsed_content_blocks and content_block_dicts: 
+            error_msg = "Error: Could not parse any input content blocks for text extraction."
+            print(f"[FullTextContentExtractorTool ERROR] {error_msg} All {len(content_block_dicts)} input dicts failed parsing.")
+            return error_msg
+        
+        print(f"[FullTextContentExtractorTool DEBUG] Successfully parsed {len(parsed_content_blocks)} ContentBlock Pydantic objects out of {len(content_block_dicts)} input dicts.")
+
+        for block_idx, block in enumerate(parsed_content_blocks):
+            extracted_text_from_block = ""
+
+            # Prioritize block.content for types where it's the primary text holder as per ContentBlock model
+            if block.type in ["text", "heading", "code_snippet", "math_text"]:
+                if block.content and isinstance(block.content, str) and block.content.strip():
+                    extracted_text_from_block = block.content.strip()
+            # Special handling for 'table' type if its textual content is in block.content (e.g. HTML string)
+            # Or if it needs parsing from block.rows (more structured)
+            elif block.type == "table":
+                table_text_parts = []
+                # Scenario 1: block.content is a simple string (e.g., a pre-rendered HTML table or descriptive text)
+                if isinstance(block.content, str) and block.content.strip():
+                    table_text_parts.append(block.content.strip())
+                    # TODO: Consider if HTML tables in block.content need further parsing to extract clean text
+
+                # Scenario 2: block.content is a dictionary containing structured table data like 'rows'
+                elif isinstance(block.content, dict):
+                    # Check for a title or caption for the table within the content dictionary
+                    table_title = block.content.get('title')
+                    if table_title and isinstance(table_title, str) and table_title.strip():
+                        table_text_parts.append(f"Table Title: {table_title.strip()}")
+                    
+                    table_caption = block.content.get('caption')
+                    if table_caption and isinstance(table_caption, str) and table_caption.strip():
+                        table_text_parts.append(f"Table Caption: {table_caption.strip()}")
+
+                    actual_rows = block.content.get('rows')
+                    if actual_rows and isinstance(actual_rows, list):
+                        table_cell_texts: List[str] = []
+                        for row_idx, row_obj_any in enumerate(actual_rows):
+                            # Assuming row_obj_any could be a dict representing a row, or a list of cells directly
+                            # For now, let's assume rows are lists of cells, or dicts with a 'cells' key
+                            # This needs to align with how TableBlockRow is defined or how tables are structured in ContentBlock.content
+                            
+                            cells_to_process = []
+                            if isinstance(row_obj_any, dict) and 'cells' in row_obj_any and isinstance(row_obj_any['cells'], list):
+                                cells_to_process = row_obj_any['cells']
+                            elif isinstance(row_obj_any, list): # If a row is directly a list of cells
+                                cells_to_process = row_obj_any
+                            else:
+                                print(f"[FullTextContentExtractorTool DEBUG] Table row {row_idx} in block {block_idx} is not a recognized list or dict with cells. Skipping row.")
+                                continue
+                                
+                            row_texts: List[str] = []
+                            for cell_idx, cell_content_union in enumerate(cells_to_process):
+                                cell_text = ""
+                                if isinstance(cell_content_union, str) and cell_content_union.strip():
+                                    cell_text = cell_content_union.strip()
+                                elif isinstance(cell_content_union, dict):
+                                    if 'text' in cell_content_union and isinstance(cell_content_union['text'], str) and cell_content_union['text'].strip():
+                                        cell_text = cell_content_union['text'].strip()
+                                    elif 'content' in cell_content_union and isinstance(cell_content_union['content'], str) and cell_content_union['content'].strip():
+                                        cell_text = cell_content_union['content'].strip()
+                                    # Could add more checks if cells are complex nested blocks
+                                if cell_text:
+                                    row_texts.append(cell_text)
+                            if row_texts:
+                                table_cell_texts.append(" | ".join(row_texts))
+                        if table_cell_texts:
+                            # Join all row strings with newlines to represent table structure
+                            table_text_parts.append("\n".join(table_cell_texts))
+                    elif actual_rows is not None: # actual_rows exists but is not a list
+                         print(f"[FullTextContentExtractorTool WARNING] Table block {block_idx} has 'rows' but it's not a list. Type: {type(actual_rows)}. Skipping row processing.")
+                if table_text_parts:
+                    extracted_text_from_block = "\n".join(filter(None, table_text_parts)) # Join parts, filter empty
+            
+            # Handling for 'list' type (ContentBlock.items is List[Union[str, Dict[str, Any]]])
+            elif block.type == "list" and block.items:
+                list_item_texts: List[str] = []
+                for item_obj_union in block.items:
+                    item_text = ""
+                    if isinstance(item_obj_union, str) and item_obj_union.strip():
+                        item_text = item_obj_union.strip()
+                    elif isinstance(item_obj_union, dict):
+                        # Try to get text from common dict structures if list items are dicts
+                        if 'text' in item_obj_union and isinstance(item_obj_union['text'], str) and item_obj_union['text'].strip():
+                            item_text = item_obj_union['text'].strip()
+                        elif 'content' in item_obj_union and isinstance(item_obj_union['content'], str) and item_obj_union['content'].strip():
+                            item_text = item_obj_union['content'].strip()
+                    if item_text:
+                        list_item_texts.append(item_text)
+                if list_item_texts:
+                    extracted_text_from_block = "\n".join(list_item_texts) # Join list items with a single newline
+
+            # Handling for 'image' type (extract alt_text and caption if available)
+            elif block.type == "image":
+                img_texts = []
+                if block.alt_text and isinstance(block.alt_text, str) and block.alt_text.strip():
+                    img_texts.append(f"Image Alt Text: {block.alt_text.strip()}")
+                if block.caption and isinstance(block.caption, str) and block.caption.strip():
+                    img_texts.append(f"Image Caption: {block.caption.strip()}")
+                if img_texts:
+                    extracted_text_from_block = "; ".join(img_texts)
+            
+            # Note: The ContentBlock model does not show a dedicated 'list_item', 'code', or 'quote' type with a 'text' field.
+            # 'code_snippet' uses 'content'. If there are other types like 'quote' from Trafilatura output, they need specific handling
+            # or mapping to one of the defined ContentBlock types during upstream processing.
+
+            if extracted_text_from_block:
+                full_text.append(extracted_text_from_block)
+                log_text = extracted_text_from_block.replace('\n', ' ')
+                print(f"[FullTextContentExtractorTool DEBUG] Extracted from block {block_idx} (type: {block.type}, ID: {block.block_id if hasattr(block, 'block_id') and block.block_id else 'N/A'}): '{log_text[:150]}{'...' if len(log_text) > 150 else ''}'")
+            else:
+                print(f"[FullTextContentExtractorTool DEBUG] No text extracted from block {block_idx} (type: {block.type}, ID: {block.block_id if hasattr(block, 'block_id') and block.block_id else 'N/A'})")
+
+        if not full_text:
+            print("[FullTextContentExtractorTool INFO] No textual content found in any of the processed blocks that could be extracted.")
+            return "Error: No content available for title generation." 
+            
+        final_concatenated_text = "\n\n".join(full_text)
+        log_final_text = final_concatenated_text.replace('\n', ' ')
+        print(f"[FullTextContentExtractorTool DEBUG] Final concatenated text (first 200 chars, newlines replaced): '{log_final_text[:200]}{'...' if len(log_final_text) > 200 else ''}'")
+        
+        return final_concatenated_text
 
 # Example Usage:
 if __name__ == '__main__':
