@@ -14,8 +14,8 @@ class OrchestrationInput(BaseModel):
 class ContentBlock(BaseModel):
     block_id: str = Field(..., description="Unique ID for this block, inherited from PreliminaryBlock.")
     tmp_id: Optional[str] = Field(None, description="Temporary ID used during processing, can be same as block_id or different.")
-    user_id: Optional[str] = Field(None, description="Identifier of the user associated with this content block.")
-    document_id: Optional[str] = Field(None, description="Identifier of the source document from DocumentMetadata.")
+    user_id: str = Field(..., description="Identifier of the user associated with this content block.")
+    document_id: str = Field(..., description="Identifier of the source document for this content block.")
     type: str = Field(..., description="Type of content (e.g., 'text', 'heading', 'list', 'image', 'code_snippet', 'math_text', 'table').")
     order_index: Optional[int] = Field(None, description="Sequential order of the block in the reconstructed content.")
     

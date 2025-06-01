@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 async def run_single_e2e_test(orchestrator: ParallelOrchestrator, source_identifier: str, source_type_hint: Optional[str] = None, user_id: Optional[str] = None):
     logger.info(f"\n{'='*30} RUNNING E2E TEST FOR: {source_identifier} ({source_type_hint or 'auto-detect'}) - User: {user_id or 'default_e2e_user'} {'='*30}")
-    job_id = f"e2e_job_{uuid.uuid4().hex[:8]}"
+    job_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, source_identifier))
     # Define output filename based on source_identifier for clarity, sanitizing it
     sanitized_identifier = "".join(c if c.isalnum() else "_" for c in source_identifier[:50]) # Take first 50 chars
     output_filename = os.path.join(SCRIPT_DIR, f"e2e_test_output_{sanitized_identifier}.json")

@@ -10,6 +10,8 @@ Defines the agents for the Content Rewrite Crew, including:
 from crewai import Agent
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel # Added for the removed placeholder if it was used for type hinting Base Agent
+from textwrap import dedent # Added missing import
+import uuid
 
 # Import tools. Adjust path if necessary.
 from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool, FastContentBlockProcessorTool
@@ -23,12 +25,16 @@ from aiservice.app.models.orchestration_models import ContentBlock
 class ContentRewriteAgents:
     """Factory class or container for creating and configuring content rewrite agents."""
 
-    def __init__(self, user_id: Optional[str] = "default_user_id_agents"):
+    def __init__(self, user_id: Optional[str] = "default_user_id_agents", document_id_for_output_blocks: Optional[str] = None):
         self.llm = get_configured_llm() # Now configured for ChatGoogleGenerativeAI
         self.user_id = user_id # Store user_id
-        print(f"ContentRewriteAgents initialized with user_id: {self.user_id}") # For debugging
+        self.document_id_for_output_blocks = document_id_for_output_blocks if document_id_for_output_blocks else str(uuid.uuid4()) # Ensure it has a value
+        print(f"ContentRewriteAgents initialized with user_id: {self.user_id}, document_id_for_output_blocks: {self.document_id_for_output_blocks}") # For debugging
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm) 
-        self.content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id) # Pass user_id
+        self.content_processor_tool = FastContentBlockProcessorTool(
+            user_id=self.user_id, 
+            document_id=self.document_id_for_output_blocks
+        )
         self.summarizer_temperature = 0.0
         self.summarizer_max_tokens = 500000
 
@@ -39,22 +45,22 @@ class ContentRewriteAgents:
         """
         return Agent(
             role="Expert Summarizer",
-            goal=(
-                "Using the provided concatenated text and essential image metadata, generate a concise summary. "
-                "The LLM prompt will guide you to refer to images by their identifiers if they are "
-                "contextually important for the summary. Aim for a single, fast LLM call that produces "
-                "a high-quality summary output."
-            ),
-            backstory=(
-                "You are a world-class summarization expert, capable of distilling complex information "
-                "into clear, concise summaries. You are adept at following precise instructions on structuring "
-                "your output and referencing supplementary materials like images."
-            ),
+            goal=dedent(f"""\
+                Generate a concise, high-quality summary of the provided text.
+                You must use your 'Optimized LLM Interaction Tool' for this.
+                When using the tool, you must set the 'temperature' parameter to {self.summarizer_temperature} and the 'max_tokens' parameter to {self.summarizer_max_tokens}.
+                Your final output MUST be a Pydantic object of type 'SummarizerTaskOutput' containing the 'summarized_text' as a string.
+                """),
+            backstory=dedent("""\
+                You are a world-class summarization expert, capable of distilling complex information into clear, concise summaries.
+                You are adept at following precise instructions on structuring your output and referencing supplementary materials like images.
+                You aim for efficiency and accuracy in one go.
+                """),
+            tools=[self.optimized_llm_tool],
             llm=self.llm,
-            tools=[self.optimized_llm_tool], # Primarily uses the LLM tool
             allow_delegation=False,
             verbose=True,
-            memory=False
+            max_iter=1 # Force single iteration
         )
 
     def output_constructor_agent(self) -> Agent:

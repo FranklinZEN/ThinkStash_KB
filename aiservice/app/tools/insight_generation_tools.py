@@ -136,17 +136,31 @@ class FastContentBlockProcessorTool(BaseTool):
         "Designed for efficient data extraction and transformation without LLM calls."
     )
     args_schema: type[BaseModel] = FastContentBlockProcessorToolInput
-    user_id: Optional[str] = None # Added to store user_id
+    user_id: Optional[str] = None
+    document_id: Optional[str] = None # Added to store document_id for new blocks
 
-    def __init__(self, user_id: Optional[str] = "default_user_id_tool", **kwargs):
+    def __init__(self, user_id: Optional[str] = "default_user_id_tool", document_id: Optional[str] = None, **kwargs):
         super().__init__(**kwargs)
         self.user_id = user_id
-        print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}") # For debugging
+        self.document_id = document_id # Store the document_id passed from ContentRewriteAgents
+        print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}, document_id: {self.document_id}")
 
     def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list_json: Optional[str] = None, document_id: Optional[str] = None) -> Any:
         """Processes content blocks based on the specified operation."""
         
-        current_document_id_for_run = document_id # Capture for the run, especially for reconstruction
+        # current_document_id_for_run is no longer needed from args directly for reconstruction,
+        # as self.document_id (set in __init__) will be used for new blocks.
+        # The document_id from args might still be used if this tool were called directly with an override.
+        document_id_to_use_for_new_blocks = self.document_id # Prioritize the one from __init__
+        if operation == "reconstruct_content_from_summary" and document_id:
+            # If document_id is explicitly passed in _run for reconstruction, it might be an override
+            # However, the plan is to use the one from __init__ for rewritten blocks.
+            # For now, let's stick to self.document_id for newly created blocks if it's set.
+            # If self.document_id was None, then use the one from args.
+            if not self.document_id:
+                document_id_to_use_for_new_blocks = document_id
+            elif document_id != self.document_id:
+                 print(f"WARNING (FastContentBlockProcessorTool): document_id in _run ({document_id}) differs from __init__ ({self.document_id}). Using __init__ version for new blocks.")
 
         if operation == "concatenate_text":
             all_text = []
@@ -219,9 +233,10 @@ class FastContentBlockProcessorTool(BaseTool):
                 print("Warning: user_id not set in FastContentBlockProcessorTool. Using placeholder.")
                 current_user_id_for_tool = "tool_reconstruct_fallback_user"
             
-            if not current_document_id_for_run:
-                print("Warning: document_id not provided to FastContentBlockProcessorTool for reconstruction. New blocks will lack it.")
-                # It's crucial for the calling Agent/Crew to provide document_id for reconstruction.
+            # Use document_id_to_use_for_new_blocks established above
+            if not document_id_to_use_for_new_blocks:
+                print("CRITICAL WARNING (FastContentBlockProcessorTool): document_id_to_use_for_new_blocks is None/empty for reconstruction. New blocks will lack a document_id or have a fallback.")
+                document_id_to_use_for_new_blocks = str(uuid.uuid4()) # Fallback to new UUID if still not set
 
             last_idx = 0
             placeholder_pattern = r'\[IMAGE:\s*([^\s\]]+)\s*\]'
@@ -237,7 +252,7 @@ class FastContentBlockProcessorTool(BaseTool):
                         block_id=uuid.uuid4().hex,
                         tmp_id=None, # New text block
                         user_id=current_user_id_for_tool,
-                        document_id=current_document_id_for_run, # Use run-specific document_id
+                        document_id=document_id_to_use_for_new_blocks, # Use the stored/determined document_id
                         type='text',
                         content=text_before_placeholder,
                         order_index=order_idx_counter
@@ -261,7 +276,7 @@ class FastContentBlockProcessorTool(BaseTool):
                     final_block_id = img_meta_to_use.get('block_id', uuid.uuid4().hex)
                     final_tmp_id = img_meta_to_use.get('tmp_id', img_meta_to_use.get('image_id_ref'))
                     final_user_id = img_meta_to_use.get('user_id', current_user_id_for_tool)
-                    final_document_id = img_meta_to_use.get('document_id', current_document_id_for_run)
+                    final_document_id = img_meta_to_use.get('document_id', document_id_to_use_for_new_blocks)
 
                     image_block = ContentBlock(
                         block_id=final_block_id,
@@ -289,7 +304,7 @@ class FastContentBlockProcessorTool(BaseTool):
                         block_id=uuid.uuid4().hex,
                         tmp_id=None,
                         user_id=current_user_id_for_tool,
-                        document_id=current_document_id_for_run,
+                        document_id=document_id_to_use_for_new_blocks,
                         type='text',
                         content=f"[IMAGE: {placeholder_identifier} - Referenced but not found in provided image metadata]",
                         order_index=order_idx_counter
@@ -303,9 +318,9 @@ class FastContentBlockProcessorTool(BaseTool):
             if remaining_text:
                 text_block = ContentBlock(
                     block_id=uuid.uuid4().hex,
-                    tmp_id=None, 
+                    tmp_id=None,
                     user_id=current_user_id_for_tool,
-                    document_id=current_document_id_for_run,
+                    document_id=document_id_to_use_for_new_blocks, # Use the stored/determined document_id
                     type='text',
                     content=remaining_text,
                     order_index=order_idx_counter
@@ -322,7 +337,7 @@ class FastContentBlockProcessorTool(BaseTool):
                     final_block_id = img_meta.get('block_id', uuid.uuid4().hex)
                     final_tmp_id = img_meta.get('tmp_id', img_meta.get('image_id_ref'))
                     final_user_id = img_meta.get('user_id', current_user_id_for_tool)
-                    final_document_id = img_meta.get('document_id', current_document_id_for_run)
+                    final_document_id = img_meta.get('document_id', document_id_to_use_for_new_blocks)
                     
                     appended_image_block = ContentBlock(
                         block_id=final_block_id,

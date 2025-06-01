@@ -219,35 +219,46 @@ def main():
             e2e_data = json.load(f)
         
         raw_content_blocks = e2e_data.get("original_content_blocks", [])
-        loaded_content_blocks = [ContentBlock(**block_data) for block_data in raw_content_blocks]
-        
         raw_doc_metadata = e2e_data.get("document_metadata", {})
-        # Ensure all required fields for DocumentMetadata are present or provide defaults
-        # The DocumentMetadata model will raise errors if required fields are missing
-        
-        # Ensure document_id is present, generate if not (though it should be in e2e output)
-        if not raw_doc_metadata.get("document_id"):
-            raw_doc_metadata["document_id"] = str(uuid.uuid4())
-            print(f"Generated missing document_id: {raw_doc_metadata['document_id']}")
 
-        # Ensure user_id is present, generate a default if not
-        if not raw_doc_metadata.get("user_id"):
-            raw_doc_metadata["user_id"] = "test_user_manual_script_default" # Default user_id
-            print(f"Added missing user_id with default: {raw_doc_metadata['user_id']}")
+        # Ensure essential fields in raw_doc_metadata first
+        # Ensure document_id is present
+        doc_id_for_blocks = raw_doc_metadata.get("document_id")
+        if not doc_id_for_blocks:
+            doc_id_for_blocks = str(uuid.uuid4())
+            raw_doc_metadata["document_id"] = doc_id_for_blocks # Also update raw_doc_metadata for DocumentMetadata model
+            print(f"Generated missing document_id for original blocks: {doc_id_for_blocks}")
 
-        # Example: 'extracted_at' needs to be datetime
+        # Ensure user_id is present
+        user_id_for_blocks = raw_doc_metadata.get("user_id")
+        if not user_id_for_blocks:
+            user_id_for_blocks = "test_user_manual_script_default" # Default user_id
+            raw_doc_metadata["user_id"] = user_id_for_blocks # Also update raw_doc_metadata
+            print(f"Added missing user_id with default for original blocks: {user_id_for_blocks}")
+
+        # Process 'extracted_at' for DocumentMetadata model validity
         if 'extracted_at' in raw_doc_metadata and isinstance(raw_doc_metadata['extracted_at'], str):
             try:
-                raw_doc_metadata['extracted_at'] = datetime.datetime.fromisoformat(raw_doc_metadata['extracted_at'].replace('Z', '+00:00')) # Handle Z for UTC
+                raw_doc_metadata['extracted_at'] = datetime.datetime.fromisoformat(raw_doc_metadata['extracted_at'].replace('Z', '+00:00'))
             except ValueError as ve:
                 print(f"Warning: Could not parse 'extracted_at' string '{raw_doc_metadata['extracted_at']}'. Using current UTC time. Error: {ve}")
                 raw_doc_metadata['extracted_at'] = datetime.datetime.now(datetime.timezone.utc)
         elif 'extracted_at' not in raw_doc_metadata:
              print(f"Warning: 'extracted_at' not found in document_metadata. Using current UTC time.")
              raw_doc_metadata['extracted_at'] = datetime.datetime.now(datetime.timezone.utc)
-
+        
+        # Now, create DocumentMetadata object
         loaded_doc_metadata = DocumentMetadata(**raw_doc_metadata)
         
+        # Update raw_content_blocks with mandatory user_id and document_id before creating ContentBlock objects
+        updated_raw_content_blocks = []
+        for block_data in raw_content_blocks:
+            block_data['user_id'] = loaded_doc_metadata.user_id # Use user_id from loaded_doc_metadata
+            block_data['document_id'] = loaded_doc_metadata.document_id # Use document_id from loaded_doc_metadata
+            updated_raw_content_blocks.append(block_data)
+        
+        loaded_content_blocks = [ContentBlock(**block_data) for block_data in updated_raw_content_blocks]
+
         if not loaded_content_blocks:
             print("Warning: No content blocks loaded from JSON. Check the file and 'original_content_blocks' key.")
             # Potentially exit or use default sample data if this is critical

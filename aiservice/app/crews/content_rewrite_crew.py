@@ -20,6 +20,7 @@ from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
 # Model imports
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
+from aiservice.app.models.task_output_models import SummarizerTaskOutput
 
 
 class ContentRewriteCrewManager:
@@ -34,22 +35,30 @@ class ContentRewriteCrewManager:
         """
         self.rewrite_input = rewrite_input
         self.verbose_level = verbose_level
-        # Extract user_id, providing a default if not available
-        self.user_id = "default_user_id_manager"
-        if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.user_id:
-            self.user_id = self.rewrite_input.document_metadata.user_id
-        elif hasattr(self.rewrite_input, 'user_id') and self.rewrite_input.user_id: # Fallback to user_id on RewriteContentInput if present
-            self.user_id = self.rewrite_input.user_id
         
-        # Initialize document_id_to_pass, providing a default if not available
-        self.document_id_to_pass = "default_doc_id_manager" # Default value
+        # Determine user_id for the rewrite operation (self.user_id_for_rewrite)
+        self.user_id_for_rewrite = "default_user_id_rewrite_op" # Default
+        if self.rewrite_input.user_id:
+            self.user_id_for_rewrite = self.rewrite_input.user_id
+        elif self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.user_id:
+            self.user_id_for_rewrite = self.rewrite_input.document_metadata.user_id
+        
+        # Determine the original document_id if available (for logging/reference, not for new blocks)
+        self.original_document_id = "original_doc_id_not_found" # Default
         if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.document_id:
-            self.document_id_to_pass = self.rewrite_input.document_metadata.document_id
-        # No direct fallback for document_id on RewriteContentInput like user_id, assuming it comes from metadata primarily.
+            self.original_document_id = self.rewrite_input.document_metadata.document_id
 
-        print(f"INFO: ContentRewriteCrewManager initialized with user_id: {self.user_id}, document_id: {self.document_id_to_pass}")
-        self.agents_factory = ContentRewriteAgents(user_id=self.user_id) # Pass user_id
-        self.crew: Optional[Crew] = None # To store the initialized crew
+        # Generate a new unique document_id for the rewritten content blocks
+        self.new_rewritten_document_id = str(uuid.uuid4())
+
+        print(f"INFO: ContentRewriteCrewManager initialized. User ID for rewrite: {self.user_id_for_rewrite}, Original Document ID: {self.original_document_id}, New Rewritten Document ID: {self.new_rewritten_document_id}")
+        
+        # Pass user_id_for_rewrite and new_rewritten_document_id to ContentRewriteAgents
+        self.agents_factory = ContentRewriteAgents(
+            user_id=self.user_id_for_rewrite,
+            document_id_for_output_blocks=self.new_rewritten_document_id
+        )
+        self.crew: Optional[Crew] = None
 
     def setup_crew(self) -> Crew:
         """
@@ -75,12 +84,22 @@ class ContentRewriteCrewManager:
                 If images from 'essential_image_metadata' are contextually important for the summary,
                 refer to them using placeholders like '[IMAGE: <image_id_ref_value>]' or '[IMAGE: <gcs_url_value>]'.
                 The image_id_ref_value or gcs_url_value should correspond to the 'image_id_ref' or 'gcs_url' present in the 'essential_image_metadata'.
-                The summary should be a single string of well-written text.
+                The summary should be a single string of well-written text, which will be wrapped in the 'SummarizerTaskOutput' model under the 'summary_text' field.
                 When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to {self.agents_factory.summarizer_temperature} and the 'max_tokens' parameter to {self.agents_factory.summarizer_max_tokens}.
+                Your final output for this task MUST be a valid JSON object that conforms to the 'SummarizerTaskOutput' Pydantic model.
+                Specifically, it should be a dictionary with a single key 'summary_text' holding the generated summary string.
+                Example: {{"summary_text": "This is the generated summary."}}
                 """),
-            expected_output="A concise textual summary of the input content, potentially including image references like '[IMAGE: <image_id_ref>]'.",
+            expected_output=(
+                "The single string summary, encapsulated within a 'SummarizerTaskOutput' Pydantic object. "
+                "This output is produced DIRECTLY and SOLELY by the 'Optimized LLM Interaction Tool' "
+                "during its FIRST successful execution for this task. Upon receiving this structured tool output, "
+                "the agent's work for this task is considered ABSOLUTELY COMPLETE. No further thoughts, actions, "
+                "or tool calls are required or permitted for this specific summarization task."
+            ),
             agent=summarization_agent,
-            tools=[self.agents_factory.optimized_llm_tool]
+            tools=[self.agents_factory.optimized_llm_tool],
+            output_pydantic=SummarizerTaskOutput
         )
 
         task_reconstruct_output = Task(
@@ -169,7 +188,8 @@ class ContentRewriteCrewManager:
 
     def run(self) -> RewriteContentOutput:
         start_time = time.time()
-        print(f"INFO: ContentRewriteCrewManager run initiated for user_id: {self.user_id}") # Retained
+        # Use self.user_id_for_rewrite and self.new_rewritten_document_id established in __init__
+        print(f"INFO: ContentRewriteCrewManager run initiated. User ID: {self.user_id_for_rewrite}, Rewritten Document ID: {self.new_rewritten_document_id}")
 
         # Initialize default return values
         parsed_content_blocks: List[ContentBlock] = []
@@ -200,33 +220,30 @@ class ContentRewriteCrewManager:
                 essential_image_metadata.append({k: v for k, v in essential_meta.items() if v is not None})
         concatenated_text = "\\n\\n".join(text_parts)
 
-        current_document_id = (
-            self.rewrite_input.document_metadata.document_id
-            if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.document_id
-            else str(uuid.uuid4())
-        )
+        # current_document_id is no longer needed here as new_rewritten_document_id is used.
+        # We can log the original one if needed for context.
         if not (self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.document_id):
-            print(f"WARNING: document_id not found in rewrite_input.document_metadata.document_id, using generated UUID: {current_document_id}")
+            print(f"WARNING: Original document_id not found in rewrite_input.document_metadata.document_id. Original was: {self.original_document_id}")
 
 
         # 2. Setup the crew
+        # Agents factory is already initialized with the correct user_id and new_rewritten_document_id
         self.crew = self.setup_crew()
 
         # 3. Prepare the inputs for the crew.kickoff()
         crew_kickoff_inputs = {
             'concatenated_text': concatenated_text,
-            'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata), # Use locally processed metadata
-            'reconstructor_image_metadata_list_json': json.dumps(essential_image_metadata), # Use locally processed metadata, as JSON string
-            'reconstructor_document_id': current_document_id
+            'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata),
+            'reconstructor_image_metadata_list_json': json.dumps(essential_image_metadata),
+            'reconstructor_document_id': self.new_rewritten_document_id # Pass the new ID here
         }
         
         if self.verbose_level > 1:
             print(f"DEBUG ContentRewriteCrewManager: Kicking off crew with inputs (metadata potentially truncated for log):")
             print(f"  concatenated_text length: {len(crew_kickoff_inputs['concatenated_text'])}")
             print(f"  essential_image_metadata_for_summarizer_prompt: {crew_kickoff_inputs['essential_image_metadata_for_summarizer_prompt'][:200] if crew_kickoff_inputs['essential_image_metadata_for_summarizer_prompt'] else '[]'}...")
-            # Log the new JSON string key
             print(f"  reconstructor_image_metadata_list_json: {crew_kickoff_inputs['reconstructor_image_metadata_list_json'][:200] if crew_kickoff_inputs.get('reconstructor_image_metadata_list_json') else '[]'}...")
-            print(f"  reconstructor_document_id: {crew_kickoff_inputs['reconstructor_document_id']}")
+            print(f"  reconstructor_document_id (for new blocks): {crew_kickoff_inputs['reconstructor_document_id']}")
 
         crew_result_raw: Any = None
         try:
