@@ -10,7 +10,8 @@ from textwrap import dedent
 from typing import Optional
 
 # Import tools
-from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool, FastContentBlockProcessorTool
+from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool
+from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool
 
 # LLM Configuration
 from aiservice.app.config.llm_config import get_configured_llm
@@ -20,12 +21,12 @@ class TitleGenerationAgents:
 
     def __init__(self, user_id: Optional[str] = "default_user_id_title_agents"):
         self.user_id = user_id
-        self.llm = get_configured_llm() 
+        self.llm = get_configured_llm()
         print(f"TitleGenerationAgents initialized with user_id: {self.user_id}")
 
         # Initialize tools
+        self.full_text_extractor_tool = FullTextContentExtractorTool()
         self.optimized_llm_tool = OptimizedLLMInteractionTool(llm_client=self.llm)
-        self.fast_content_processor_tool = FastContentBlockProcessorTool(user_id=self.user_id)
         
         # Configuration for the agent - can be externalized
         self.title_crafter_model_name = "gemini-2.5-flash" # As per plan
@@ -40,22 +41,25 @@ class TitleGenerationAgents:
         """
         return Agent(
             role="Expert Title Crafter",
-            goal=dedent("""
-                Analyze the provided content extract and generate a concise, informative,
-                and engaging title that accurately reflects the main topic of the content.
-                The title should be suitable for a knowledge card.
-                """),
-            backstory=dedent("""
-                You are a master wordsmith, renowned for your ability to distill the essence
-                of any piece of content into a compelling title. You understand the nuances
-                of language and how to capture attention while maintaining accuracy. Your titles
-                are short, punchy, and highly relevant.
-                """),
+            goal=(
+                "Analyze the full text content provided (extracted from content blocks) and generate a short, informative, and engaging title "
+                "(under 15 words) that accurately reflects the main topic of the content. "
+                "You must use the FullTextContentExtractorTool to get the text from content_blocks, and then use the OptimizedLLMInteractionTool with a crafted prompt to generate the title."
+            ),
+            backstory=(
+                "As an Expert Title Crafter, you possess a keen ability to distill complex information into concise and compelling titles. "
+                "You understand the importance of a title that grabs attention while accurately representing the core message of the text. "
+                "You are adept at identifying key themes and crafting titles that are optimized for clarity and impact. "
+                "You methodically use available tools to first extract all text, then use an LLM interaction tool to generate the title based on that text."
+            ),
+            tools=[
+                self.full_text_extractor_tool,
+                self.optimized_llm_tool 
+            ],
+            llm=self.llm,
             verbose=True,
-            memory=False, 
-            llm=self.llm, # Pass the configured LLM
-            tools=[self.optimized_llm_tool, self.fast_content_processor_tool], # Pass instantiated tools
             allow_delegation=False,
+            memory=False # Titles are generated per request, no memory needed
         )
 
 if __name__ == '__main__':

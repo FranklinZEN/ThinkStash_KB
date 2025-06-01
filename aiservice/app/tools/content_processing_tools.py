@@ -5,14 +5,13 @@
 import requests
 from PIL import Image # Pillow for image metadata
 from google.cloud import storage # Google Cloud Storage
-from crewai_tools import BaseTool
+from crewai.tools import BaseTool
 import os
 import uuid # For generating unique filenames
 import io # For handling image bytes
 from aiservice.app.config.settings import settings # New import for V2.5 settings
-# We will import ContentBlock and other necessary models here when we define the tools
-# from aiservice.app.models.orchestration_models import ContentBlock
-# from typing import List, Dict, Any
+from aiservice.app.models.orchestration_models import ContentBlock # Adjust import if needed
+from typing import List, Dict, Any
 
 class ImageDownloaderTool(BaseTool):
     name: str = "Image Downloader from URL"
@@ -226,6 +225,58 @@ class ImageMetadataTool(BaseTool):
             }
         except Exception as e:
             return {"error": f"Error extracting metadata from image {image_file_path}: {e}"}
+
+class FullTextContentExtractorTool(BaseTool):
+    name: str = "Full Text Content Extractor Tool"
+    description: str = (
+        "Extracts and concatenates all textual content from a list of content block dictionaries. "
+        "Input must be a list of dictionaries, where each dictionary represents a content block. "
+        "The key in the kickoff inputs should be 'content_block_dicts'."
+    )
+
+    def _run(self, content_block_dicts: List[Dict[str, Any]]) -> str:
+        """Processes a list of content block dictionaries to extract all text.
+
+        Args:
+            content_block_dicts: A list of dictionaries, where each dictionary
+                                 is expected to conform to ContentBlock structure.
+
+        Returns:
+            A single string concatenating all extracted textual content, separated by newlines.
+        """
+        full_text: List[str] = []
+        
+        # Convert dicts to ContentBlock instances for easier and safer access
+        try:
+            actual_content_blocks: List[ContentBlock] = [ContentBlock(**cb_dict) for cb_dict in content_block_dicts]
+        except Exception as e:
+            # Consider if this should be a hard fail or a more graceful degradation
+            error_msg = f"Error: Could not parse one or more content_block_dicts into ContentBlock models: {e}. Input type: {type(content_block_dicts)}. Sample: {str(content_block_dicts[:1])[:200]}"
+            print(f"ERROR in FullTextContentExtractorTool: {error_msg}")
+            # Returning the error message so the agent knows something went wrong.
+            # Alternatively, could raise an exception or return empty string if that's preferred for errors.
+            return error_msg 
+
+        for block in actual_content_blocks:
+            if block.type in ["text", "heading", "code_snippet", "math_text", "table"]:
+                if block.content and isinstance(block.content, str) and block.content.strip(): # Ensure content exists, is string and not empty
+                    full_text.append(block.content.strip())
+            elif block.type == "list":
+                if block.items:
+                    for item in block.items:
+                        if isinstance(item, str) and item.strip(): # Ensure item is string and not empty
+                            full_text.append(item.strip())
+                        elif isinstance(item, dict) and 'content' in item and isinstance(item['content'], str) and item['content'].strip(): # Ensure content exists, is string and not empty
+                            full_text.append(item['content'].strip())
+            # Add other block types if they contain extractable text
+            # e.g., alt_text or caption from image blocks if relevant
+            # elif block.type == "image":
+            #     if block.alt_text and block.alt_text.strip():
+            #         full_text.append(block.alt_text.strip())
+            #     if block.caption and block.caption.strip():
+            #         full_text.append(block.caption.strip())
+
+        return "\n\n".join(full_text) # Join with double newlines for better separation between distinct blocks
 
 # Example Usage:
 if __name__ == '__main__':

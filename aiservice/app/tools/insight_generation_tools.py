@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 import uuid # Added for generating block_ids
 import json # Add json import
 
-from crewai.tools import BaseTool # Fourth attempt - trying from crewai.tools
+from crewai.tools import BaseTool # Corrected import
 
 # Actual ContentBlock import from its definitive location
 from aiservice.app.models.orchestration_models import ContentBlock 

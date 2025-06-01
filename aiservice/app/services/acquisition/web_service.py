@@ -143,10 +143,14 @@ class WebAcquisitionService(BaseService):
         super().__init__(settings)
         self.settings_instance = settings # Store the settings instance if provided
         self.logger = logging.getLogger(__name__) # Initialize logger
-        if self.settings_instance and hasattr(self.settings_instance, 'debug_mode') and self.settings_instance.debug_mode:
-            self.logger.setLevel(logging.DEBUG)
-        else:
-            self.logger.setLevel(logging.INFO)
+        # TEMPORARILY FORCE DEBUG LEVEL FOR THIS LOGGER
+        self.logger.setLevel(logging.DEBUG)
+        self.logger.warning("WebService logger is TEMPORARILY FORCED to DEBUG level.") # Add a warning for this override
+        
+        # if self.settings_instance and hasattr(self.settings_instance, 'debug_mode') and self.settings_instance.debug_mode:
+        #     self.logger.setLevel(logging.DEBUG)
+        # else:
+        #     self.logger.setLevel(logging.INFO)
         # In-memory cache for HTML content: {url: (html_string, fetch_timestamp)}
         self.html_cache: Dict[str, Tuple[str, float]] = {}
         # Cache Time-To-Live in seconds
@@ -182,9 +186,20 @@ class WebAcquisitionService(BaseService):
         Extracts image URLs and metadata from HTML content, creating RawImageInput objects.
         Does NOT download image bytes.
         """
+        self.logger.debug(f"_extract_images_from_html: Called for base_url='{base_url}', job_id='{job_id}'. HTML length: {len(html_content_str) if html_content_str else 'None'}") # ADDED
         raw_images: List[RawImageInput] = []
         processed_urls: Set[str] = set()
-        soup = BeautifulSoup(html_content_str, 'lxml')
+        
+        if not html_content_str: # ADDED early exit check
+            self.logger.warning("_extract_images_from_html: html_content_str is None or empty. Returning empty list.")
+            return raw_images
+
+        try: # ADDED try-except around soup initialization
+            soup = BeautifulSoup(html_content_str, 'lxml')
+        except Exception as e_soup_init:
+            self.logger.error(f"_extract_images_from_html: BeautifulSoup initialization failed: {e_soup_init}", exc_info=True)
+            return raw_images
+            
         image_counter = 0 # Used for generating image_id if job_id is missing
 
         MIN_DIMENSION = 50
@@ -194,8 +209,7 @@ class WebAcquisitionService(BaseService):
         IRRELEVANT_ALT_STRINGS_EXACT = [
             "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
             "pinterest", "pinterest engineering", "pinterest engineering blog", "walmart global tech blog",
-            "user", "author", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
-            "figure", "image", "photo", "illustration", "diagram"
+            "user", "author", "default", "placeholder", "loading", "spinner", "spacer", "pixel"
         ]
         IRRELEVANT_SUBSTRINGS_IN_ALT = [
             "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
@@ -215,6 +229,8 @@ class WebAcquisitionService(BaseService):
 
         # Consistent image_id generation
         doc_id_prefix = hashlib.md5(original_source_identifier_for_gcs_path.encode()).hexdigest()[:8]
+
+        self.logger.debug(f"_extract_images_from_html: Starting <img> tag processing. Found {len(soup.find_all('img'))} img tags initially.") # ADDED
 
         # 1. Standard <img> tags
         for idx, img_tag in enumerate(soup.find_all('img')):
@@ -332,6 +348,7 @@ class WebAcquisitionService(BaseService):
         # 3. Look for images in <figure> tags that might not have been caught
         # This might be redundant if all relevant images within figures are <img> tags.
 
+        self.logger.debug(f"_extract_images_from_html: Finished processing. Found {len(raw_images)} raw images.") # ADDED
         return raw_images
 
     async def _parse_and_structure_html(
@@ -442,10 +459,11 @@ class WebAcquisitionService(BaseService):
 
         source_identifier_for_gcs = final_url 
         source_type_for_gcs = "url"
-        doc_job_id = job_id or f"web_{uuid.uuid4().hex[:8]}"
+        # doc_job_id consistent with what's used in the main execute() for this operation
+        doc_job_id_for_metadata = job_id or f"web_{uuid.uuid4().hex[:8]}"
 
         document_metadata_obj = DocumentMetadata(
-            document_id=doc_job_id, 
+            document_id=doc_job_id_for_metadata, 
             user_id=user_id or "unknown_user_web_service", # Use passed user_id
             source_identifier=final_url,
             source_type="url",
@@ -455,26 +473,81 @@ class WebAcquisitionService(BaseService):
             extracted_at=datetime.utcnow()
         )
 
-        # --- 2. Extract RawImageInput objects (if full_content) ---
-        # Always use the original full HTML for image extraction
+        # --- 2.A Extract ALL RawImageInput objects and prepare helper maps (if full_content) ---
+        # This is done once from the full HTML content.
+        image_id_map: Dict[str, str] = {} 
+        image_alt_map: Dict[str, Optional[str]] = {}
+
+        if processing_level == "full_content":
+            self.logger.debug(f"_parse_and_structure_html: Pre-calling _extract_images_from_html. HTML length: {len(full_html_content_for_metadata_and_images) if full_html_content_for_metadata_and_images else 'None'}")
+            raw_images_list = await self._extract_images_from_html(
+                html_content_str=full_html_content_for_metadata_and_images, 
+                base_url=final_url,
+                job_id=job_id, 
+                original_source_identifier_for_gcs_path=final_url,
+                source_type_for_gcs_path="url"
+            )
+            for raw_img in raw_images_list:
+                if raw_img.source_url: # Ensure source_url is not None before adding to map
+                    image_id_map[raw_img.source_url] = raw_img.image_id
+                    image_alt_map[raw_img.source_url] = raw_img.alt_text
+            self.logger.debug(f"Prepared image_id_map (size {len(image_id_map)}) and image_alt_map (size {len(image_alt_map)}) from {len(raw_images_list)} raw images.")
+        
+        # --- 2.B Process the main content soup (Trafilatura or BS4 fallback) to create PreliminaryBlocks ---
+        doc_id_prefix_for_blocks = hashlib.md5(final_url.encode()).hexdigest()[:8]
+        
+        if soup_for_structuring:
+            # Iterate over direct children of the main content soup
+            # self.logger.debug(f"Starting to process direct children of soup_for_structuring ({type(soup_for_structuring)}). Number of children: {len(list(soup_for_structuring.children)) if hasattr(soup_for_structuring, 'children') else 'N/A'}")
+            
+            # Need to handle if soup_for_structuring is a Tag or a BeautifulSoup object
+            elements_to_process = []
+            if isinstance(soup_for_structuring, Tag): # e.g. <main> tag from Trafilatura snippet
+                elements_to_process = [child for child in soup_for_structuring.children if isinstance(child, Tag)]
+            elif isinstance(soup_for_structuring, BeautifulSoup): # e.g. full page soup or body soup
+                # If it's the full soup, and it has a body, process body's children. Otherwise, process its direct children.
+                if soup_for_structuring.body:
+                    elements_to_process = [child for child in soup_for_structuring.body.children if isinstance(child, Tag)]
+                else: # No body tag, process direct children of the soup document
+                    elements_to_process = [child for child in soup_for_structuring.children if isinstance(child, Tag)]
+            
+            self.logger.debug(f"Identified {len(elements_to_process)} top-level Tag elements in soup_for_structuring to process.")
+
+            for child_element in elements_to_process:
+                await self._process_html_element(
+                    child_element, 
+                    final_url, 
+                    doc_id_prefix_for_blocks, 
+                    preliminary_blocks, # Appends directly to this list
+                    image_id_map, 
+                    image_alt_map
+                )
+            self.logger.debug(f"Finished processing soup_for_structuring. {len(preliminary_blocks)} preliminary_blocks created so far (text, headings, inline images etc.).")
+        else:
+            self.logger.warning("soup_for_structuring was None. No main content elements were processed by _process_html_element.")
+
+
+        # --- 2.C Reconcile any remaining images from raw_images_list ---
+        # This adds images (like og:image or other globally found images) that were not part of the 
+        # structured content processed by _process_html_element directly.
         if processing_level == "full_content":
             processed_image_ids_in_blocks = set()
-            for pb in preliminary_blocks:
+            for pb in preliminary_blocks: # Check blocks created by _process_html_element
                 if pb.type == 'image_placeholder' and pb.image_id_ref:
                     processed_image_ids_in_blocks.add(pb.image_id_ref)
             
             self.logger.debug(f"Image IDs already processed into blocks by _process_html_element: {processed_image_ids_in_blocks}")
 
-            for raw_img in raw_images_list:
+            for raw_img in raw_images_list: # Iterate over the raw_images_list from step 2.A
                 if raw_img.image_id not in processed_image_ids_in_blocks:
-                    self.logger.debug(f"Adding image {raw_img.image_id} ({raw_img.source_url}) from raw_images_list as it was not found in Trafilatura-processed blocks.")
-                    new_block_order = len(preliminary_blocks)
-                    block_id_str = f"{doc_id_prefix_for_blocks}_b{new_block_order}"
+                    self.logger.debug(f"Adding image {raw_img.image_id} ({raw_img.source_url}) from raw_images_list as it was not found in _process_html_element blocks.")
+                    new_block_order = len(preliminary_blocks) # Order is based on current length
+                    block_id_str = f"{doc_id_prefix_for_blocks}_b{new_block_order}" # Consistent block_id prefix
                     
                     custom_attrs_for_raw_img = {}
                     if raw_img.alt_text:
                         custom_attrs_for_raw_img['alt_text'] = raw_img.alt_text
-                    if raw_img.caption: # Assuming RawImageInput might have a caption
+                    if raw_img.caption:
                         custom_attrs_for_raw_img['caption'] = raw_img.caption
                     
                     preliminary_blocks.append(PreliminaryBlock(
@@ -487,7 +560,7 @@ class WebAcquisitionService(BaseService):
             self.logger.debug(f"Total preliminary_blocks after adding remaining raw images: {len(preliminary_blocks)}")
         # --- End of adding remaining images ---
         
-        return preliminary_blocks, doc_meta_obj, raw_images_list
+        return preliminary_blocks, document_metadata_obj, raw_images_list
 
     async def _process_html_element(self, element: Tag, base_url: str, doc_id_prefix: str, 
                                     blocks: List[PreliminaryBlock], 
@@ -498,18 +571,28 @@ class WebAcquisitionService(BaseService):
         Appends new blocks to the `blocks` list.
         Order is determined by the length of the blocks list at the time of append.
         """
-        self.logger.debug(f"_process_html_element CALLED with tag: <{element.name}>") # ENTRY LOGGING
-        # block_id_str will use the current length of blocks for its suffix.
-        # Order for the new block will also be the current length of blocks.
-        # This ensures sequential block_ids and order values.
+        self.logger.debug(f"_process_html_element CALLED with tag: <{element.name}> Attributes: {element.attrs}") # ENTRY LOGGING
         
         tag_name = element.name
         custom_attrs = {}
 
-        # Check if this element (or its significant content) has already been processed 
-        # by a parent that decided to consume it (e.g. a <p> that contains only an <img>)
-        # This is a complex problem to solve perfectly. A simple check could be based on element attributes or source line.
-        # For now, we rely on the parsing logic not to duplicate; e.g. if <p><img></p>, the 'p' handler might call for 'img'.
+        # Handle Trafilatura's <head rend="hX"> for headings
+        if tag_name == 'head' and element.get('rend') and element.get('rend','').startswith('h'):
+            heading_level_str = element.get('rend','')[1:]
+            if heading_level_str.isdigit():
+                heading_level = int(heading_level_str)
+                if 1 <= heading_level <= 6:
+                    text_content = element.get_text(strip=True)
+                    if text_content:
+                        block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                        blocks.append(PreliminaryBlock(
+                            block_id=block_id_str,
+                            type='heading',
+                            text_content=text_content,
+                            heading_level=heading_level,
+                            order=len(blocks) # Order is current size before append
+                        ))
+                        return # Processed as a heading, no further processing for this element
 
         if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
             text_content = element.get_text(strip=True)
@@ -776,21 +859,30 @@ class WebAcquisitionService(BaseService):
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
         request_start_time = time.time()
         url = web_input.url
-        job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
+        # job_id for the current operation, used in default objects if error occurs early
+        current_operation_job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
+        # user_id for the current operation, used in default objects
+        current_operation_user_id = web_input.user_id or "unknown_user_web_service"
+        
         processing_level = web_input.processing_level
+
+        # Define the default structures specifically for the error_details["original_data"] tuple
+        # These are used if an error occurs very early, before main accumulators are properly set.
+        preliminary_blocks_default: List[PreliminaryBlock] = []
+        raw_images_default: List[RawImageInput] = []
+        document_metadata_default = DocumentMetadata(
+            document_id=current_operation_job_id,
+            user_id=current_operation_user_id,
+            source_identifier=url, # Original input URL
+            source_type='url',
+            final_url=url, # Default final_url to original input URL
+            extracted_at=datetime.utcnow(), # Timestamp of this default object creation
+            custom_fields={"status": "default_metadata_for_early_failure", "job_id_ref": current_operation_job_id}
+        )
 
         # Initialize variables that will be part of the successful return tuple
         preliminary_blocks_list: List[PreliminaryBlock] = []
         raw_images_list: List[RawImageInput] = [] # Use raw_images_list consistently
-        
-        # Initialize document_metadata_obj early and fully for consistent error returns
-        document_metadata_obj = DocumentMetadata(
-            document_id=job_id,
-            user_id=web_input.user_id or "unknown_user_web_service", # Use provided user_id
-            source_identifier=url,
-            source_type='url', # Initial type, may change if it's a direct PDF link
-            extracted_at=datetime.utcnow()
-        )
         
         html_content_str: Optional[str] = None
         final_url_val: str = web_input.url # Start with input URL, will be updated by redirects if fetch occurs
@@ -858,7 +950,8 @@ class WebAcquisitionService(BaseService):
                     }
                     async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response:
                         final_url_val = str(response.url) # Update final_url_val after actual fetch
-                        document_metadata_default.final_url = final_url_val # Update metadata with the truly final URL
+                        # Use document_metadata_default here as document_metadata_obj might not be fully initialized yet
+                        document_metadata_default.final_url = final_url_val 
 
                         if response.status != 200:
                             return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
@@ -896,8 +989,8 @@ class WebAcquisitionService(BaseService):
                     pdf_acq_input = PDFAcquisitionServiceInput(
                         file_path=temp_pdf_file_path,
                         processing_level=web_input.processing_level,
-                        job_id=current_job_id,
-                        user_id=current_user_id
+                        job_id=current_operation_job_id, # Use current_operation_job_id
+                        user_id=current_operation_user_id # Use current_operation_user_id
                     )
                     pdf_service_result = await pdf_acq_service.execute(pdf_acq_input)
 
@@ -960,15 +1053,28 @@ class WebAcquisitionService(BaseService):
                             output_format='xml', # Get structured HTML/XML
                             include_tables=True,
                             include_comments=False,
-                            deduplicate=False # Adjust as needed
+                            deduplicate=True, # Set deduplicate to True
+                            favor_recall=True # Add favor_recall=True
+                            # config=trafilatura.settings.use_config() # Consider if custom config is needed or default is better
                         )
                     )
-                    if main_content_html_snippet_by_trafilatura and len(main_content_html_snippet_by_trafilatura.strip()) >= 100: # Check if snippet is substantial
-                        self.logger.info(f"Trafilatura successfully extracted HTML snippet (length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
-                        is_trafilatura_content_available = True
+                    if main_content_html_snippet_by_trafilatura:
+                        # Check for substantial content beyond just structural tags
+                        temp_soup_for_text_check = BeautifulSoup(main_content_html_snippet_by_trafilatura, 'lxml')
+                        extracted_text_check = temp_soup_for_text_check.get_text(strip=True)
+                        min_substantial_text_length = 250 # Define a threshold for "substantial"
+
+                        if len(extracted_text_check) >= min_substantial_text_length:
+                            self.logger.info(f"Trafilatura successfully extracted a substantial HTML snippet (text length: {len(extracted_text_check)}, snippet length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
+                            is_trafilatura_content_available = True
+                        else:
+                            self.logger.info(f"Trafilatura snippet's text content (length: {len(extracted_text_check)}) is below threshold ({min_substantial_text_length}). Snippet length {len(main_content_html_snippet_by_trafilatura)}. Will use BS4 fallback.")
+                            main_content_html_snippet_by_trafilatura = None # Ensure it's None to trigger fallback
+                            is_trafilatura_content_available = False # Explicitly set to false
                     else:
-                        self.logger.info(f"Trafilatura returned very small or empty snippet (length: {len(main_content_html_snippet_by_trafilatura or '')}). Will use BS4 fallback.")
+                        self.logger.info(f"Trafilatura returned empty snippet. Will use BS4 fallback.")
                         main_content_html_snippet_by_trafilatura = None # Ensure it's None if not substantial
+                        is_trafilatura_content_available = False # Explicitly set to false
                 except Exception as e_traf:
                     self.logger.error(f"Trafilatura extraction failed for {final_url_val}: {e_traf}", exc_info=True)
                     main_content_html_snippet_by_trafilatura = None # Ensure it's None on error
@@ -1004,7 +1110,7 @@ class WebAcquisitionService(BaseService):
                     is_trafilatura_content=is_trafilatura_content_available, # Pass the flag
                     full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
                     final_url=final_url_val,
-                    job_id=job_id,
+                    job_id=current_operation_job_id, # Pass current_operation_job_id
                     user_id=web_input.user_id, # Pass user_id here
                     processing_level=processing_level
                 )
@@ -1012,10 +1118,10 @@ class WebAcquisitionService(BaseService):
                 # Should not happen if fetching was successful and content type was one of the above
                 return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
 
-            processing_duration = time.time() - start_time
-            if document_metadata_default: # Ensure metadata is not None
-                document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
-                document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
+            processing_duration = time.time() - request_start_time # Corrected start_time variable
+            if document_metadata_default: # Changed from document_metadata_obj
+                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {} # Changed from document_metadata_obj
+                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3) # Changed from document_metadata_obj
             
             # Ensure preliminary_blocks are sorted by order before returning
             preliminary_blocks_list.sort(key=lambda b: b.order)
@@ -1026,14 +1132,14 @@ class WebAcquisitionService(BaseService):
                 preliminary_blocks_list = self._filter_boilerplate_preliminary_blocks(preliminary_blocks_list, final_url_val)
                 self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks_list)} blocks remaining.")
 
-            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_default, raw_images_list))
+            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
 
         except Exception as e_process: # Catch errors from PDF routing or HTML parsing/structuring
-            processing_duration = time.time() - start_time
-            if document_metadata_default: 
-                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
-                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3)
-                 document_metadata_default.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}"
+            processing_duration = time.time() - request_start_time # Corrected start_time variable
+            if document_metadata_default: # Changed from document_metadata_obj
+                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {} # Changed from document_metadata_obj
+                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3) # Changed from document_metadata_obj
+                 document_metadata_default.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}" # Changed from document_metadata_obj
             self.logger.exception(f"WEB_SERVICE_CONTENT_PROCESSING_ERROR for {final_url_val}", exc_info=True) # Use logger.exception for traceback
             return ServiceResult.failure(
                 error_message=f"WEB_SERVICE_CONTENT_PROCESSING_ERROR: {type(e_process).__name__} for {final_url_val}. Details: {str(e_process)}",

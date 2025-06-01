@@ -1,346 +1,206 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Defines the GeneralPurposeTitleGenerationCrewManager, responsible for orchestrating
+Defines the GeneralPurposeTitleGenerationCrew, responsible for orchestrating
 agents to generate a title for a given list of content blocks.
-Following V2.6 Development Plan - Iteration 1.2.
+Aligns with V2.6 Development Plan - Iteration 1.2.
 """
 
 from crewai import Crew, Process, Task
-from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
 import json
-import time
-import uuid
-from textwrap import dedent
 
-# Agent definitions
 from aiservice.app.agents.title_generation_agents import TitleGenerationAgents
+from aiservice.app.models.orchestration_models import ContentBlock
+from crewai.crews.crew_output import CrewOutput # Import CrewOutput
 
-# Model imports
-from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum, DocumentMetadata # Added DocumentMetadata
-from aiservice.app.models.insight_generation_models import GenerateTitleInput, GenerateTitleOutput 
+class TitleOutput(BaseModel):
+    """Pydantic model for the expected output of the title generation task."""
+    generated_title: str = Field(description="The AI-generated title for the content.")
 
-class GeneralPurposeTitleGenerationCrewManager:
-    """Manages the creation and execution of the General Purpose Title Generation Crew."""
+class GeneralPurposeTitleGenerationCrew:
+    """Creates and runs a CrewAI crew for generating titles from content blocks."""
 
-    def __init__(self, title_input: GenerateTitleInput, verbose_level: int = 0):
+    def __init__(self, user_id: str = "default_crew_user"):
         """
-        Initializes the crew manager with the necessary input data.
+        Initializes the crew.
         Args:
-            title_input: The input data containing content_blocks.
-            verbose_level: Integer to control verbosity of logs. 0 = minimal.
+            user_id: Identifier for the user, can be used for logging or if agents need it.
         """
-        self.title_input = title_input
-        self.verbose_level = verbose_level
-        
-        self.user_id: Optional[str] = "default_user_id_title_manager" # Default
-        if hasattr(self.title_input, 'user_id') and self.title_input.user_id:
-            self.user_id = self.title_input.user_id
-        elif isinstance(self.title_input.document_metadata, DocumentMetadata) and self.title_input.document_metadata.user_id:
-            self.user_id = self.title_input.document_metadata.user_id
-        # If GenerateTitleInput is updated to directly include user_id or document_metadata, adjust access accordingly.
-        # For now, GenerateTitleInput from models.py doesn't explicitly have user_id or document_metadata yet.
-        # Let's assume for now GenerateTitleInput might be augmented or user_id is passed differently in a real scenario.
-        # For the purpose of this class, we'll use a placeholder if not found directly on title_input for now.
-        # This will be refined once GenerateTitleInput is finalized in models.py or FastAPI layer handles user_id propagation.
+        self.user_id = user_id
+        # Agents factory can be initialized here if it doesn't need per-run parameters
+        # or if user_id is the only parameter needed at init time.
+        self.agents_factory = TitleGenerationAgents() # Pass user_id if TitleGenerationAgents expects it
 
-        print(f"INFO: GeneralPurposeTitleGenerationCrewManager initialized with user_id: {self.user_id}")
-        self.agents_factory = TitleGenerationAgents(user_id=self.user_id)
-        self.crew: Optional[Crew] = None
-
-    def setup_crew(self) -> Crew:
+    def _create_title_task(self, agent: Any) -> Task:
         """
-        Defines and configures the General Purpose Title Generation Crew, its agent, and task.
+        Creates the title generation task for the given agent.
+        The task description guides the agent to use its tools sequentially and handle errors:
+        1. FullTextContentExtractorTool to process 'content_block_dicts'.
+        2. Check if text was extracted; if not, output error in 'generated_title'.
+        3. OptimizedLLMInteractionTool to generate the title using the extracted text with temperature 0.1.
         """
-        title_crafting_agent = self.agents_factory.title_crafting_agent()
-
-        # Task for TitleCraftingAgent
-        # The agent itself has the tools. The task description guides it on how to use them implicitly.
-        task_generate_title = Task(
-            description=dedent(f"""Analyze the provided '{{{{content_extract}}}}' to generate a title.
-            The content extract is a string derived from a list of content blocks.
-            Your goal is to produce a concise, informative, and engaging title suitable for a knowledge card.
-            Focus on the main topic of the content.
-            
-            When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to {self.agents_factory.title_crafter_temperature} and the 'max_tokens' parameter to {self.agents_factory.title_crafter_max_tokens}.
-            The 'FastContentBlockProcessorTool' is available if you need to perform specific block operations, but for title generation from an extract, the LLM tool is primary.
-            """),
-            expected_output="A single string representing the suggested title. Example: 'The Future of AI in Healthcare'",
-            agent=title_crafting_agent,
-            # No specific tools needed here if the agent is correctly configured with its default tools.
+        return Task(
+            description=(
+                "Your primary objective is to generate a title.\\n"
+                "IMPORTANT: Your task inputs contain a key named 'content_block_dicts'. The value associated with this key is a list of dictionaries, where each dictionary is a complete representation of a content block.\\n"
+                "Step 1: You MUST use the 'FullTextContentExtractorTool'. This tool expects a single argument which is a list of content block dictionaries. "
+                "You MUST provide the list of dictionaries (obtained from the 'content_block_dicts' key in your task inputs) directly as the argument to this tool. DO NOT WRAP IT IN ANOTHER DICTIONARY. DO NOT MODIFY OR SIMPLIFY THIS LIST. "
+                "The tool will return a string. Store this string result as 'extracted_text'.\\n"
+                "Step 2: Examine the 'extracted_text'. IF 'extracted_text' is an empty string, OR IF it starts with the literal string 'Error:', THEN title generation is not possible. In this scenario, your final output for the 'generated_title' field MUST be the exact string 'Error: No content available for title generation.'.\\n"
+                "Step 3: IF 'extracted_text' is valid (not empty and not an error string), THEN use this 'extracted_text' to generate a title. Call the 'OptimizedLLMInteractionTool', providing the 'extracted_text' as input to the tool. For this LLM call, you MUST use a temperature setting of 0.1. The result should be a concise and relevant title, ideally under 15 words.\\n"
+                "Your final output MUST be a JSON object that strictly conforms to the TitleOutput Pydantic model, specifically by populating the 'generated_title' field with your result (either the generated title or the error message)."
+            ),
+            expected_output=(
+                "A single string representing the generated title, or an error message if title generation was not possible. "
+                "This output must conform to the TitleOutput Pydantic model, "
+                "specifically populating the 'generated_title' field."
+            ),
+            agent=agent,
+            output_pydantic=TitleOutput, # Ensures the output is validated against TitleOutput
+            # async_execution=False, # Default is False, explicit if needed
         )
 
-        title_generation_crew = Crew(
-            agents=[title_crafting_agent],
-            tasks=[task_generate_title],
-            process=Process.sequential,
-            verbose=True if self.verbose_level > 0 else False,
-            # memory=False, # Default for Crew is False, explicit if needed
-            # embedder= # Not using an embedder for this simple crew
+    def run(self, content_blocks: List[ContentBlock]) -> str:
+        """
+        Runs the title generation crew with the given content blocks.
+
+        Args:
+            content_blocks: A list of ContentBlock objects to process.
+
+        Returns:
+            A string containing the suggested title, or an error message string.
+        """
+        title_agent = self.agents_factory.title_crafting_agent()
+        title_task = self._create_title_task(title_agent)
+
+        crew = Crew(
+            agents=[title_agent],
+            tasks=[title_task],
+            process=Process.sequential, # Tasks will be executed sequentially
+            verbose=True, # Changed from integer 2 to boolean True
+            memory=False # This crew is stateless for each run
+            # manager_llm=None, # Optional: Specify a manager LLM if needed for complex flows
         )
-        self.crew = title_generation_crew # Assign to instance variable
-        return self.crew
 
-    def run(self) -> GenerateTitleOutput: 
-        start_time = time.time()
-        trace_id = str(uuid.uuid4())
-        print(f"INFO: [{trace_id}] GeneralPurposeTitleGenerationCrewManager run initiated for user_id: {self.user_id}")
+        # Inputs for the kickoff. The task description tells the agent
+        # to find 'content_block_dicts' here.
+        task_inputs = {
+            "content_block_dicts": [block.model_dump() for block in content_blocks]
+        }
 
-        # Initialize default return values
-        suggested_title: Optional[str] = None
-        usage_metrics_dict: Optional[Dict[str, Any]] = None
-        final_status_code: OrchestrationStatusCodeEnum = OrchestrationStatusCodeEnum.ERROR_UNKNOWN
-        final_error_message: Optional[str] = "Title generation process did not complete successfully or was not initiated."
-        processing_time_ms: float = 0.0
+        print(f"INFO: Kicking off GeneralPurposeTitleGenerationCrew for user: {self.user_id} with {len(content_blocks)} content blocks (serialized to dicts).")
+        kickoff_result = crew.kickoff(inputs=task_inputs)
+        print(f"INFO: GeneralPurposeTitleGenerationCrew kickoff complete. Result type: {type(kickoff_result)}")
 
-        try:
-            # 1. Prepare content extract
-            print(f"DEBUG: [{trace_id}] Validating input. self.title_input is None: {self.title_input is None}")
-            if self.title_input:
-                print(f"DEBUG: [{trace_id}] self.title_input.content_blocks is None: {self.title_input.content_blocks is None}")
-                if self.title_input.content_blocks is not None:
-                    print(f"DEBUG: [{trace_id}] len(self.title_input.content_blocks): {len(self.title_input.content_blocks)}")
+        if isinstance(kickoff_result, CrewOutput):
+            print(f"DEBUG: Crew returned CrewOutput. Tasks output count: {len(kickoff_result.tasks_output) if kickoff_result.tasks_output else 'N/A'}")
+            final_title_str = None
 
-            if not self.title_input or not self.title_input.content_blocks:
-                final_error_message = "Input error: No content blocks provided for title generation."
-                final_status_code = OrchestrationStatusCodeEnum.ERROR_INPUT_VALIDATION
-                print(f"ERROR VAL1: [{trace_id}] {final_error_message}") # Changed print prefix
-                processing_time_ms = (time.time() - start_time) * 1000
-                return GenerateTitleOutput(
-                    suggested_title=None,
-                    status_code=final_status_code.value,
-                    error_message=final_error_message,
-                    usage_metrics=None,
-                    processing_time_ms=processing_time_ms,
-                    trace_id=trace_id
-                )
-
-            text_parts = []
-            for block in self.title_input.content_blocks:
-                if block.type == "text" and block.content:
-                    text_parts.append(block.content.strip())
+            # Attempt 1: Check if CrewOutput itself has a Pydantic object (newer CrewAI versions might put the *final task's* Pydantic output here)
+            if hasattr(kickoff_result, 'pydantic') and isinstance(kickoff_result.pydantic, TitleOutput):
+                print(f"DEBUG: Extracted TitleOutput from CrewOutput.pydantic: {kickoff_result.pydantic.generated_title}")
+                final_title_str = kickoff_result.pydantic.generated_title
             
-            concatenated_text = "\n\n".join(text_parts)
+            # Attempt 2: Check tasks_output (usually where individual task outputs reside)
+            if final_title_str is None and kickoff_result.tasks_output:
+                task_output = kickoff_result.tasks_output[0] # Assuming the first/only task is the one we want
+                title_to_return_from_task = None
 
-            print(f"DEBUG: [{trace_id}] concatenated_text.strip() is empty: {not concatenated_text.strip()}")
-            print(f"DEBUG: [{trace_id}] concatenated_text (first 50): '{concatenated_text[:50]}'")
-
-            if not concatenated_text.strip():
-                final_error_message = "Input error: Provided content blocks contain no textual content for title generation."
-                final_status_code = OrchestrationStatusCodeEnum.ERROR_INPUT_VALIDATION
-                print(f"ERROR VAL2: [{trace_id}] {final_error_message}") # Changed print prefix
-                processing_time_ms = (time.time() - start_time) * 1000
-                return GenerateTitleOutput(
-                    suggested_title=None,
-                    status_code=final_status_code.value,
-                    error_message=final_error_message,
-                    usage_metrics=None,
-                    processing_time_ms=processing_time_ms,
-                    trace_id=trace_id
-                )
-            
-            # Truncate to a maximum length (e.g., 4000 characters) as per plan
-            # This is a simple truncation. More sophisticated methods could be used if needed.
-            MAX_CONTENT_EXTRACT_LENGTH = 4000 
-            content_extract = concatenated_text[:MAX_CONTENT_EXTRACT_LENGTH]
-
-            if self.verbose_level > 1:
-                print(f"DEBUG: [{trace_id}] Original concatenated text length: {len(concatenated_text)}, Truncated extract length for title generation: {len(content_extract)}, First 200 chars: {content_extract[:200]}...")
-
-            # 2. Setup the crew (already assigned to self.crew in setup_crew, called by __init__ is not ideal, let's call it here)
-            if not self.crew:
-                 self.setup_crew() # Ensure crew is set up if not already
-
-            # 3. Prepare kickoff inputs
-            crew_kickoff_inputs = {
-                'content_extract': content_extract
-            }
-            
-            if self.verbose_level > 0:
-                print(f"INFO: [{trace_id}] Kicking off title generation crew.")
-
-            # 4. Kick off crew
-            # Note: CrewAI kickoff can return a CrewOutput object or the raw string from the last task
-            crew_result_raw: Any = self.crew.kickoff(inputs=crew_kickoff_inputs)
-
-            # 5. Process usage metrics
-            if self.crew and hasattr(self.crew, 'usage_metrics') and self.crew.usage_metrics:
-                # CrewAI usage_metrics is a list of dicts for each agent, or a dict if only one LLM call.
-                # We need to aggregate or decide how to represent this.
-                # For a single agent crew, it might be simpler.
-                # Let's assume it's a list and we take the first one or sum totals if available.
-                # Or, if it conforms to a dict like {'total_tokens': X, ...}, we can use it directly.
-                # Based on ContentRewriteCrew, it seems to be a dict like object by the end.
-                if isinstance(self.crew.usage_metrics, list) and self.crew.usage_metrics:
-                     # Simplistic aggregation: sum relevant fields if they exist in dicts within list
-                    total_tokens = sum(m.get('total_tokens', 0) for m in self.crew.usage_metrics if isinstance(m, dict))
-                    prompt_tokens = sum(m.get('prompt_tokens', 0) for m in self.crew.usage_metrics if isinstance(m, dict))
-                    completion_tokens = sum(m.get('completion_tokens', 0) for m in self.crew.usage_metrics if isinstance(m, dict))
-                    successful_requests = sum(m.get('successful_requests', 0) for m in self.crew.usage_metrics if isinstance(m, dict))
-                    usage_metrics_dict = {
-                        'total_tokens': total_tokens,
-                        'prompt_tokens': prompt_tokens,
-                        'completion_tokens': completion_tokens,
-                        'successful_requests': successful_requests
-                    }
-                    # If crew.usage_metrics is already a dict with these keys, this will just re-wrap it.
-                elif isinstance(self.crew.usage_metrics, dict):
-                    usage_metrics_dict = self.crew.usage_metrics
-                if self.verbose_level > 0 and usage_metrics_dict:
-                     print(f"DEBUG: [{trace_id}] Usage Metrics: {usage_metrics_dict}")
-
-            # 6. Extract final result
-            # The result of a sequential crew with one task is typically the output of that task.
-            # If crew_result_raw is a CrewOutput object, its .raw attribute often holds the string.
-            # If it's already a string, that's the title.
-            if crew_result_raw:
-                if hasattr(crew_result_raw, 'raw_output') and isinstance(crew_result_raw.raw_output, str): # CrewAI >=0.29.0 often uses raw_output
-                    suggested_title = crew_result_raw.raw_output.strip()
-                elif hasattr(crew_result_raw, 'result') and isinstance(crew_result_raw.result, str): # Older CrewAI versions
-                     suggested_title = crew_result_raw.result.strip()
-                elif isinstance(crew_result_raw, str):
-                    suggested_title = crew_result_raw.strip()
-                else:
-                    # Fallback, try to convert to string if it's some other object from the task.
+                if hasattr(task_output, 'parsed_output') and isinstance(task_output.parsed_output, TitleOutput):
+                    title_pydantic_obj = task_output.parsed_output
+                    print(f"DEBUG: Extracted TitleOutput from tasks_output[0].parsed_output: {title_pydantic_obj.generated_title}")
+                    title_to_return_from_task = title_pydantic_obj.generated_title
+                
+                if title_to_return_from_task is None and hasattr(task_output, 'raw_output') and isinstance(task_output.raw_output, str):
+                    raw_title_str = task_output.raw_output
+                    print(f"DEBUG: Extracted raw_output from tasks_output[0].raw_output: {raw_title_str}")
                     try:
-                        suggested_title = str(crew_result_raw).strip()
-                        print(f"WARNING: [{trace_id}] Crew result was not a string or standard CrewOutput, converted to string: {suggested_title[:100]}...")
-                    except Exception as str_e:
-                        final_error_message = f"Crew execution returned an unparsable result type: {type(crew_result_raw)}. Error during str conversion: {str_e}"
-                        final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_FROM_CREW
-                        print(f"ERROR: [{trace_id}] {final_error_message}")
-                        suggested_title = None # Ensure it's None if parsing failed
+                        data = json.loads(raw_title_str)
+                        if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
+                            print("DEBUG: Parsed 'generated_title' from task's raw_output JSON string.")
+                            title_to_return_from_task = data['generated_title']
+                        else:
+                            print("DEBUG: Task's raw_output was JSON but not TitleOutput structure, using raw string.")
+                            title_to_return_from_task = raw_title_str
+                    except json.JSONDecodeError:
+                        print("DEBUG: Task's raw_output was not JSON, using raw string directly.")
+                        title_to_return_from_task = raw_title_str
+                
+                if title_to_return_from_task is not None:
+                    final_title_str = title_to_return_from_task
 
-                if suggested_title: # If title extraction was successful
-                    # Clean up potential quoting if LLM wraps output in quotes
-                    if (suggested_title.startswith('"') and suggested_title.endswith('"')) or \
-                       (suggested_title.startswith("'") and suggested_title.endswith("'")):
-                        suggested_title = suggested_title[1:-1]
-                    
-                    final_status_code = OrchestrationStatusCodeEnum.SUCCESS
-                    final_error_message = None
-                    if self.verbose_level > 0:
-                        print(f"INFO: [{trace_id}] Suggested title: {suggested_title}")
-                else: # If string conversion led to empty or still None
-                    if final_status_code == OrchestrationStatusCodeEnum.ERROR_UNKNOWN: # Only override if not already set by parsing error
-                        final_error_message = "Crew execution resulted in an empty title."
-                        final_status_code = OrchestrationStatusCodeEnum.ERROR_EMPTY_RESULT_FROM_CREW
-                    print(f"WARNING: [{trace_id}] {final_error_message}")
+            # Attempt 3: Check CrewOutput.raw (often contains the string output of the last task if not Pydantic)
+            if final_title_str is None and hasattr(kickoff_result, 'raw') and isinstance(kickoff_result.raw, str):
+                raw_crew_result_str = kickoff_result.raw
+                print(f"DEBUG: Extracted string from CrewOutput.raw: {raw_crew_result_str}")
+                try:
+                    data = json.loads(raw_crew_result_str)
+                    if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
+                        print("DEBUG: Parsed 'generated_title' from CrewOutput.raw JSON string.")
+                        final_title_str = data['generated_title']
+                    else:
+                        print("DEBUG: CrewOutput.raw was JSON but not TitleOutput, using raw string.")
+                        final_title_str = raw_crew_result_str # Use the raw string if JSON doesn't match
+                except json.JSONDecodeError:
+                    print("DEBUG: CrewOutput.raw was not JSON, using raw string directly.")
+                    final_title_str = raw_crew_result_str # Use the raw string if not JSON
 
-            else: # crew_result_raw is None or empty
-                final_error_message = "Crew execution returned no result (None or empty)."
-                final_status_code = OrchestrationStatusCodeEnum.ERROR_NO_RESULT_FROM_CREW
-                print(f"ERROR: [{trace_id}] {final_error_message}")
+            if final_title_str is not None:
+                return final_title_str.strip('"\'')
 
-        except Exception as e:
-            import traceback
-            error_stack = traceback.format_exc()
-            
-            # Check if a specific validation error was already set and this is a subsequent failure
-            # This logic is complex; for now, assume any exception here is a new problem unless status is already SUCCESS
-            if final_status_code == OrchestrationStatusCodeEnum.SUCCESS:
-                # This case should ideally not happen if success means no errors
-                pass # Or log an anomaly
-            
-            # If a validation error was supposed to be returned but code flowed here due to an issue IN the return path:
-            # This is hard to detect perfectly. The print(f"ERROR VAL... didn't appear, so it's not this.
-
-            # Default to a general crew execution error if no specific validation error was about to be returned.
-            # The initial value of final_status_code is ERROR_UNKNOWN.
-            current_error_type_name = type(e).__name__
-            current_error_str = str(e)
-
-            # If a previous status was set by validation (which means we should not have reached here)
-            # we might want to log that. But the print logs suggest validation blocks were not entered.
-            # So, it's a new error.
-            final_error_message = f"Crew execution failed. Type: {current_error_type_name}, Msg: {current_error_str}"
-            # Only update status if it's still the default unknown, otherwise a more specific error might have been set by kickoff processing.
-            if final_status_code == OrchestrationStatusCodeEnum.ERROR_UNKNOWN:
-                 final_status_code = OrchestrationStatusCodeEnum.ERROR_CREW_EXECUTION
-            
-            print(f"ERROR CAUGHT: [{trace_id}] {final_error_message}\nStack trace:\n{error_stack}")
+        # Fallback for older CrewAI or direct Pydantic model return (less likely)
+        if isinstance(kickoff_result, TitleOutput):
+            print(f"DEBUG: Crew returned TitleOutput directly. Title: {kickoff_result.generated_title}")
+            return kickoff_result.generated_title.strip('"\'')
         
-        finally:
-            processing_time_ms = (time.time() - start_time) * 1000
-            print(f"INFO: [{trace_id}] GeneralPurposeTitleGenerationCrewManager run finished in {processing_time_ms/1000.0:.3f} seconds. Status: {final_status_code.value}")
-            
-            return GenerateTitleOutput(
-                suggested_title=suggested_title,
-                status_code=final_status_code.value,
-                error_message=final_error_message,
-                usage_metrics=usage_metrics_dict,
-                processing_time_ms=processing_time_ms,
-                trace_id=trace_id
-            )
+        # Fallback handling for different result structures (should be less needed with CrewOutput handling)
+        raw_output_text = None
+        if hasattr(kickoff_result, 'raw_output') and isinstance(kickoff_result.raw_output, str): # e.g. if CrewOutput itself has a raw_output attr
+            raw_output_text = kickoff_result.raw_output
+        elif isinstance(kickoff_result, str):
+            raw_output_text = kickoff_result
+        elif isinstance(kickoff_result, dict):
+            if 'generated_title' in kickoff_result and isinstance(kickoff_result['generated_title'], str):
+                print("DEBUG: Crew returned dict with 'generated_title'.")
+                return kickoff_result['generated_title'].strip('"\'')
+            else:
+                try: raw_output_text = json.dumps(kickoff_result)
+                except: pass
+        
+        if raw_output_text:
+            print(f"DEBUG: Crew returned raw output text (fallback): {raw_output_text[:200]}...")
+            try:
+                data = json.loads(raw_output_text)
+                if isinstance(data, dict) and 'generated_title' in data and isinstance(data['generated_title'], str):
+                    return data['generated_title'].strip('"\'')
+            except json.JSONDecodeError:
+                return raw_output_text.strip('"\'') 
 
-if __name__ == '__main__':
-    print("--- GeneralPurposeTitleGenerationCrewManager: Local Test Run --- ")
-    
-    # Ensure necessary model imports for the test
-    from aiservice.app.models.orchestration_models import ContentBlock, DocumentMetadata
-    from aiservice.app.models.insight_generation_models import GenerateTitleInput 
+        error_msg = f"Error: Title generation failed or produced an unexpected result structure. Type: {type(kickoff_result)}, Value: {str(kickoff_result)[:200]}..."
+        print(f"ERROR: {error_msg}")
+        return error_msg
 
-    print("Simulating input data...")
-    sample_doc_metadata = DocumentMetadata(
-        document_id="doc_title_test_001",
-        source_uri="local/test_document.txt",
-        user_id="test_user_for_title_crew",
-        status_code="processed_successfully",
-        source_identifier="test_doc_title_001",
-        source_type="text_file"
-    )
+# Example Usage (commented out, for direct testing if needed):
+# if __name__ == '__main__':
+#     from uuid import uuid4
+#     # Define or import ContentBlock for this example to run
+#     # class ContentBlock(BaseModel):
+#     #     block_id: str; tmp_id: Optional[str]; user_id: str; document_id: str; type: str; 
+#     #     order_index: Optional[int]; content: Optional[str]; level: Optional[int]; 
+#     #     items: Optional[List[Any]]; ordered: Optional[bool]; image_id_ref: Optional[str] = None
 
-    sample_blocks = [
-        ContentBlock(block_id="b1", type="text", content="The Rise of Quantum Computing: A New Era of Calculation.", order_index=0, user_id=sample_doc_metadata.user_id, document_id=sample_doc_metadata.document_id),
-        ContentBlock(block_id="b2", type="text", content="Quantum computers leverage the principles of quantum mechanics to perform complex calculations that are intractable for classical computers. This includes superposition and entanglement, allowing them to explore vast computational spaces.", order_index=1, user_id=sample_doc_metadata.user_id, document_id=sample_doc_metadata.document_id),
-        ContentBlock(block_id="b3", type="text", content="Potential applications span drug discovery, materials science, financial modeling, and cryptography. While still in early stages, the progress is rapid.", order_index=2, user_id=sample_doc_metadata.user_id, document_id=sample_doc_metadata.document_id),
-        ContentBlock(block_id="b4", type="text", content="Challenges remain in building stable, large-scale quantum computers and developing robust quantum algorithms.", order_index=3, user_id=sample_doc_metadata.user_id, document_id=sample_doc_metadata.document_id)
-    ]
-    
-    title_input_data = GenerateTitleInput(
-        content_blocks=sample_blocks,
-        document_metadata=sample_doc_metadata,
-        # user_id can be explicitly set if not in document_metadata or to override
-        # user_id="explicit_user_id_for_title_test"
-    )
+#     sample_blocks_data = [
+#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "heading", "order_index": 0, "content": "The Future of AI", "level": 1},
+#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "text", "order_index": 1, "content": "Artificial intelligence is rapidly changing various industries. This document explores the potential impacts and future trends."},
+#         {"block_id": str(uuid4()), "tmp_id":str(uuid4()), "user_id": "test_user", "document_id": "doc1", "type": "list", "order_index": 2, "items": ["Healthcare advancements", "Autonomous transportation", "Personalized education"], "ordered": False},
+#     ]
+#     # This assumes ContentBlock can be instantiated with these fields.
+#     # Adjust if ContentBlock definition is different or has more required fields.
+#     sample_content_blocks = [ContentBlock(**block) for block in sample_blocks_data]
 
-    print(f"Initializing GeneralPurposeTitleGenerationCrewManager with user_id: {sample_doc_metadata.user_id} (from metadata)...")
-    # Set verbose_level to 2 for detailed crew output, 0 or 1 for less.
-    manager = GeneralPurposeTitleGenerationCrewManager(title_input=title_input_data, verbose_level=2)
-
-    print("\n--- Running Title Generation Crew ---")
-    result = manager.run()
-    print("--- Title Generation Crew Finished ---")
-
-    print("\n--- Crew Output --- ")
-    print(f"Suggested Title: {result.suggested_title}")
-    print(f"Status Code: {result.status_code}")
-    if result.error_message:
-        print(f"Error Message: {result.error_message}")
-    if result.usage_metrics:
-        print(f"Usage Metrics: {result.usage_metrics}")
-    print(f"Processing Time (ms): {result.processing_time_ms}")
-    print(f"Trace ID: {result.trace_id}")
-
-    print("\n--- Testing with Empty Content --- ")
-    empty_blocks_input = GenerateTitleInput(
-        content_blocks=[ContentBlock(block_id="eb1", type="text", content="  ", order_index=0)],
-        document_metadata=sample_doc_metadata
-    )
-    manager_empty = GeneralPurposeTitleGenerationCrewManager(title_input=empty_blocks_input, verbose_level=0)
-    result_empty = manager_empty.run()
-    print(f"Empty Content - Suggested Title: {result_empty.suggested_title}")
-    print(f"Empty Content - Status Code: {result_empty.status_code}")
-    print(f"Empty Content - Error Message: {result_empty.error_message}")
-
-    print("\n--- Testing with No Content Blocks --- ")
-    no_blocks_input = GenerateTitleInput(
-        content_blocks=[],
-        document_metadata=sample_doc_metadata
-    )
-    manager_no_blocks = GeneralPurposeTitleGenerationCrewManager(title_input=no_blocks_input, verbose_level=0)
-    result_no_blocks = manager_no_blocks.run()
-    print(f"No Blocks - Suggested Title: {result_no_blocks.suggested_title}")
-    print(f"No Blocks - Status Code: {result_no_blocks.status_code}")
-    print(f"No Blocks - Error Message: {result_no_blocks.error_message}")
-    print("\n--- End of Local Test Run --- ") 
+#     print("Running title generation crew example...")
+#     title_crew_instance = GeneralPurposeTitleGenerationCrew(user_id="example_main_user")
+#     generated_title = title_crew_instance.run(content_blocks=sample_content_blocks)
+#     print(f"\n==> Suggested Title by Crew: {generated_title}") 

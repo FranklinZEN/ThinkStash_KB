@@ -54,6 +54,8 @@ class ImageProcessingService(BaseService):
             self.gcs_bucket_name = self.settings.gcs_bucket_name
             # Load image filter constants from settings
             self.MIN_IMG_DIMENSION = self.settings.img_filter_min_dimension
+            self.MIN_IMG_WIDTH_PX = self.settings.img_filter_min_width_px
+            self.MIN_IMG_HEIGHT_PX = self.settings.img_filter_min_height_px
             self.MIN_IMG_AREA = self.settings.img_filter_min_area
             self.MAX_IMG_ASPECT_RATIO_DEVIATION = self.settings.img_filter_max_aspect_ratio_deviation
             self.IRRELEVANT_ALT_TEXT_EXACT = self.settings.img_filter_irrelevant_alt_text_exact
@@ -67,6 +69,8 @@ class ImageProcessingService(BaseService):
             self.use_llm_for_image_analysis = False
             self.gcs_bucket_name = None
             self.MIN_IMG_DIMENSION = 50
+            self.MIN_IMG_WIDTH_PX = 150
+            self.MIN_IMG_HEIGHT_PX = 150
             self.MIN_IMG_AREA = 5000
             self.MAX_IMG_ASPECT_RATIO_DEVIATION = 4.0
             self.IRRELEVANT_ALT_TEXT_EXACT = {"logo", "avatar", "icon"} # Minimal fallback
@@ -132,6 +136,10 @@ class ImageProcessingService(BaseService):
         current_image_bytes: Optional[bytes] = raw_image.image_bytes # Moved higher to be available for initial cache key logic if needed, though hash is after download
         error_messages: List[str] = []
 
+        # --- TEMP DEBUG LOG ---
+        self.logger.debug(f"ImageProcessingService._process_single_image: Processing ID: {raw_image.image_id}, Source URL: {raw_image.source_url}, Alt Text: '{raw_image.alt_text}'")
+        # --- END TEMP DEBUG LOG ---
+
         # 1. Download if source_url is provided and no bytes (current_image_bytes will be updated)
         if raw_image.source_url and not current_image_bytes:
             try:
@@ -184,48 +192,49 @@ class ImageProcessingService(BaseService):
         metadata = await self._get_image_metadata(current_image_bytes)
         if metadata.get("error"):
             error_messages.append(metadata["error"])
-            # If metadata extraction failed, we can't apply dimension filters, but other filters might still apply or we might choose to bail.
-            # For now, let's assume we might still proceed to GCS upload if bytes exist, but this is a weak point.
-            # A more robust approach might be to return None here if metadata.error is significant.
+            self.logger.warning(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to metadata extraction error: {metadata['error']}.")
+            return None # Filter out images where metadata extraction failed
 
         # --- Apply Image Filtering Logic ---
-        # Only proceed if metadata was successfully extracted
-        if not metadata.get("error"):
-            img_width = metadata.get("width")
-            img_height = metadata.get("height")
+        # This block will now only be reached if metadata extraction was successful
+        img_width = metadata.get("width")
+        img_height = metadata.get("height")
 
-            if img_width is not None and img_height is not None: # Dimensions are available
-                if img_width < self.MIN_IMG_DIMENSION or img_height < self.MIN_IMG_DIMENSION:
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small dimension (W:{img_width}, H:{img_height} < MinDim:{self.MIN_IMG_DIMENSION}).")
-                    return None
-                if (img_width * img_height) < self.MIN_IMG_AREA:
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small area (Area:{img_width * img_height} < MinArea:{self.MIN_IMG_AREA}).")
-                    return None
-                if img_height > 0 and (img_width / img_height) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (W:{img_width}/H:{img_height} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
-                    return None
-                if img_width > 0 and (img_height / img_width) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (H:{img_height}/W:{img_width} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
-                    return None
-            # else: dimensions not available, cannot apply dimension-based filters.
+        if img_width is not None and img_height is not None: # Dimensions are available
+            if img_width < self.MIN_IMG_WIDTH_PX or img_height < self.MIN_IMG_HEIGHT_PX:
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small dimension (W:{img_width} < {self.MIN_IMG_WIDTH_PX} or H:{img_height} < {self.MIN_IMG_HEIGHT_PX}).")
+                return None
+            if (img_width * img_height) < self.MIN_IMG_AREA:
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to small area (Area:{img_width * img_height} < MinArea:{self.MIN_IMG_AREA}).")
+                return None
+            if img_height > 0 and (img_width / img_height) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (W:{img_width}/H:{img_height} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                return None
+            if img_width > 0 and (img_height / img_width) > self.MAX_IMG_ASPECT_RATIO_DEVIATION:
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} (source: {raw_image.source_url or raw_image.original_filename}) due to aspect ratio (H:{img_height}/W:{img_width} > MaxDev:{self.MAX_IMG_ASPECT_RATIO_DEVIATION}).")
+                return None
+        # else: dimensions not available, cannot apply dimension-based filters.
+        # This path should ideally not be taken if metadata extraction succeeded without error
+        # but width/height were somehow still None. Log if it happens.
+        else:
+            self.logger.warning(f"ImageProcessingService: Image {raw_image.image_id} had no metadata error, but width/height are None. Skipping dimension filters.")
 
-            # Alt text filtering
-            alt_text_lower = (raw_image.alt_text or "").lower()
-            if alt_text_lower:
-                if alt_text_lower in self.IRRELEVANT_ALT_TEXT_EXACT:
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to exact match in irrelevant alt text: '{raw_image.alt_text}'.")
-                    return None
-                if any(sub in alt_text_lower for sub in self.IRRELEVANT_ALT_TEXT_SUBSTRINGS):
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to substring match in irrelevant alt text: '{raw_image.alt_text}'.")
-                    return None
+        # Alt text filtering
+        alt_text_lower = (raw_image.alt_text or "").lower()
+        if alt_text_lower:
+            if alt_text_lower in self.IRRELEVANT_ALT_TEXT_EXACT:
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to exact match in irrelevant alt text: '{raw_image.alt_text}'.")
+                return None
+            if any(sub in alt_text_lower for sub in self.IRRELEVANT_ALT_TEXT_SUBSTRINGS):
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to substring match in irrelevant alt text: '{raw_image.alt_text}'.")
+                return None
 
-            # Filename/URL segment filtering
-            source_identifier_lower = (raw_image.source_url or raw_image.original_filename or "").lower()
-            if source_identifier_lower:
-                if any(segment in source_identifier_lower for segment in self.IRRELEVANT_FILENAME_URL_SEGMENTS):
-                    self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to irrelevant segment in URL/filename: '{source_identifier_lower}'.")
-                    return None
-        # --- End Image Filtering Logic ---
+        # Filename/URL segment filtering
+        source_identifier_lower = (raw_image.source_url or raw_image.original_filename or "").lower()
+        if source_identifier_lower:
+            if any(segment in source_identifier_lower for segment in self.IRRELEVANT_FILENAME_URL_SEGMENTS):
+                self.logger.info(f"ImageProcessingService: Filtering out image {raw_image.image_id} due to irrelevant segment in URL/filename: '{source_identifier_lower}'.")
+                return None
 
         gcs_url: Optional[str] = None
         if self.gcs_client and self.gcs_bucket_name:

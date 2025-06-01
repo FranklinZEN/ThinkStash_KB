@@ -43,6 +43,10 @@ class ContentStructuringService(BaseService):
                  self.logger.warning(f"document_metadata.document_id not found, using job_id {service_input.job_id} as document_id.")
                  current_document_id = service_input.job_id
 
+            # Added Debug Logging
+            self.logger.debug(f"CSS Execute: Determined current_user_id: '{current_user_id}'")
+            self.logger.debug(f"CSS Execute: Determined current_document_id: '{current_document_id}'")
+
             if service_input.preliminary_blocks is None:
                 self.logger.error("service_input.preliminary_blocks is None.")
                 return ServiceResult.failure(data=[], error_message="Preliminary blocks list is None.")
@@ -94,14 +98,8 @@ class ContentStructuringService(BaseService):
                             final_list_data = active_lists_stack.pop()
                             p_block_ref_for_list = final_list_data.get('p_block_ref')
                             if not p_block_ref_for_list:
-                                self.logger.error(f"Could not find p_block_ref for list_data: {final_list_data.get('block_id_prefix')}. Using potentially inaccurate metadata for list block.")
-                                # This case should be rare if p_block_ref is always set when a list starts
-                                # As a last resort, we might not have a specific p_block for the list's overall metadata
-                                # However, create_list_content_block expects one.
-                                # For now, this will likely cause an error if p_block_ref is None.
-                                # A robust fallback might involve taking metadata from the p_block that *closed* the list,
-                                # or the first item in final_list_data if it's a ContentBlock itself.
-                                # For now, we rely on p_block_ref being present.
+                                error_detail = f"Could not find p_block_ref for list_data with block_id_prefix: {final_list_data.get('block_id_prefix')}. This list cannot be properly constructed."
+                                self.logger.critical(error_detail)
                                 continue # Skip this list if essential ref is missing
                             
                             list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
@@ -148,7 +146,10 @@ class ContentStructuringService(BaseService):
                         while active_lists_stack and active_lists_stack[-1]['level'] > current_item_level:
                             final_list_data = active_lists_stack.pop()
                             p_block_ref_for_list = final_list_data.get('p_block_ref')
-                            if not p_block_ref_for_list: continue # Should have been logged before
+                            if not p_block_ref_for_list: 
+                                error_detail = f"(Inner loop) Could not find p_block_ref for list_data with block_id_prefix: {final_list_data.get('block_id_prefix')}. Skipping list construction."
+                                self.logger.critical(error_detail)
+                                continue # Should have been logged before, but ensure we skip if still None
                             list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
                             if active_lists_stack:
                                 active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
@@ -162,7 +163,10 @@ class ContentStructuringService(BaseService):
                             if active_lists_stack and active_lists_stack[-1]['level'] == current_item_level:
                                 final_list_data = active_lists_stack.pop()
                                 p_block_ref_for_list = final_list_data.get('p_block_ref')
-                                if not p_block_ref_for_list: continue
+                                if not p_block_ref_for_list: 
+                                    error_detail = f"(After type check) Could not find p_block_ref for list_data with block_id_prefix: {final_list_data.get('block_id_prefix')}. Skipping list construction."
+                                    self.logger.critical(error_detail)
+                                    continue
                                 list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
                                 if active_lists_stack:
                                      active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
@@ -188,7 +192,10 @@ class ContentStructuringService(BaseService):
                 while active_lists_stack:
                     final_list_data = active_lists_stack.pop()
                     p_block_ref_for_list = final_list_data.get('p_block_ref')
-                    if not p_block_ref_for_list: continue
+                    if not p_block_ref_for_list: 
+                        error_detail = f"(Final loop) Could not find p_block_ref for list_data with block_id_prefix: {final_list_data.get('block_id_prefix')}. Skipping list construction."
+                        self.logger.critical(error_detail)
+                        continue
                     list_cb = create_list_content_block(final_list_data, p_block_ref_for_list)
                     if active_lists_stack: 
                         active_lists_stack[-1]['items'].append(list_cb.model_dump(exclude_none=True))
@@ -201,11 +208,11 @@ class ContentStructuringService(BaseService):
                     try:
                         problematic_block_details = p_block.model_dump_json()
                     except Exception as e_dump_block:
-                        problematic_block_details = f"Could not serialize p_block: {str(p_block)}, dump error: {e_dump_block}"
+                        problematic_block_details = f"Could not serialize p_block: {str(p_block)}, dump error: {str(e_dump_block)}"
                 
-                error_msg = f"Error during content structuring loop. Last processed/problematic p_block (approx): {problematic_block_details}. Exception: {type(e_structuring_loop).__name__}: {e_structuring_loop}"
+                error_msg = f"Error during content structuring loop. Last processed/problematic p_block (approx): {problematic_block_details}. Exception: {type(e_structuring_loop).__name__}: {str(e_structuring_loop)}"
                 self.logger.critical(f"{error_msg}", exc_info=True)
-                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg) # Return partially processed blocks if any
+                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg if error_msg else "Unknown error in structuring loop")
             
             duration = time.time() - start_time
             self.logger.info(f"ContentStructuringService finished successfully in {duration:.2f}s. Blocks created: {len(final_content_blocks)}.")
@@ -220,9 +227,9 @@ class ContentStructuringService(BaseService):
                 except:
                     input_summary = "Error summarizing service_input fields."
             
-            full_error_message = f"{error_message}. Input summary: {input_summary}"
+            full_error_message = f"{error_message if error_message else 'Outer exception with no specific message'}. Input summary: {input_summary}"
             self.logger.critical(f"FATAL ERROR in ContentStructuringService: {full_error_message}", exc_info=True)
-            return ServiceResult.failure(data=final_content_blocks, error_message=full_error_message) # Return partially processed blocks if any
+            return ServiceResult.failure(data=final_content_blocks, error_message=full_error_message if full_error_message else "Outer unknown error in CSS")
 
 # Example usage (conceptual, not run as part of the service file)
 # if __name__ == '__main__':

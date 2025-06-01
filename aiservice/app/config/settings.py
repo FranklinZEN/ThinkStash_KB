@@ -64,30 +64,25 @@ class Settings(BaseSettings):
 
     # Image Processing Service Specific Caching & Filters
     image_processing_cache_size: int = Field(default=256, env="IMAGE_PROCESSING_CACHE_SIZE", description="Max size for LRU cache in ImageProcessingService.")
-    img_filter_min_dimension: int = Field(default=50, env="IMG_FILTER_MIN_DIMENSION", description="Min width/height for images to be kept.")
+    img_filter_min_dimension: int = Field(default=50, env="IMG_FILTER_MIN_DIMENSION", description="Min width/height for images to be kept (legacy, prefer specific width/height).")
+    img_filter_min_width_px: int = Field(default=75, env="IMG_FILTER_MIN_WIDTH_PX", description="Minimum width in pixels for an image to be processed.")
+    img_filter_min_height_px: int = Field(default=75, env="IMG_FILTER_MIN_HEIGHT_PX", description="Minimum height in pixels for an image to be processed.")
     img_filter_min_area: int = Field(default=5000, env="IMG_FILTER_MIN_AREA", description="Min area (width*height) for images.")
     img_filter_max_aspect_ratio_deviation: float = Field(default=4.0, env="IMG_FILTER_MAX_ASPECT_RATIO_DEVIATION", description="Max aspect ratio deviation for images.")
     
     img_filter_irrelevant_alt_text_exact: Set[str] = Field(default={
-        "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
-        "user", "default", "placeholder", "loading", "spinner", "spacer", "pixel",
-        "figure", "image", "photo", "illustration", "diagram"
+        "icon", "logo", "avatar", "profile", "button", "spinner", "loading", "pixel", "spacer", "ad", "advertisement"
     }, description="Exact alt text matches for filtering images.")
     
     img_filter_irrelevant_alt_text_substrings: Set[str] = Field(default={
-        "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
-        "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo",
-        "decorative image", "background image"
+        "icon", "logo", "avatar", "profile", "button", "advert", "social", "badge", "promo", "rating", "user photo", "profile picture"
     }, description="Substrings in alt text for filtering images.")
 
     img_filter_irrelevant_filename_url_segments: Set[str] = Field(default={
-        "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
-        "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
-        "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
-        "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
-        "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com",
-        "default-avatar", "default_avatar", "profile-pic", "profile_pic",
-        "icon-", "logo-", "banner-", "-icon.", "-logo.", "-banner."
+        "/icon", "/logo", "/avatar", "/profile", "/button", "/badge", "/sprite", 
+        "/spinner", "/loader", "/ads/", "/ad/", "pixel.gif", "spacer.gif", 
+        "/social_", "_social.", "gravatar.com", "default-avatar", "profile-pic", 
+        "-icon.", "-logo.", "/thumb/", "_thumb.", "avatar-", "/avatars/", "/users/"
     }, description="URL/filename segments for filtering images.")
 
     # Performance & Timeouts

@@ -5,7 +5,9 @@ from typing import List, Optional
 from aiservice.app.models.insight_generation_models import (
     RewriteContentInput, RewriteContentOutput,
     GenerateTitleInput, GenerateTitleOutput,
-    GenerateKeywordsInput, GenerateKeywordsOutput
+    GenerateKeywordsInput, GenerateKeywordsOutput,
+    TitleGenerationRequest, TitleGenerationResponse,
+    KeywordExtractionRequest, KeywordExtractionResponse
 )
 from aiservice.app.models.orchestration_models import ContentBlock # For type hinting in crew results
 
@@ -14,7 +16,8 @@ from aiservice.app.config.llm_config import get_configured_llm
 
 # Crews
 from aiservice.app.crews.content_rewrite_crew import ContentRewriteCrew
-from aiservice.app.crews.general_purpose_crews import GeneralPurposeTitleGenerationCrew, GeneralPurposeKeywordExtractionCrew
+from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew as TitleGenerationCrew
+from aiservice.app.crews.keyword_extraction_crew import GeneralPurposeKeywordExtractionCrew
 
 router = APIRouter()
 
@@ -53,50 +56,77 @@ async def rewrite_content(payload: RewriteContentInput = Body(...)) -> RewriteCo
         print(f"Error during content rewrite: {e}") # Log the full error for debugging
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during content rewriting: {str(e)}")
 
-@router.post("/generate-title", response_model=GenerateTitleOutput,
+@router.post("/generate-title", response_model=TitleGenerationResponse,
               summary="Generate AI-Suggested Title",
               description="Generates an AI-suggested title for the given content blocks.")
-async def generate_title(payload: GenerateTitleInput = Body(...)) -> GenerateTitleOutput:
-    llm = get_configured_llm()
-    if not llm:
-        raise HTTPException(status_code=500, detail="LLM service not available or configured correctly.")
+async def generate_title_endpoint(request_data: TitleGenerationRequest = Body(...)) -> TitleGenerationResponse:
+    """
+    Receives a list of content blocks and returns an AI-generated title.
+    Processes the request using the GeneralPurposeTitleGenerationCrew.
+    Endpoint aligns with V2.6 Plan - Iteration 1.2.
+    """
+    if not request_data.content_blocks:
+        raise HTTPException(status_code=400, detail="No content blocks provided.")
 
-    title_crew = GeneralPurposeTitleGenerationCrew(llm=llm)
     try:
-        suggested_title_str: Optional[str] = title_crew.run(
-            content_blocks=payload.content_blocks,
-            document_metadata=payload.document_metadata
-        )
+        # Assuming user_id might be extracted from a JWT token or similar in a real app
+        # For now, using a placeholder or deriving if possible. The crew itself has a default.
+        # user_id_for_crew = "api_user" # Placeholder
+        # title_crew = GeneralPurposeTitleGenerationCrew(user_id=user_id_for_crew)
         
-        if not suggested_title_str:
-            raise HTTPException(status_code=500, detail="Title generation crew did not produce a valid title.")
-            
-        return GenerateTitleOutput(suggested_title=suggested_title_str)
+        # Per Iteration 1.2, the crew takes content_blocks in its run method.
+        # The crew constructor might take user_id if needed, but the run method is key for data.
+        title_crew = TitleGenerationCrew() # Use default user_id from crew if not passed
+        
+        suggested_title_str = title_crew.run(content_blocks=request_data.content_blocks)
+
+        if suggested_title_str.startswith("Error:"):
+            # Log the error server-side as well
+            print(f"Error from TitleGenerationCrew: {suggested_title_str}")
+            # Return a more generic error to the client for now, or a specific one if appropriate
+            raise HTTPException(status_code=500, detail=f"AI title generation failed: {suggested_title_str}")
+
+        return TitleGenerationResponse(suggested_title=suggested_title_str)
+    
+    except HTTPException as http_exc: # Re-raise HTTPException
+        raise http_exc
     except Exception as e:
-        print(f"Error during title generation: {e}")
+        print(f"Error in /generate-title endpoint: {e}")
+        # import traceback # For detailed logging
+        # traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during title generation: {str(e)}")
 
-@router.post("/generate-keywords", response_model=GenerateKeywordsOutput,
+@router.post("/generate-keywords", response_model=KeywordExtractionResponse,
               summary="Generate AI-Suggested Keywords",
               description="Generates a list of AI-suggested keywords for the given content blocks.")
-async def generate_keywords(payload: GenerateKeywordsInput = Body(...)) -> GenerateKeywordsOutput:
-    llm = get_configured_llm()
-    if not llm:
-        raise HTTPException(status_code=500, detail="LLM service not available or configured correctly.")
+async def generate_keywords_endpoint(request_data: KeywordExtractionRequest = Body(...)) -> KeywordExtractionResponse:
+    """
+    Receives a list of content blocks and returns AI-generated keywords.
+    Processes the request using the GeneralPurposeKeywordExtractionCrew.
+    Endpoint aligns with V2.6 Plan - Iteration 1.3.
+    """
+    if not request_data.content_blocks:
+        raise HTTPException(status_code=400, detail="No content blocks provided.")
 
-    keyword_crew = GeneralPurposeKeywordExtractionCrew(llm=llm)
     try:
-        suggested_keywords_list: Optional[List[str]] = keyword_crew.run(
-            content_blocks=payload.content_blocks,
-            document_metadata=payload.document_metadata
+        keyword_crew = GeneralPurposeKeywordExtractionCrew() # Instantiate the correct crew
+        
+        suggested_keywords_list: List[str] = keyword_crew.run(
+            content_blocks=request_data.content_blocks
         )
         
-        if not suggested_keywords_list:
-            raise HTTPException(status_code=500, detail="Keyword generation crew did not produce valid keywords.")
-            
-        return GenerateKeywordsOutput(suggested_keywords=suggested_keywords_list)
+        # The crew's run method should return an empty list if no keywords are found or an error occurs internally that it handles.
+        # If it can raise an exception that we want to specifically catch, that would be done here.
+        # For now, assume it returns a list (possibly empty).
+
+        return KeywordExtractionResponse(suggested_keywords=suggested_keywords_list)
+    
+    except HTTPException as http_exc: # Re-raise HTTPException
+        raise http_exc
     except Exception as e:
-        print(f"Error during keyword generation: {e}")
+        print(f"Error in /generate-keywords endpoint: {e}")
+        # import traceback
+        # traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during keyword generation: {str(e)}")
 
 # Remove the example hello_world endpoint if it's no longer needed

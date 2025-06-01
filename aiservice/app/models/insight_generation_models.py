@@ -37,26 +37,17 @@ class RewriteContentOutput(BaseModel):
 
 # --- Title Generation Models ---
 
-class GenerateTitleInput(BaseModel):
-    """Input model for the /generate-title endpoint."""
-    content_blocks: List[ContentBlock] = Field(..., description="The list of content blocks for which to generate a title.")
-    # Add any other parameters like existing_title (if model should avoid it) or context_hint.
+class TitleGenerationRequest(BaseModel):
+    content_blocks: List[ContentBlock]
 
-class GenerateTitleOutput(BaseModel):
-    """Output model for the /generate-title endpoint."""
-    suggested_title: str = Field(..., description="The AI-generated suggested title.")
-    status_code: str = Field(default="success", description="Status of the title generation operation.")
-    error_message: Optional[str] = Field(None, description="Error message if the operation failed.")
+class TitleGenerationResponse(BaseModel):
+    suggested_title: str
 
 # --- Keyword Generation Models ---
 
-class GenerateKeywordsInput(BaseModel):
-    """Input model for the /generate-keywords endpoint."""
-    content_blocks: List[ContentBlock] = Field(..., description="The list of content blocks for which to generate keywords.")
-    # Add any other parameters like number_of_keywords_desired.
+class KeywordExtractionRequest(BaseModel):
+    content_blocks: List[ContentBlock] = Field(..., description="The list of content blocks from which to extract keywords.")
 
-class GenerateKeywordsOutput(BaseModel):
-    """Output model for the /generate-keywords endpoint."""
-    suggested_keywords: List[str] = Field(..., description="A list of AI-generated suggested keywords.")
-    status_code: str = Field(default="success", description="Status of the keyword generation operation.")
-    error_message: Optional[str] = Field(None, description="Error message if the operation failed.") 
+class KeywordExtractionResponse(BaseModel):
+    suggested_keywords: List[str] = Field(..., description="A list of suggested keywords.")
+    # Potentially add fields for confidence scores or alternative keyword sets in the future 
