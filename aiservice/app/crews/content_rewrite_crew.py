@@ -13,6 +13,7 @@ import time
 import uuid
 import ast
 from textwrap import dedent
+from pydantic import BaseModel, Field
 
 # Agent definitions
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
@@ -116,8 +117,15 @@ class ContentRewriteCrewManager:
                 Your final answer for this task MUST be the direct, unaltered, raw output from the 'FastContentBlockProcessorTool'.
                 """),
             expected_output="A list of ContentBlock dictionaries, reconstructed from the summary and image metadata, as returned by the FastContentBlockProcessorTool.",
-            agent=output_constructor_agent, # Agent has the tool
-            context=[task_summarize_content]
+            agent=output_constructor_agent,
+            tools=[self.agents_factory.content_processor_tool],
+            context=[task_summarize_content],
+            inputs={
+                "operation": "{{reconstructor_operation}}", # From crew_kickoff_inputs
+                "summarized_text": "{{context}}", # CHANGED: Use generic context placeholder
+                "image_metadata_list_json": "{{reconstructor_image_metadata_list_json}}", # From crew_kickoff_inputs
+                "document_id": "{{reconstructor_document_id}}" # From crew_kickoff_inputs
+            }
         )
 
         content_rewrite_crew = Crew(

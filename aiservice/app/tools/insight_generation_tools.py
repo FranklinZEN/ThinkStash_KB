@@ -26,6 +26,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI # Corrected import loc
 # Corrected import for ChatOpenAI
 from langchain_openai import ChatOpenAI # More direct import path
 
+# Import SummarizerTaskOutput for type checking
+from aiservice.app.crews.content_rewrite_crew import SummarizerTaskOutput
+
 # --- Optimized LLM Interaction Tool ---
 
 class OptimizedLLMInteractionToolInput(BaseModel):
@@ -213,13 +216,13 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
-            if summarized_text is None or image_metadata_list_json is None:
-                return "Error: 'summarized_text' and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."
+            if actual_summarized_text is None or image_metadata_list_json is None: # MODIFIED to use actual_summarized_text
+                return [{"error": "'summarized_text' (after processing) and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."}]
 
             try:
                 image_metadata_list: List[Dict[str, Any]] = json.loads(image_metadata_list_json)
             except json.JSONDecodeError as e:
-                return f"Error: Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}"
+                return [{"error": f"Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}"}]
 
             reconstructed_blocks_dicts: List[Dict[str, Any]] = []
             order_idx_counter = 0
@@ -239,14 +242,14 @@ class FastContentBlockProcessorTool(BaseTool):
                 document_id_to_use_for_new_blocks = str(uuid.uuid4()) # Fallback to new UUID if still not set
 
             last_idx = 0
-            placeholder_pattern = r'\[IMAGE:\s*([^\s\]]+)\s*\]'
+            placeholder_pattern = r'\\[IMAGE:\\s*([^\\s\\]]+)\\s*\\]'
             import re
 
-            for match in re.finditer(placeholder_pattern, summarized_text):
+            for match in re.finditer(placeholder_pattern, actual_summarized_text): # MODIFIED to use actual_summarized_text
                 start_match, end_match = match.span()
                 placeholder_identifier = match.group(1)
 
-                text_before_placeholder = summarized_text[last_idx:start_match].strip()
+                text_before_placeholder = actual_summarized_text[last_idx:start_match].strip() # MODIFIED
                 if text_before_placeholder:
                     text_block = ContentBlock(
                         block_id=uuid.uuid4().hex,
@@ -314,7 +317,7 @@ class FastContentBlockProcessorTool(BaseTool):
 
                 last_idx = end_match
 
-            remaining_text = summarized_text[last_idx:].strip()
+            remaining_text = actual_summarized_text[last_idx:].strip() # MODIFIED to use actual_summarized_text
             if remaining_text:
                 text_block = ContentBlock(
                     block_id=uuid.uuid4().hex,
