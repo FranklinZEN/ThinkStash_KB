@@ -38,6 +38,7 @@ from aiservice.app.config.settings import settings # To verify settings load
 from crewai import Task, Crew
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents # To get the agent
 from aiservice.app.config.llm_config import get_configured_llm, reset_llm_client # For direct LLM if needed for agent
+from aiservice.app.models.task_output_models import SummarizerTaskOutput # ADDED import
 
 JSON_INPUT_FILE_PATH = os.path.join(PROJECT_ROOT, "aiservice", "scripts", "e2e_test_output_https___www_uber_com_blog_deepeta_how_uber_predict.json")
 
@@ -94,9 +95,10 @@ def main():
                                 "This framework aims to simplify the development of sophisticated multi-agent AI systems.")
 
     test_summarizer_task = Task(
-        description=f"Summarize the following text: '''{sample_text_to_summarize}'''",
-        expected_output="A concise summary of the provided text, approximately 1-2 sentences.",
-        agent=summarizer_agent
+        description=f"Summarize the following text concisely. Your output should be only the summary string itself: '''{sample_text_to_summarize}'''",
+        expected_output="A Pydantic object of type 'SummarizerTaskOutput' containing the 'summary_text' as a string. The summary should be concise, approximately 1-2 sentences.",
+        agent=summarizer_agent,
+        output_pydantic=SummarizerTaskOutput
     )
 
     # Create a temporary crew for this isolated test

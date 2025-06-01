@@ -99,8 +99,8 @@ class ContentRewriteCrewManager:
                 "or tool calls are required or permitted for this specific summarization task."
             ),
             agent=summarization_agent,
-            tools=[self.agents_factory.optimized_llm_tool],
-            output_pydantic=SummarizerTaskOutput
+            output_pydantic=SummarizerTaskOutput,
+            context_data_from_main_crew_inputs = ['concatenated_text', 'essential_image_metadata_for_summarizer_prompt']
         )
 
         task_reconstruct_output = Task(
