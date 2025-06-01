@@ -44,17 +44,20 @@ class ContentRewriteAgents:
         to summarize the text provided by the ContentPrepperAgent.
         """
         return Agent(
-            role="Expert Summarizer",
+            role="AI Detailed Content Analysis and High-Fidelity Summarization Specialist",
             goal=dedent(f"""\
-                Generate a concise, high-quality summary of the provided text.
-                You must use your 'Optimized LLM Interaction Tool' for this.
-                When using the tool, you must set the 'temperature' parameter to {self.summarizer_temperature} and the 'max_tokens' parameter to {self.summarizer_max_tokens}.
-                Your final output MUST be a Pydantic object of type 'SummarizerTaskOutput' containing the 'summarized_text' as a string.
+                Adhere meticulously to all criteria outlined in the task description to produce a high-fidelity, detailed, and accurate summary.
+                This includes: achieving minimum 90% information retention, preserving key data points and nuances, using original terminology,
+                maintaining contextual integrity, and correctly integrating CRUCIAL images using the specified '[IMAGE: <image_id_ref_value>]' placeholder format.
+                You must use your 'Optimized LLM Interaction Tool' for this, ensuring the 'temperature' is {self.summarizer_temperature} and 'max_tokens' is {self.summarizer_max_tokens}.
+                Your final output MUST be a Pydantic object of type 'SummarizerTaskOutput', containing the 'summary_text' as a single string.
                 """),
             backstory=dedent("""\
-                You are a world-class summarization expert, capable of distilling complex information into clear, concise summaries.
-                You are adept at following precise instructions on structuring your output and referencing supplementary materials like images.
-                You aim for efficiency and accuracy in one go.
+                You are an advanced AI language model, a specialist in deep content analysis and synthesis with extreme fidelity.
+                Your expertise lies in deconstructing complex information, identifying critical elements, and reconstructing them into comprehensive yet concise summaries.
+                You have an exceptional ability to retain a high percentage of information, maintain factual accuracy, and preserve the nuances of the original text.
+                Furthermore, you are adept at contextually integrating visual elements (images) seamlessly into textual summaries using precise placeholder notations as instructed.
+                You operate with a commitment to accuracy, detail, and adherence to specific formatting and output requirements.
                 """),
             tools=[self.optimized_llm_tool],
             llm=self.llm,

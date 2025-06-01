@@ -236,101 +236,111 @@ class FastContentBlockProcessorTool(BaseTool):
                 print("Warning: user_id not set in FastContentBlockProcessorTool. Using placeholder.")
                 current_user_id_for_tool = "tool_reconstruct_fallback_user"
             
-            # Use document_id_to_use_for_new_blocks established above
+            document_id_to_use_for_new_blocks = self.document_id
             if not document_id_to_use_for_new_blocks:
                 print("CRITICAL WARNING (FastContentBlockProcessorTool): document_id_to_use_for_new_blocks is None/empty for reconstruction. New blocks will lack a document_id or have a fallback.")
-                document_id_to_use_for_new_blocks = str(uuid.uuid4()) # Fallback to new UUID if still not set
+                document_id_to_use_for_new_blocks = str(uuid.uuid4())
 
-            last_idx = 0
-            placeholder_pattern = r'\[IMAGE:\s*([^\[\]\\s]+)\s*\]' # Corrected regex again
             import re
+            # Regex to capture image placeholders like [IMAGE: ID]
+            # The capturing group around the placeholder itself is key for re.split
+            placeholder_pattern_for_split = r'(\[IMAGE:\s*[^\s\[\]]+\s*\])'
+            # Regex to extract the ID from a captured placeholder
+            placeholder_id_extractor_pattern = r'\[IMAGE:\s*([^\s\[\]]+)\s*\]'
 
-            for match in re.finditer(placeholder_pattern, summarized_text):
-                start_match, end_match = match.span()
-                placeholder_identifier = match.group(1)
+            segments = re.split(placeholder_pattern_for_split, summarized_text)
 
-                text_before_placeholder = summarized_text[last_idx:start_match].strip() # MODIFIED
-                if text_before_placeholder:
-                    text_block = ContentBlock(
-                        block_id=uuid.uuid4().hex,
-                        tmp_id=None, # New text block
-                        user_id=current_user_id_for_tool,
-                        document_id=document_id_to_use_for_new_blocks, # Use the stored/determined document_id
-                        type='text',
-                        content=text_before_placeholder,
-                        order_index=order_idx_counter
-                    )
-                    reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
-                    order_idx_counter += 1
-                
-                img_meta_to_use = None
-                # Lookup in the definitive pool
-                if placeholder_identifier in image_meta_lookup_id:
-                    img_meta_to_use = image_meta_lookup_id[placeholder_identifier]
-                elif placeholder_identifier in image_meta_lookup_gcs:
-                    img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
-                
-                if img_meta_to_use:
-                    # If img_meta_to_use is already a rich ContentBlock-like dict from a previous run,
-                    # preserve its original block_id, tmp_id. User_id and document_id can be from original or current run.
-                    # For simplicity here, we prioritize current_user_id_for_tool and current_document_id_for_run
-                    # if creating a *new* block structure, but if img_meta_to_use has them, it implies it's a pre-existing block.
+            for segment in segments:
+                if not segment: # Skip empty segments that can result from split
+                    continue
+
+                match_placeholder = re.fullmatch(placeholder_pattern_for_split, segment)
+                if match_placeholder:
+                    # This segment is an image placeholder
+                    placeholder_tag = match_placeholder.group(0) # The full tag, e.g., [IMAGE: ID1]
+                    id_match = re.search(placeholder_id_extractor_pattern, placeholder_tag)
+                    if not id_match:
+                        # Should not happen if placeholder_pattern_for_split matched
+                        print(f"Warning: Could not extract ID from supposed placeholder: {placeholder_tag}")
+                        # Treat as text if ID extraction fails unexpectedly
+                        if placeholder_tag.strip():
+                            text_block = ContentBlock(
+                                block_id=uuid.uuid4().hex,
+                                tmp_id=None,
+                                user_id=current_user_id_for_tool,
+                                document_id=document_id_to_use_for_new_blocks,
+                                type='text',
+                                content=placeholder_tag.strip(),
+                                order_index=order_idx_counter
+                            )
+                            reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
+                            order_idx_counter += 1
+                        continue
+
+                    placeholder_identifier = id_match.group(1)
                     
-                    final_block_id = img_meta_to_use.get('block_id', uuid.uuid4().hex)
-                    final_tmp_id = img_meta_to_use.get('tmp_id', img_meta_to_use.get('image_id_ref'))
-                    final_user_id = img_meta_to_use.get('user_id', current_user_id_for_tool)
-                    final_document_id = img_meta_to_use.get('document_id', document_id_to_use_for_new_blocks)
+                    img_meta_to_use = None
+                    if placeholder_identifier in image_meta_lookup_id:
+                        img_meta_to_use = image_meta_lookup_id[placeholder_identifier]
+                    elif placeholder_identifier in image_meta_lookup_gcs:
+                        img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
+                    
+                    if img_meta_to_use:
+                        final_block_id = img_meta_to_use.get('block_id', uuid.uuid4().hex)
+                        final_tmp_id = img_meta_to_use.get('tmp_id', img_meta_to_use.get('image_id_ref'))
+                        # For user_id and document_id of images, we might want to preserve their original ones if they exist
+                        # For now, let's assume rewritten blocks always get the new document_id and current user context
+                        final_user_id = current_user_id_for_tool 
+                        final_document_id = document_id_to_use_for_new_blocks
 
-                    image_block = ContentBlock(
-                        block_id=final_block_id,
-                        tmp_id=final_tmp_id,
-                        user_id=final_user_id,
-                        document_id=final_document_id,
-                        type='image',
-                        image_id_ref=img_meta_to_use.get('image_id_ref'),
-                        gcs_url=img_meta_to_use.get('gcs_url'),
-                        alt_text=img_meta_to_use.get('alt_text'),
-                        caption=img_meta_to_use.get('caption'),
-                        llm_description=img_meta_to_use.get('llm_description'),
-                        width=img_meta_to_use.get('width'),
-                        height=img_meta_to_use.get('height'),
-                        order_index=order_idx_counter
-                    )
-                    reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
-                    order_idx_counter += 1
-                    processed_image_ids.add(img_meta_to_use.get('image_id_ref'))
-                    processed_image_ids.add(img_meta_to_use.get('gcs_url'))
+                        image_block = ContentBlock(
+                            block_id=final_block_id,
+                            tmp_id=final_tmp_id,
+                            user_id=final_user_id,
+                            document_id=final_document_id,
+                            type='image',
+                            image_id_ref=img_meta_to_use.get('image_id_ref'),
+                            gcs_url=img_meta_to_use.get('gcs_url'),
+                            alt_text=img_meta_to_use.get('alt_text'),
+                            caption=img_meta_to_use.get('caption'),
+                            llm_description=img_meta_to_use.get('llm_description'),
+                            width=img_meta_to_use.get('width'),
+                            height=img_meta_to_use.get('height'),
+                            order_index=order_idx_counter
+                        )
+                        reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
+                        order_idx_counter += 1
+                        processed_image_ids.add(img_meta_to_use.get('image_id_ref')) # Track by ref
+                        processed_image_ids.add(img_meta_to_use.get('gcs_url'))     # Track by URL
+                    else:
+                        # Placeholder was in text, but no matching image metadata found
+                        missing_ref_text_block = ContentBlock(
+                            block_id=uuid.uuid4().hex,
+                            tmp_id=None,
+                            user_id=current_user_id_for_tool,
+                            document_id=document_id_to_use_for_new_blocks,
+                            type='text',
+                            content=f"[IMAGE: {placeholder_identifier} - Referenced but not found in provided image metadata]",
+                            order_index=order_idx_counter
+                        )
+                        reconstructed_blocks_dicts.append(missing_ref_text_block.model_dump(mode='json'))
+                        order_idx_counter += 1
                 else:
-                    # Placeholder was in text, but no matching image metadata found
-                    # Create a text block indicating the missing image reference
-                    missing_ref_text_block = ContentBlock(
-                        block_id=uuid.uuid4().hex,
-                        tmp_id=None,
-                        user_id=current_user_id_for_tool,
-                        document_id=document_id_to_use_for_new_blocks,
-                        type='text',
-                        content=f"[IMAGE: {placeholder_identifier} - Referenced but not found in provided image metadata]",
-                        order_index=order_idx_counter
-                    )
-                    reconstructed_blocks_dicts.append(missing_ref_text_block.model_dump(mode='json'))
-                    order_idx_counter += 1
-
-                last_idx = end_match
-
-            remaining_text = summarized_text[last_idx:].strip() # MODIFIED to use summarized_text
-            if remaining_text:
-                text_block = ContentBlock(
-                    block_id=uuid.uuid4().hex,
-                    tmp_id=None,
-                    user_id=current_user_id_for_tool,
-                    document_id=document_id_to_use_for_new_blocks, # Use the stored/determined document_id
-                    type='text',
-                    content=remaining_text,
-                    order_index=order_idx_counter
-                )
-                reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
-                order_idx_counter += 1
-
+                    # This segment is plain text
+                    text_content = segment.strip()
+                    if text_content:
+                        text_block = ContentBlock(
+                            block_id=uuid.uuid4().hex,
+                            tmp_id=None,
+                            user_id=current_user_id_for_tool,
+                            document_id=document_id_to_use_for_new_blocks,
+                            type='text',
+                            content=text_content,
+                            order_index=order_idx_counter
+                        )
+                        reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
+                        order_idx_counter += 1
+            
             # Append any images from image_metadata_list not referenced by placeholders
             for img_meta in image_metadata_list:
                 identifier_ref = img_meta.get('image_id_ref')

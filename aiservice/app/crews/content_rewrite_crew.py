@@ -75,21 +75,53 @@ class ContentRewriteCrewManager:
         # Constants like temperature are embedded directly using f-string from agents_factory.
         task_summarize_content = Task(
             description=dedent(f"""
-                You are provided with 'concatenated_text':
-                {{{{concatenated_text}}}}
+                ## Overall Objective:
+                Your primary goal is to generate a high-fidelity, detailed, and accurate summary of the provided 'concatenated_text'.
+                This summary must effectively integrate CRUCIAL images from the 'essential_image_metadata' by referencing them using a specific placeholder format.
+                The final output must be a single string of well-written text, which will then be encapsulated within a 'SummarizerTaskOutput' Pydantic model.
 
-                And 'essential_image_metadata' (a list of image information):
-                {{{{essential_image_metadata_for_summarizer_prompt}}}}
+                ## Input Data:
+                1.  **'concatenated_text'**: This is the primary text content you need to summarize.
+                    ```
+                    {{{{concatenated_text}}}}
+                    ```
+                2.  **'essential_image_metadata'**: This is a JSON string representing a list of dictionaries, each containing metadata for an image present in the original content.
+                    ```
+                    {{{{essential_image_metadata_for_summarizer_prompt}}}}
+                    ```
+                    Each dictionary in this list may contain keys like 'image_id_ref', 'gcs_url', 'alt_text', 'caption', 'llm_description'. You will use 'image_id_ref' (or 'gcs_url' if 'image_id_ref' is missing) for placeholders.
 
-                Generate a concise summary of the 'concatenated_text'.
-                If images from 'essential_image_metadata' are contextually important for the summary,
-                refer to them using placeholders like '[IMAGE: <image_id_ref_value>]' or '[IMAGE: <gcs_url_value>]'.
-                The image_id_ref_value or gcs_url_value should correspond to the 'image_id_ref' or 'gcs_url' present in the 'essential_image_metadata'.
-                The summary should be a single string of well-written text, which will be wrapped in the 'SummarizerTaskOutput' model under the 'summary_text' field.
-                When using your 'Optimized LLM Interaction Tool' for this task, you MUST set the 'temperature' parameter to {self.agents_factory.summarizer_temperature} and the 'max_tokens' parameter to {self.agents_factory.summarizer_max_tokens}.
-                Your final output for this task MUST be a valid JSON object that conforms to the 'SummarizerTaskOutput' Pydantic model.
-                Specifically, it should be a dictionary with a single key 'summary_text' holding the generated summary string.
-                Example: {{"summary_text": "This is the generated summary."}}
+                ### Core Summarization Requirements:
+                Your summary MUST adhere to the following principles:
+
+                #### 1. Information Retention (Minimum 90%):
+                - **Accuracy is Paramount**: The summary must be factually correct and accurately reflect the source text. Do not introduce outside information or personal interpretations.
+                - **Preserve Key Information**: Retain the main topic, core arguments, significant data points, supporting evidence, and any nuanced explanations.
+                - **Capture Quantitative Data**: Accurately include numbers, statistics, dates, and specific figures.
+                - **Retain Terminology**: Use the original terminology and jargon where appropriate for the subject matter.
+                - **Contextual Integrity**: Ensure that extracted information retains its original context and meaning.
+                - **Completeness**: Cover all essential aspects of the original text. Avoid oversimplification that leads to loss of critical details.
+
+                #### 2. Image Integration Protocol:
+                - **Identify CRUCIAL Images**: From the 'essential_image_metadata', determine which images are CRUCIAL for understanding the summarized content. Do not include all images, only those that add significant contextual value to the summary.
+                - **Exact Placeholder Format**: When you decide to include a CRUCIAL image, you MUST use the EXACT placeholder format: `[IMAGE: <image_id_ref_value>]`.
+                    - Replace `<image_id_ref_value>` with the actual 'image_id_ref' from the image's metadata.
+                    - If 'image_id_ref' is not available for a crucial image, you MAY use its 'gcs_url' as the `<image_id_ref_value>`.
+                    - **Example**: If an image has `image_id_ref: "figure_1_system_architecture"`, the placeholder in your summary text MUST be `[IMAGE: figure_1_system_architecture]`.
+                    - **WARNING**: Do NOT deviate from this format. Do not add extra spaces, characters, or change the casing.
+                - **Contextual Placement**: Insert these image placeholders naturally within the summary text where they are most relevant to the surrounding sentences. The placeholder should flow with the text.
+
+                #### 3. Output Structure:
+                - The final output of your reasoning process for this task must be a single, continuous string of summarized text, including any image placeholders.
+                - This string will be automatically wrapped into a 'SummarizerTaskOutput' Pydantic model (e.g., `{{"summary_text": "Your summary string here..."}}`) by the system. You only need to provide the summary string itself.
+
+                ### Tool Usage:
+                - You MUST use your 'Optimized LLM Interaction Tool' for this task.
+                - When using this tool, you MUST set the 'temperature' parameter to {self.agents_factory.summarizer_temperature} and the 'max_tokens' parameter to {self.agents_factory.summarizer_max_tokens}.
+
+                ### Final Answer Format Reminder:
+                Your final, directly returned answer for this task must be a JSON object conforming to the 'SummarizerTaskOutput' Pydantic model structure.
+                Example: `{{"summary_text": "The main topic is X, supported by data point Y. [IMAGE: relevant_image_id_abc] This illustrates the key finding..."}}`
                 """),
             expected_output=(
                 "The single string summary, encapsulated within a 'SummarizerTaskOutput' Pydantic object. "
