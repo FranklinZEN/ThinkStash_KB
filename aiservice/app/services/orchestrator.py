@@ -96,6 +96,8 @@ class ParallelOrchestrator(BaseService):
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
+        # Use the specific source type determined by the router for acquisition services
+        actual_determined_source_type_from_router = routing_result.data.determined_source_type
 
         # 2. Acquisition
         # All acquisition services now return ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]
@@ -112,6 +114,7 @@ class ParallelOrchestrator(BaseService):
         elif determined_service_name == "PDFAcquisitionService":
             pdf_acq_input = PDFAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier, # Can be path or URL if service handles downloads
+                # PDFAcquisitionService doesn't take source_content_type, it knows it's PDF.
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id,
                 user_id=orchestrator_input.user_id
@@ -120,7 +123,7 @@ class ParallelOrchestrator(BaseService):
         elif determined_service_name == "FileAcquisitionService":
             file_acq_input = FileAcquisitionServiceInput(
                 file_path=orchestrator_input.source_identifier,
-                source_content_type=initial_source_type_for_routing, # file service might refine this
+                source_content_type=actual_determined_source_type_from_router, # Use router's determined type
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id,
                 user_id=orchestrator_input.user_id

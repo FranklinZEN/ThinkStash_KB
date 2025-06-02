@@ -37,9 +37,22 @@ import { DeleteIcon } from '@chakra-ui/icons';
 import {
   BlockNoteEditor as BlockNoteEditorType,
   type PartialBlock,
+  type BlockNoteSchema,
+  type DefaultBlockSchema,
+  type DefaultInlineContentSchema,
+  type DefaultStyleSchema,
 } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 import type { BlockNoteDocument } from '@/types/blocknote';
+
+// Added: Import for AIServiceContentBlock and uuid
+import { type ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
+import { v4 as uuidv4 } from 'uuid';
+
+// ADDED: Define concrete types for BlockNote based on default schema
+type AppBlockNoteSchema = BlockNoteSchema<DefaultBlockSchema, DefaultInlineContentSchema, DefaultStyleSchema>;
+type AppPartialBlock = PartialBlock<AppBlockNoteSchema>;
+type AppInlineContent = DefaultInlineContentSchema;
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined | null): boolean => {
@@ -167,8 +180,146 @@ interface CardUpdatePayload {
   tags?: string[]; // This should be string[] as expected by the API endpoint body
 }
 
+// ADDED: Helper function to extract plain text from BlockNote InlineContent[]
+const extractTextFromInlineContent = (inlineContent: AppInlineContent[] | string | undefined): string => {
+  if (!inlineContent) return '';
+  if (typeof inlineContent === 'string') return inlineContent;
+  return inlineContent.map(item => {
+    if (item.type === 'text') return item.text;
+    if (item.type === 'link') return extractTextFromInlineContent(item.content as AppInlineContent[]);
+    // Add other inline types if necessary, for now, just text and link content
+    return '';
+  }).join('');
+};
+
+// ADDED: Function to map BlockNote PartialBlock[] to AIServiceContentBlock[]
+export const mapPartialBlocksToAIServiceContentBlocks = (
+  partialBlocks: AppPartialBlock[],
+  userId: string,
+  documentId: string
+): AIServiceContentBlock[] => {
+  const aiServiceBlocks: AIServiceContentBlock[] = [];
+  if (!partialBlocks || partialBlocks.length === 0) return aiServiceBlocks;
+
+  let currentOrderIndex = 0;
+  let i = 0;
+
+  while (i < partialBlocks.length) {
+    const block = partialBlocks[i];
+    if (!block || !block.type) { 
+      i++;
+      continue;
+    }
+    const blockId = uuidv4();
+
+    if (block.type === 'bulletListItem' || block.type === 'numberedListItem') {
+      const listItemsContent: string[] = [];
+      const isOrdered = block.type === 'numberedListItem';
+      const listBlockType = block.type;
+      
+      const listBlockStartIndex = currentOrderIndex;
+
+      while (
+        i < partialBlocks.length &&
+        partialBlocks[i]?.type === listBlockType 
+      ) {
+        const listItem = partialBlocks[i];
+        // Ensure listItem.content is treated as AppInlineContent[] for extraction
+        listItemsContent.push(extractTextFromInlineContent(listItem.content as AppInlineContent[]));
+        i++;
+      }
+
+      if (listItemsContent.length > 0) {
+        aiServiceBlocks.push({
+          block_id: blockId,
+          tmp_id: blockId,
+          user_id: userId,
+          document_id: documentId,
+          type: 'list',
+          order_index: listBlockStartIndex,
+          items: listItemsContent,
+          ordered: isOrdered,
+          content: null, 
+        });
+        currentOrderIndex++;
+      }
+      continue; 
+    }
+
+    let commonContent: string | null = null;
+    if (block.content) {
+      if (typeof block.content === 'string') {
+        commonContent = block.content;
+      } else { 
+        // Ensure block.content is treated as AppInlineContent[] for extraction
+        commonContent = extractTextFromInlineContent(block.content as AppInlineContent[]);
+      }
+    }
+    
+    let captionText: string | null = null;
+    if (block.type === 'image' && block.children) {
+      // Ensure block.children is treated as AppInlineContent[] for extraction
+      captionText = extractTextFromInlineContent(block.children as AppInlineContent[]);
+    }
+
+
+    const baseAIServiceBlock: Omit<AIServiceContentBlock, 'type' | 'content' | 'level' | 'language' | 'items' | 'ordered' | 'gcs_url' | 'alt_text' | 'caption' | 'width' | 'height' | 'image_id_ref' | 'llm_description' | 'list_start_number' > = {
+      block_id: blockId,
+      tmp_id: blockId,
+      user_id: userId,
+      document_id: documentId,
+      order_index: currentOrderIndex,
+    };
+
+    switch (block.type) {
+      case 'paragraph':
+        aiServiceBlocks.push({
+          ...baseAIServiceBlock,
+          type: 'text',
+          content: commonContent,
+        });
+        break;
+      case 'heading':
+        aiServiceBlocks.push({
+          ...baseAIServiceBlock,
+          type: 'heading',
+          content: commonContent,
+          level: block.props?.level ? parseInt(String(block.props.level), 10) : 1,
+        });
+        break;
+      case 'image':
+        const imageProps = block.props as { src?: string; altText?: string; width?: string | number; height?: string | number; defaultCaption?: string }; // Adjusted props
+        aiServiceBlocks.push({
+          ...baseAIServiceBlock,
+          type: 'image',
+          gcs_url: imageProps?.src || null, // Use src for BlockNote default image
+          alt_text: imageProps?.altText || null, 
+          caption: captionText || imageProps?.defaultCaption || null, 
+          width: imageProps?.width ? Number(imageProps.width) : null, 
+          height: imageProps?.height ? Number(imageProps.height) : null, 
+          content: null, 
+        });
+        break;
+      case 'codeBlock':
+         aiServiceBlocks.push({
+          ...baseAIServiceBlock,
+          type: 'code_snippet',
+          content: commonContent, 
+          language: block.props?.language || null,
+        });
+        break;
+      default:
+        console.warn(`Unhandled BlockNote block type during mapping: ${block.type}`);
+        break;
+    }
+    currentOrderIndex++;
+    i++;
+  }
+  return aiServiceBlocks;
+};
+
 export default function CardDetailPage() {
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const router = useRouter();
   const params = useParams();
   const cardId = params?.cardId as string;
@@ -189,40 +340,46 @@ export default function CardDetailPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editor, setEditor] = useState<BlockNoteEditorType | null>(null);
+  const [editor, setEditor] = useState<BlockNoteEditorType<AppBlockNoteSchema> | null>(null);
   const [editorContent, setEditorContent] = useState<
-    PartialBlock[] | undefined
+    AppPartialBlock[] | undefined
   >(undefined); // For content tracking
   const [editorContentForInitialLoad, setEditorContentForInitialLoad] =
-    useState<PartialBlock[] | undefined>(undefined);
+    useState<AppPartialBlock[] | undefined>(undefined);
 
   // ADD THIS: A state variable to help change the key of the editor component
   const [editorKey, setEditorKey] = useState(0);
+
+  // ADDED: State for AI suggestions
+  const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
+  const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
+  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(null);
+  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
 
   // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
   useEffect(() => {
     // console.log('[CardDetail Page] useEffect for card.content, current card:', card);
     if (card && card.content) {
-      let newInitialContent: PartialBlock[] | undefined;
+      let newInitialContent: AppPartialBlock[] | undefined;
       if (typeof card.content === 'string') {
         const trimmedContent = card.content.trim();
         if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{ ')) {
           try {
-            newInitialContent = JSON.parse(trimmedContent) as PartialBlock[];
+            newInitialContent = JSON.parse(trimmedContent) as AppPartialBlock[];
           } catch (e) {
             console.warn(
               '[CardDetail Page] Failed to parse string content as JSON, using as plain text.',
               e,
             );
             newInitialContent = [
-              { type: 'paragraph', content: trimmedContent },
+              { type: 'paragraph', content: trimmedContent as any },
             ];
           }
         } else {
-          newInitialContent = [{ type: 'paragraph', content: card.content }];
+          newInitialContent = [{ type: 'paragraph', content: card.content as any }];
         }
       } else if (Array.isArray(card.content)) {
-        newInitialContent = card.content as PartialBlock[];
+        newInitialContent = card.content as AppPartialBlock[];
       }
       // console.log('[CardDetail Page] Setting editorContentForInitialLoad:', newInitialContent);
       setEditorContentForInitialLoad(newInitialContent);
@@ -237,14 +394,14 @@ export default function CardDetailPage() {
   }, [card]);
 
   const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditorType | null) => {
+    (editorInstance: BlockNoteEditorType<AppBlockNoteSchema> | null) => {
       setEditor(editorInstance);
     },
     [], // No dependencies needed if it just sets the editor instance
   );
 
   // Callback to receive content updates from the editor component
-  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
+  const handleEditorContentUpdate = useCallback((blocks: AppPartialBlock[]) => {
     setEditorContent(blocks);
   }, []);
 
@@ -324,13 +481,139 @@ export default function CardDetailPage() {
     setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
   };
 
+  // ADDED: Handler for "Suggest Title"
+  const handleSuggestTitle = async () => {
+    if (!editor && !card?.content) {
+      toast({ title: 'No content available for title suggestion.', status: 'warning', duration: 3000 });
+      return;
+    }
+    if (!card || !card.userId || !cardId) {
+      toast({ title: 'Card data not loaded.', status: 'error', duration: 3000 });
+      return;
+    }
+
+    let contentToProcess: AppPartialBlock[] | undefined = editorContent;
+    if (!isEditing || !editorContent || editorContent.length === 0) {
+        // Fallback to card.content if not editing or editorContent is empty
+        if (card?.content) {
+            if (typeof card.content === 'string') {
+                try {
+                    const parsedContent = JSON.parse(card.content) as AppPartialBlock[];
+                    contentToProcess = parsedContent;
+                } catch (e) {
+                    // If string is not JSON, treat as a single paragraph block
+                    contentToProcess = [{ type: 'paragraph', content: card.content as any }];
+                }
+            } else { // It's already BlockNoteDocument (PartialBlock[])
+                contentToProcess = card.content as AppPartialBlock[];
+            }
+        }
+    }
+
+
+    if (!contentToProcess || contentToProcess.length === 0) {
+        toast({ title: 'Content is empty, cannot suggest title.', status: 'info', duration: 3000 });
+        return;
+    }
+    
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(contentToProcess, card.userId, cardId);
+
+    if (aiServiceContentBlocks.length === 0) {
+      toast({ title: 'No processable content found for title suggestion.', status: 'info', duration: 3000 });
+      return;
+    }
+
+    setIsSuggestingTitle(true);
+    setSuggestedTitle(null);
+    try {
+      const response = await fetch('/api/ai/generate-title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error_message) {
+        throw new Error(data.error_message || 'Failed to suggest title');
+      }
+      setSuggestedTitle(data.suggested_title);
+      toast({ title: 'Title suggestion received!', status: 'success', duration: 3000 });
+    } catch (err) {
+      console.error('Suggest title error:', err);
+      const message = err instanceof Error ? err.message : 'Could not suggest title.';
+      toast({ title: 'Error suggesting title', description: message, status: 'error', duration: 5000 });
+    } finally {
+      setIsSuggestingTitle(false);
+    }
+  };
+
+  // ADDED: Handler for "Suggest Keywords"
+  const handleSuggestKeywords = async () => {
+    if (!editor && !card?.content) {
+      toast({ title: 'No content available for keyword suggestion.', status: 'warning', duration: 3000 });
+      return;
+    }
+     if (!card || !card.userId || !cardId) {
+      toast({ title: 'Card data not loaded.', status: 'error', duration: 3000 });
+      return;
+    }
+
+    let contentToProcess: AppPartialBlock[] | undefined = editorContent;
+     if (!isEditing || !editorContent || editorContent.length === 0) {
+        if (card?.content) {
+            if (typeof card.content === 'string') {
+                try {
+                    contentToProcess = JSON.parse(card.content) as AppPartialBlock[];
+                } catch (e) {
+                    contentToProcess = [{ type: 'paragraph', content: card.content as any }];
+                }
+            } else {
+                contentToProcess = card.content as AppPartialBlock[];
+            }
+        }
+    }
+
+    if (!contentToProcess || contentToProcess.length === 0) {
+        toast({ title: 'Content is empty, cannot suggest keywords.', status: 'info', duration: 3000 });
+        return;
+    }
+
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(contentToProcess, card.userId, cardId);
+    
+    if (aiServiceContentBlocks.length === 0) {
+      toast({ title: 'No processable content found for keyword suggestion.', status: 'info', duration: 3000 });
+      return;
+    }
+
+    setIsSuggestingKeywords(true);
+    setSuggestedKeywords(null);
+    try {
+      const response = await fetch('/api/ai/generate-keywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error_message) {
+        throw new Error(data.error_message || 'Failed to suggest keywords');
+      }
+      setSuggestedKeywords(data.suggested_keywords);
+      toast({ title: 'Keyword suggestions received!', status: 'success', duration: 3000 });
+    } catch (err) {
+      console.error('Suggest keywords error:', err);
+      const message = err instanceof Error ? err.message : 'Could not suggest keywords.';
+      toast({ title: 'Error suggesting keywords', description: message, status: 'error', duration: 5000 });
+    } finally {
+      setIsSuggestingKeywords(false);
+    }
+  };
+
   // --- Save Changes ---
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
 
     // Use editorContent which is updated by onContentUpdate callback for the most current state.
     // Fallback to editor.document if editorContent is somehow not set, though it should be.
-    const currentContentToValidate = editorContent || editor.document;
+    const currentContentToValidate = editorContent || (editor as BlockNoteEditorType<AppBlockNoteSchema>)?.document;
 
     const originalContent = card.content;
 
@@ -343,7 +626,7 @@ export default function CardDetailPage() {
         // Should ideally not happen
         const trimmedContent = originalContent.trim();
         if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-          originalContentForComparison = JSON.parse(trimmedContent);
+          originalContentForComparison = JSON.parse(trimmedContent) as AppPartialBlock[];
         } else {
           originalContentForComparison = [
             {
@@ -354,13 +637,13 @@ export default function CardDetailPage() {
                 backgroundColor: 'default',
                 textAlignment: 'left',
               },
-              content: [{ type: 'text', text: originalContent, styles: {} }],
+              content: [{ type: 'text', text: originalContent, styles: {} }] as any,
               children: [],
             },
           ];
         }
       } else {
-        originalContentForComparison = originalContent as BlockNoteDocument;
+        originalContentForComparison = originalContent as AppPartialBlock[];
       }
     }
     const hasContentChanged =
@@ -551,7 +834,7 @@ export default function CardDetailPage() {
     if (typeof card.content === 'string') {
       const trimmedContent = card.content.trim();
       if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-        originalContentForComparisonCanSave = JSON.parse(trimmedContent);
+        originalContentForComparisonCanSave = JSON.parse(trimmedContent) as AppPartialBlock[];
       } else {
         originalContentForComparisonCanSave = [
           {
@@ -562,17 +845,17 @@ export default function CardDetailPage() {
               backgroundColor: 'default',
               textAlignment: 'left',
             },
-            content: [{ type: 'text', text: card.content, styles: {} }],
+            content: [{ type: 'text', text: card.content, styles: {} }] as any,
             children: [],
           },
         ];
       }
     } else {
-      originalContentForComparisonCanSave = card.content as BlockNoteDocument;
+      originalContentForComparisonCanSave = card.content as AppPartialBlock[];
     }
   }
   const contentChanged = editor
-    ? JSON.stringify(editor.document) !==
+    ? JSON.stringify((editor as BlockNoteEditorType<AppBlockNoteSchema>).document) !==
       JSON.stringify(originalContentForComparisonCanSave || [])
     : false;
   const titleChanged = title.trim() !== (card.title || '');
@@ -653,21 +936,41 @@ export default function CardDetailPage() {
         >
           <VStack spacing={6} align="stretch">
             <FormControl isRequired>
-              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-                Title
-              </FormLabel>
+              <FormLabel htmlFor="title" fontFamily="'Open Sans', sans-serif" fontSize="20px">Title</FormLabel>
               <Input
+                id="title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Enter card title"
-                isDisabled={isSaving}
+                isDisabled={!isEditing || isSaving}
                 fontFamily="'Open Sans', sans-serif"
-                fontSize="16px"
+                fontSize="18px"
               />
+              {/* ADDED: Suggest Title Button and Display */}
+              {isEditing && (
+                <Box mt={2}>
+                  <Button
+                    size="sm"
+                    onClick={handleSuggestTitle}
+                    isLoading={isSuggestingTitle}
+                    loadingText="Suggesting..."
+                    colorScheme="purple"
+                  >
+                    Suggest Title with AI
+                  </Button>
+                  {suggestedTitle && !isSuggestingTitle && (
+                    <Flex mt={2} align="center">
+                      <Text mr={2} fontSize="sm">Suggested: &quot;{suggestedTitle}&quot;</Text>
+                      <Button size="xs" colorScheme="teal" onClick={() => { setTitle(suggestedTitle); setSuggestedTitle(null); }}>
+                        Use this title
+                      </Button>
+                    </Flex>
+                  )}
+                </Box>
+              )}
             </FormControl>
 
-            {/* Key Words Section - Moved here and adapted */}
             <FormControl>
               <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
                 Key Words{' '}
@@ -710,6 +1013,55 @@ export default function CardDetailPage() {
                   </Tag>
                 ))}
               </HStack>
+              {/* ADDED: Suggest Keywords Button and Display */}
+              {isEditing && (
+                <Box mt={2}>
+                  <Button
+                    size="sm"
+                    onClick={handleSuggestKeywords}
+                    isLoading={isSuggestingKeywords}
+                    loadingText="Suggesting..."
+                    colorScheme="purple"
+                  >
+                    Suggest Keywords with AI
+                  </Button>
+                  {suggestedKeywords && suggestedKeywords.length > 0 && !isSuggestingKeywords && (
+                    <Box mt={2}>
+                      <Text fontSize="sm" mb={1}>Suggestions:</Text>
+                      <HStack spacing={2} wrap="wrap" mb={2}>
+                        {suggestedKeywords.map((kw) => (
+                          <Tag key={kw} borderRadius="full" variant="outline" colorScheme="blue">
+                            <TagLabel>{kw}</TagLabel>
+                          </Tag>
+                        ))}
+                      </HStack>
+                      <Button 
+                        size="xs" 
+                        colorScheme="teal" 
+                        onClick={() => { 
+                          const newKeywords = [...new Set([...keywords, ...suggestedKeywords])];
+                          setKeywords(newKeywords); 
+                          setSuggestedKeywords(null); 
+                        }}
+                      >
+                        Add these keywords
+                      </Button>
+                       <Button 
+                          size="xs" 
+                          variant="outline"
+                          ml={2}
+                          colorScheme="gray" 
+                          onClick={() => { 
+                            setKeywords(suggestedKeywords); 
+                            setSuggestedKeywords(null); 
+                          }}
+                        >
+                          Replace with these
+                        </Button>
+                    </Box>
+                  )}
+                </Box>
+              )}
             </FormControl>
 
             <FormControl isRequired>
@@ -802,7 +1154,7 @@ export default function CardDetailPage() {
               key={`editor-readonly-${editorKey}`}
               onEditorChange={handleEditorInstanceReady}
               onContentUpdate={handleEditorContentUpdate}
-              editable={isEditing}
+              editable={!isEditing}
               initialContent={editorContentForInitialLoad}
             />
           </Box>

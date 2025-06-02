@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import functools # Added for functools.partial
 import logging # Added logging
+import tempfile # Added for temporary file handling for GCS downloads
+from google.cloud import storage # Added for GCS interaction
+from urllib.parse import urlparse # Added for parsing GCS paths
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
@@ -16,34 +19,76 @@ from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetad
 # --- Pydantic Models for PDFAcquisitionService ---
 
 class PDFAcquisitionServiceInput(BaseModel):
-    file_path: str = Field(..., description="Path to the PDF file to process.")
+    file_path: str = Field(..., description="Path to the PDF file (local or gs://) to process.")
     processing_level: str = Field(default="full_content", examples=["full_content", "text_only"], description="Controls whether to extract images.")
     job_id: Optional[str] = Field(None, description="Optional job ID for tracking.")
     user_id: Optional[str] = None # Added user_id
-    # original_source_identifier_for_gcs_path will be derived from file_path
-    # source_type_for_gcs_path will be 'pdf'
-    # job_id_for_gcs_path will be job_id
 
 class PDFAcquisitionService(BaseService):
     """
     Asynchronous service to extract text and image placeholders from PDF files,
     producing PreliminaryBlock, DocumentMetadata, and RawImageInput objects.
+    Can handle local file paths or gs:// GCS paths.
     """
+    GCS_PREFIX = "gs://"
+
     def __init__(self, settings: Optional[Any] = None):
         super().__init__(settings)
-        self.settings = settings # Store settings if provided for future use (e.g. debug_mode)
-        self.logger = logging.getLogger(__name__) # Initialize logger
+        self.settings = settings 
+        self.logger = logging.getLogger(__name__)
         if self.settings and hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
             self.logger.setLevel(logging.DEBUG)
         else:
-            self.logger.setLevel(logging.INFO) # Default to INFO
-        # LLM image analysis is no longer performed by this service.
-        # It will be handled by ImageProcessingService based on RawImageInput.
+            self.logger.setLevel(logging.INFO)
+        
+        try:
+            self.gcs_storage_client = storage.Client()
+            self.logger.info("GCS Storage client initialized successfully.")
+        except Exception as e_gcs_init:
+            self.gcs_storage_client = None # Ensure it's None if init fails
+            self.logger.error(f"Failed to initialize GCS Storage client: {e_gcs_init}. GCS downloads will fail.")
+
+    async def _download_gcs_file(self, gcs_path: str) -> Tuple[Optional[str], Optional[str]]:
+        """Downloads a file from GCS to a temporary local path. Returns (temp_file_path, error_message)."""
+        if not self.gcs_storage_client:
+            return None, "GCS client not initialized."
+        try:
+            parsed_url = urlparse(gcs_path)
+            bucket_name = parsed_url.netloc
+            blob_name = parsed_url.path.lstrip('/')
+
+            if not bucket_name or not blob_name:
+                return None, f"Invalid GCS path: {gcs_path}. Could not parse bucket/blob name."
+
+            bucket = self.gcs_storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            
+            # Create a temporary file to download to
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            temp_file_path = temp_file.name
+            temp_file.close() # Close the file handle so blob.download_to_filename can use it
+
+            await asyncio.get_event_loop().run_in_executor(None, blob.download_to_filename, temp_file_path)
+            self.logger.info(f"Successfully downloaded {gcs_path} to {temp_file_path}")
+            return temp_file_path, None
+        except Exception as e:
+            self.logger.error(f"Error downloading {gcs_path} from GCS: {e}")
+            # Clean up temp file if created before error
+            if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception as e_unlink:
+                    self.logger.error(f"Failed to cleanup temp file {temp_file_path} after GCS download error: {e_unlink}")
+            return None, str(e)
 
     async def execute(self, pdf_input: PDFAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
         start_time = time.time()
         job_id = pdf_input.job_id or uuid.uuid4().hex[:8]
-        pdf_filename = os.path.basename(pdf_input.file_path)
+        
+        original_file_path = pdf_input.file_path
+        processing_file_path = original_file_path
+        is_gcs_source = original_file_path.startswith(self.GCS_PREFIX)
+        temp_gcs_file_path: Optional[str] = None
 
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images: List[RawImageInput] = []
@@ -51,14 +96,24 @@ class PDFAcquisitionService(BaseService):
         doc: Optional[fitz.Document] = None
         loop = asyncio.get_event_loop()
 
-        if not os.path.exists(pdf_input.file_path):
-            # No duration calculation here as it's an early exit
-            return ServiceResult.failure(
-                error_message=f"File not found: {pdf_input.file_path}"
-            )
-
         try:
-            doc = await loop.run_in_executor(None, fitz.open, pdf_input.file_path)
+            if is_gcs_source:
+                if not self.gcs_storage_client:
+                    return ServiceResult.failure(error_message="GCS client not initialized. Cannot process GCS path.")
+                self.logger.info(f"Processing GCS PDF: {original_file_path}")
+                temp_gcs_file_path, download_error = await self._download_gcs_file(original_file_path)
+                if download_error or not temp_gcs_file_path:
+                    return ServiceResult.failure(error_message=f"Failed to download GCS file {original_file_path}: {download_error}")
+                processing_file_path = temp_gcs_file_path
+            
+            pdf_filename = os.path.basename(original_file_path) # Use original path for filename
+
+            if not os.path.exists(processing_file_path):
+                return ServiceResult.failure(
+                    error_message=f"File not found: {processing_file_path} (original: {original_file_path})"
+                )
+
+            doc = await loop.run_in_executor(None, fitz.open, processing_file_path)
             
             pdf_meta = await loop.run_in_executor(None, getattr, doc, 'metadata')
             creation_dt = None
@@ -82,7 +137,7 @@ class PDFAcquisitionService(BaseService):
             document_metadata = DocumentMetadata(
                 document_id=job_id,
                 user_id=pdf_input.user_id or "unknown_user_pdf_service",
-                source_identifier=pdf_input.file_path,
+                source_identifier=original_file_path, # Always use the original path here
                 source_type="pdf",
                 title=pdf_meta.get('title') if pdf_meta else pdf_filename,
                 author=pdf_meta.get('author') if pdf_meta else None,
@@ -250,222 +305,152 @@ class PDFAcquisitionService(BaseService):
                     image_list_infos = await loop.run_in_executor(None, page.get_images, True)
                     for img_idx, img_info in enumerate(image_list_infos):
                         xref = img_info[0]
-                        try:
-                            base_image_dict = await loop.run_in_executor(None, doc.extract_image, xref)
-                            if not base_image_dict: 
-                                continue
-                            
-                            image_bytes = base_image_dict.get("image")
-                            img_extension = base_image_dict.get("ext")
-                            
-                            if not image_bytes:
-                                self.logger.warning(f"PDFAcquisitionService: Warning - Could not extract image bytes for xref {xref} on page {page_num + 1} of {pdf_input.file_path}. Skipping image.")
-                                continue
+                        base_image_info = await loop.run_in_executor(None, doc.extract_image, xref)
+                        if not base_image_info or not base_image_info.get("image") or not base_image_info.get("ext"):
+                            self.logger.warning(f"PDFAcquisitionService: Skipping image with xref {xref} on page {page_num+1} due to missing data.")
+                            continue
 
-                            image_id = f"{job_id}_p{page_num + 1}_img{img_idx}"
-                            
-                            # Attempt to get bounding box from image info itself if available
-                            # PyMuPDF's get_images(full=True) provides (xref, smask, width, height, bpc, colorspace, ...)
-                            # The bounding box of the *image usage* on the page is more complex.
-                            # We will use a placeholder bbox or try to find it via page.get_image_rects()
-                            # This part might need refinement if precise image bbox on page is critical.
-                            img_bbox_on_page = None
-                            try:
-                                # Directly call page.get_image_bbox with img_info and transform=False (as the third positional arg)
-                                bbox_or_rects = await loop.run_in_executor(None, page.get_image_bbox, img_info, False)
-                                
-                                if isinstance(bbox_or_rects, fitz.Rect) and bbox_or_rects.is_valid and not bbox_or_rects.is_empty:
-                                    img_bbox_on_page = list(bbox_or_rects)
-                            except Exception as e_img_bbox:
-                                self.logger.warning(f"PDFAcquisitionService: Warning - Could not get image bbox for xref {xref} on page {page_num + 1}: {e_img_bbox}")
-                            
-                            new_raw_image = RawImageInput(
-                                image_id=image_id,
-                                image_bytes=image_bytes,
-                                source_document_id=pdf_input.file_path,
-                                original_filename=f"image_{xref}.{img_extension}",
-                                page_number=page_num + 1,
-                                bbox=img_bbox_on_page, # Bounding box on the page
-                                mime_type=f"image/{img_extension}" if img_extension else None,
-                                alt_text=None, # PDFs generally don't have structured alt text for images like HTML
-                                caption=None,  # Captions might be inferred from nearby text later if needed
-                                original_source_identifier_for_gcs_path=pdf_input.file_path, # For GCS path
-                                source_type_for_gcs_path="pdf", # For GCS path
-                                job_id_for_gcs_path=job_id # For GCS path
-                            )
-                            raw_images.append(new_raw_image)
+                        image_bytes = base_image_info["image"]
+                        image_ext = base_image_info["ext"]
+                        # Find bounding box of the image on the page
+                        get_image_rects_func = functools.partial(page.get_image_rects, xref, transform=False)
+                        image_rects = await loop.run_in_executor(None, get_image_rects_func)
+                        img_bbox = list(image_rects[0].irect) if image_rects and image_rects[0].irect else [0,0,0,0] # (x0,y0,x1,y1)
+                        
+                        image_id = f"{job_id}_p{page_num+1}_img{img_idx}_{xref}"
+                        prelim_block = PreliminaryBlock(
+                            block_id=image_id,
+                            type="image_placeholder",
+                            page_number=page_num+1,
+                            bbox=img_bbox,
+                            order=-1, # Will be set later
+                            image_id_ref=image_id # Corrected from image_data_ref
+                        )
+                        preliminary_blocks.append(prelim_block)
+                        raw_images.append(RawImageInput(
+                            image_id=image_id,
+                            image_bytes=image_bytes,
+                            original_filename=f"page{page_num+1}_img{img_idx}.{image_ext}",
+                            mime_type=f"image/{image_ext}",
+                            source_document_id=document_metadata.document_id, 
+                            page_number=page_num+1,
+                            bbox=img_bbox,
+                            original_source_identifier_for_gcs_path=original_file_path,
+                            source_type_for_gcs_path=document_metadata.source_type, 
+                            job_id_for_gcs_path=job_id 
+                        ))
 
-                            # Create an image placeholder block
-                            # The order of this placeholder relative to text blocks needs to be determined.
-                            # For now, we add it after all text blocks for the page, then sort globally.
-                            preliminary_blocks.append(PreliminaryBlock(
-                                block_id=f"{job_id}_p{page_num + 1}_imgph{img_idx}",
-                                type="image_placeholder",
-                                image_id_ref=image_id,
-                                page_number=page_num + 1,
-                                bbox=img_bbox_on_page, # Use the same bbox as the raw image input
-                                order=-1, # Will be sorted later
-                                custom_attributes={"original_xref": xref}
-                            ))
-                        except Exception as e_img_extract:
-                            self.logger.error(f"PDFAcquisitionService: Failed to extract image (xref {xref}, idx {img_idx}) on page {page_num + 1} of '{pdf_input.file_path}': {e_img_extract}", exc_info=True)
-            
-            # Sort all preliminary blocks by page number, then by an estimated vertical position (y0 of bbox)
-            # and for images/placeholders that might not have a reliable y0 initially, use a secondary key or ensure order is stable.
+            # Sorting all blocks by page number and then by vertical position (y0 of bbox)
             def sort_key(block: PreliminaryBlock):
-                primary_sort = block.page_number if block.page_number is not None else float('inf')
-                
-                secondary_sort_val = float('inf') # Default for items without a bbox or with unusual bbox
-                if block.bbox and len(block.bbox) == 4: # Ensure bbox has 4 elements (x0, y0, x1, y1)
-                    secondary_sort_val = block.bbox[1] # y0 - vertical position
-                    # Heuristic for unplaced images (bbox is [0.0, 0.0, 0.0, 0.0])
-                    if (block.type == "image_placeholder" and
-                        block.bbox[0] == 0.0 and
-                        block.bbox[1] == 0.0 and
-                        block.bbox[2] == 0.0 and
-                        block.bbox[3] == 0.0):
-                         secondary_sort_val = float('inf') # Put at end of page if bbox is all zeros
-                
-                # Add x-coordinate (bbox[0]) as a tertiary sort key for left-to-right reading order in case of same y0
-                tertiary_sort_val = float('inf')
-                if block.bbox and len(block.bbox) >= 1: # Check block.bbox again
-                    tertiary_sort_val = block.bbox[0] # x0 - horizontal position
-
-                # Ensure stable sort for items with same page, y0, and x0, using block_id as tie-breaker
-                return (primary_sort, secondary_sort_val, tertiary_sort_val, block.block_id)
+                y_coord = block.bbox[1] if block.bbox and len(block.bbox) > 1 else 0
+                x_coord = block.bbox[0] if block.bbox and len(block.bbox) > 0 else 0
+                return (block.page_number, y_coord, x_coord)
 
             preliminary_blocks.sort(key=sort_key)
-            
-            # Assign final order based on the sort
             for i, block in enumerate(preliminary_blocks):
                 block.order = i
 
-            if document_metadata is None: 
-                self.logger.error("PDFAcquisitionService: ERROR - DocumentMetadata was not initialized!")
-                document_metadata = DocumentMetadata(
-                    document_id=job_id, 
-                    user_id=pdf_input.user_id or "unknown_user_pdf_service",
-                    source_identifier=pdf_input.file_path, 
-                    source_type="pdf",
-                    title=pdf_filename,
-                    extracted_at=datetime.utcnow(),
-                    total_pages=len(doc) if doc else 0
-                )
-            
-            duration = time.time() - start_time
-            self.logger.info(f"PDFAcquisitionService: Completed for {pdf_filename} in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}") # Keep this for success logging
-            return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
+            duration_ms = (time.time() - start_time) * 1000
+            self.logger.info(f"PDFAcquisitionService for '{original_file_path}' completed in {duration_ms:.2f} ms. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}.")
+            if document_metadata:
+                return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
+            else:
+                # This case should ideally not be reached if DocumentMetadata is always created.
+                return ServiceResult.failure(error_message="Document metadata could not be created.")
 
-        except fitz.fitz.EmptyFileError:
-            # No duration calculation here as it's an early exit
-            return ServiceResult.failure(error_message=f"File is empty or corrupted: {pdf_input.file_path}")
-        except Exception as e_main:
-            duration = time.time() - start_time
-            self.logger.error(f"PDFAcquisitionService: Failed to process '{pdf_input.file_path}' in {duration:.2f}s: {e_main}", exc_info=True)
-            return ServiceResult.failure(
-                error_message=f"Error processing PDF '{pdf_filename}': {str(e_main)}",
-                error_details={ "filename": pdf_filename, "duration_seconds": duration }
-            )
+        except FileNotFoundError:
+            return ServiceResult.failure(error_message=f"File not found: {processing_file_path}")
+        except RuntimeError as e_runtime: # Catching RuntimeError which PyMuPDF commonly raises
+            self.logger.error(f"PyMuPDF RuntimeError in PDFAcquisitionService for {processing_file_path} (original: {original_file_path}): {e_runtime}", exc_info=True)
+            error_details = {"original_data": ([], document_metadata if document_metadata else None, [])}
+            return ServiceResult.failure(error_message=f"PDFAcquisitionService runtime error: {e_runtime}", error_details=error_details)
+        except Exception as e:
+            self.logger.error(f"Unexpected error in PDFAcquisitionService for {processing_file_path} (original: {original_file_path}): {e}", exc_info=True)
+            # Pass document_metadata in error_details if it was created
+            error_details = {"original_data": ([], document_metadata if document_metadata else None, [])}
+            return ServiceResult.failure(error_message=f"PDFAcquisitionService unexpected error: {e}", error_details=error_details)
         finally:
             if doc:
-                await loop.run_in_executor(None, doc.close)
-        
-        duration = time.time() - start_time
-        self.logger.info(f"PDFAcquisitionService: Successfully processed '{pdf_input.file_path}' in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}.")
-        
-        return ServiceResult.success(
-            data=(preliminary_blocks, document_metadata, raw_images),
-            details={"filename": pdf_filename, "job_id": job_id, "duration_ms": duration, "pages_processed": len(doc) if doc else 0}
-        )
+                try:
+                    await loop.run_in_executor(None, doc.close)
+                except Exception as e_close:
+                    self.logger.error(f"Error closing PDF document {processing_file_path}: {e_close}")
+            if temp_gcs_file_path and os.path.exists(temp_gcs_file_path):
+                try:
+                    # Run os.unlink in an executor if it might block, or keep it sync if it's quick
+                    await loop.run_in_executor(None, os.unlink, temp_gcs_file_path)
+                    self.logger.info(f"Successfully deleted temporary GCS file: {temp_gcs_file_path}")
+                except Exception as e_unlink:
+                    self.logger.error(f"Failed to delete temporary GCS file {temp_gcs_file_path}: {e_unlink}")
 
-# Example usage (for testing purposes)
+# --- Example Usage / Testing ---
 async def main_test_pdf_service():
     # Basic test setup (replace with actual testing framework)
     # Configure basic logging for the test
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
+    logger_main = logging.getLogger("main_test")
 
-    print("Starting PDFAcquisitionService test...")
-    
-    # Create a dummy settings object if your service expects one
+    # Example: Create dummy settings if your service uses them for configuration
     class DummySettings:
         debug_mode = True # Or False, to test logger level setting in service
-        # Add any other settings attributes your service __init__ might access
-    
-    dummy_settings = DummySettings()
-    service = PDFAcquisitionService(settings=dummy_settings)
-    
-    # --- Test Case 1: Valid PDF ---
-    # Replace with a path to an actual PDF file for testing
-    # For example: test_pdf_path = "path/to/your/test.pdf" 
-    # Ensure the PDF exists at this path or the test will fail.
-    test_pdf_path = r"E:\ThinkStash\ Embedding-Based Retrieval for Airbnb Search.pdf" # Using a raw string for Windows path
+        # Add other settings PDFAcquisitionService might expect, if any
 
-    if not os.path.exists(test_pdf_path):
-        print(f"Test PDF not found at: {test_pdf_path}. Skipping test.")
-        return
+    settings_instance = DummySettings() # type: ignore
+    pdf_service = PDFAcquisitionService(settings=settings_instance)
 
-    print(f"Processing PDF: {test_pdf_path}")
-    pdf_input = PDFAcquisitionServiceInput(file_path=test_pdf_path, job_id="testjob001")
+    # --- Test Case 1: Local PDF file ---
+    # Create a dummy PDF file for testing
+    dummy_pdf_path = "dummy_test.pdf"
+    try:
+        doc_test = fitz.open() # Create a new PDF
+        page_test = doc_test.new_page()
+        page_test.insert_text((50, 72), "Hello, PyMuPDF! This is a test.")
+        # Add a small image to test image extraction (optional)
+        # pix = fitz.Pixmap(fitz.csGRAY, (0, 0, 10, 10), 0) # Small 10x10 black square
+        # page_test.insert_image(page_test.rect, pixmap=pix)
+        doc_test.save(dummy_pdf_path)
+        doc_test.close()
+        logger_main.info(f"Created dummy PDF: {dummy_pdf_path}")
+
+        pdf_input_local = PDFAcquisitionServiceInput(file_path=dummy_pdf_path, job_id="local_pdf_test_001", user_id="test_user_local")
+        result_local = await pdf_service.execute(pdf_input_local)
+
+        if result_local.is_success() and result_local.data:
+            blocks, metadata, images = result_local.data
+            logger_main.info(f"Local PDF Test SUCCEEDED. Blocks: {len(blocks)}, Title: {metadata.title}, Images: {len(images)}")
+            # for i, block in enumerate(blocks):
+            #     logger_main.info(f"  Block {i}: Type={block.type}, Order={block.order}, Page={block.page_number}, Text/Ref='{block.text_content if block.text_content else block.image_data_ref}'")
+        else:
+            logger_main.error(f"Local PDF Test FAILED: {result_local.error_message}")
+            if result_local.error_details:
+                 logger_main.error(f"Error details: {result_local.error_details}")
+
+    except Exception as e_test:
+        logger_main.error(f"Error in local PDF test setup or execution: {e_test}")
+    finally:
+        if os.path.exists(dummy_pdf_path):
+            os.remove(dummy_pdf_path)
+            logger_main.info(f"Cleaned up dummy PDF: {dummy_pdf_path}")
     
-    result = await service.execute(pdf_input)
-    
-    if result.success:
-        print("\n--- Test Case 1: Success ---")
-        prelim_blocks, doc_meta, raw_imgs = result.data
-        print(f"Document Metadata: {doc_meta.model_dump_json(indent=2) if doc_meta else 'None'}")
-        print(f"Number of Preliminary Blocks: {len(prelim_blocks)}")
-        print(f"Number of Raw Images: {len(raw_imgs)}")
+    # --- Test Case 2: GCS PDF file (requires GCS setup and a file in a bucket) ---
+    # Note: This test will only run if GCS client initialized successfully in PDFAcquisitionService
+    # and if you have a GCS bucket and PDF file accessible.
+    # Replace with your actual GCS path for testing.
+    # GCS_TEST_PDF_PATH = "gs://your-gcs-bucket-name/path/to/your-test-file.pdf"
+    # if pdf_service.gcs_storage_client and GCS_TEST_PDF_PATH != "gs://your-gcs-bucket-name/path/to/your-test-file.pdf":
+    #     logger_main.info(f"\nAttempting GCS PDF Test with: {GCS_TEST_PDF_PATH}")
+    #     pdf_input_gcs = PDFAcquisitionServiceInput(file_path=GCS_TEST_PDF_PATH, job_id="gcs_pdf_test_001", user_id="test_user_gcs")
+    #     result_gcs = await pdf_service.execute(pdf_input_gcs)
         
-        # Print some details of the first few blocks and images
-        for i, block in enumerate(prelim_blocks[:5]):
-            print(f"  Block {i+1}: type={block.type}, order={block.order}, page={block.page_number}, bbox={block.bbox}")
-            if block.type == "text" or block.type == "heading":
-                print(f"    Text: '{block.text_content[:100]}...'")
-            elif block.type == "image_placeholder":
-                print(f"    Image ID Ref: {block.image_id_ref}")
-        
-        for i, img in enumerate(raw_imgs[:3]):
-            print(f"  Image {i+1}: id={img.image_id}, page={img.page_number}, bbox={img.bbox}, filename={img.original_filename}, mime={img.mime_type}")
-            print(f"    GCS Path Params: job_id={img.job_id_for_gcs_path}, source_id={img.original_source_identifier_for_gcs_path}, type={img.source_type_for_gcs_path}")
-
-    else:
-        print("\n--- Test Case 1: Failure ---")
-        print(f"Error: {result.error_message}")
-        if result.details:
-            print(f"Details: {result.details}")
-
-    # --- Test Case 2: File Not Found ---
-    print("\n--- Test Case 2: File Not Found ---")
-    non_existent_path = "path/to/non_existent_file.pdf"
-    pdf_input_non_existent = PDFAcquisitionServiceInput(file_path=non_existent_path, job_id="testjob002")
-    result_non_existent = await service.execute(pdf_input_non_existent)
-    if not result_non_existent.success:
-        print(f"Successfully handled non-existent file: {result_non_existent.error_message}")
-    else:
-        print("Test Case 2 failed: Expected failure for non-existent file.")
-
-    # --- Test Case 3: Empty/Corrupted PDF (manual setup needed) ---
-    # You would need to create an empty or corrupted PDF file and provide its path
-    # empty_pdf_path = "path/to/your/empty_or_corrupt.pdf"
-    # if os.path.exists(empty_pdf_path):
-    #     print("\n--- Test Case 3: Empty/Corrupted PDF ---")
-    #     pdf_input_empty = PDFAcquisitionServiceInput(file_path=empty_pdf_path, job_id="testjob003")
-    #     result_empty = await service.execute(pdf_input_empty)
-    #     if not result_empty.success and "empty or corrupted" in result_empty.error_message:
-    #         print(f"Successfully handled empty/corrupted file: {result_empty.error_message}")
+    #     if result_gcs.is_success() and result_gcs.data:
+    #         blocks_gcs, metadata_gcs, images_gcs = result_gcs.data
+    #         logger_main.info(f"GCS PDF Test SUCCEEDED. Blocks: {len(blocks_gcs)}, Title: {metadata_gcs.title}, Images: {len(images_gcs)}")
     #     else:
-    #         print(f"Test Case 3 failed or was skipped. Result: {result_empty}")
+    #         logger_main.error(f"GCS PDF Test FAILED: {result_gcs.error_message}")
+    #         if result_gcs.error_details:
+    #             logger_main.error(f"GCS Error details: {result_gcs.error_details}")
     # else:
-    #     print("\nSkipping Test Case 3: Empty/Corrupted PDF not found.")
-
+    #     logger_main.warning("\nSkipping GCS PDF Test: GCS client not available in service or GCS_TEST_PDF_PATH not set.")
 
 if __name__ == "__main__":
-    # Ensure an event loop is running if this script is executed directly
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError: # No event loop running
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    loop.run_until_complete(main_test_pdf_service())
+    asyncio.run(main_test_pdf_service()) 
