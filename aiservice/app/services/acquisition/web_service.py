@@ -181,26 +181,31 @@ class WebAcquisitionService(BaseService):
                                         job_id: Optional[str],
                                         original_source_identifier_for_gcs_path: str,
                                         source_type_for_gcs_path: str
-                                        ) -> List[RawImageInput]:
+                                        ) -> Tuple[Dict[str, RawImageInput], List[RawImageInput]]:
         """
-        Extracts image URLs and metadata from HTML content, creating RawImageInput objects.
+        Extracts image URLs and metadata from HTML content.
+        Returns a map of {absolute_url: RawImageInput} and a list of all RawImageInput objects.
         Does NOT download image bytes.
         """
-        self.logger.debug(f"_extract_images_from_html: Called for base_url='{base_url}', job_id='{job_id}'. HTML length: {len(html_content_str) if html_content_str else 'None'}") # ADDED
-        raw_images: List[RawImageInput] = []
+        self.logger.debug(f"_extract_images_from_html: Called for base_url='{base_url}', job_id='{job_id}'. HTML length: {len(html_content_str) if html_content_str else 'None'}")
+        
+        image_details_map: Dict[str, RawImageInput] = {} # NEW: Map to store details
+        all_raw_images_list: List[RawImageInput] = [] # NEW: List to store all found RawImageInput
+
         processed_urls: Set[str] = set()
         
-        if not html_content_str: # ADDED early exit check
-            self.logger.warning("_extract_images_from_html: html_content_str is None or empty. Returning empty list.")
-            return raw_images
+        if not html_content_str:
+            self.logger.warning("_extract_images_from_html: html_content_str is None or empty. Returning empty map and list.")
+            return image_details_map, all_raw_images_list
 
-        try: # ADDED try-except around soup initialization
+        try:
             soup = BeautifulSoup(html_content_str, 'lxml')
         except Exception as e_soup_init:
             self.logger.error(f"_extract_images_from_html: BeautifulSoup initialization failed: {e_soup_init}", exc_info=True)
-            return raw_images
+            return image_details_map, all_raw_images_list
             
-        image_counter = 0 # Used for generating image_id if job_id is missing
+        image_counter = 0 
+        doc_id_prefix = hashlib.md5(original_source_identifier_for_gcs_path.encode()).hexdigest()[:8]
 
         MIN_DIMENSION = 50
         MIN_AREA = 5000
@@ -227,12 +232,8 @@ class WebAcquisitionService(BaseService):
             "/wp-content/uploads", "/files/", "/assets/", "/_posts/", "/posts/", "/articles/", "/article/"
         ]
 
-        # Consistent image_id generation
-        doc_id_prefix = hashlib.md5(original_source_identifier_for_gcs_path.encode()).hexdigest()[:8]
+        self.logger.debug(f"_extract_images_from_html: Starting <img> tag processing. Found {len(soup.find_all('img'))} img tags initially.")
 
-        self.logger.debug(f"_extract_images_from_html: Starting <img> tag processing. Found {len(soup.find_all('img'))} img tags initially.") # ADDED
-
-        # 1. Standard <img> tags
         for idx, img_tag in enumerate(soup.find_all('img')):
             if not isinstance(img_tag, Tag): continue
             src = img_tag.get('src')
@@ -246,7 +247,6 @@ class WebAcquisitionService(BaseService):
                 if abs_img_url_str in processed_urls:
                     continue
 
-                # --- Filtering Logic (Enhanced, from existing code) ---
                 abs_img_url_lower = abs_img_url_str.lower()
                 is_url_potentially_irrelevant = any(segment in abs_img_url_lower for segment in IRRELEVANT_URL_SEGMENTS)
                 is_url_explicitly_content = any(indicator in abs_img_url_lower for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
@@ -272,14 +272,12 @@ class WebAcquisitionService(BaseService):
                     if width * height < MIN_AREA: continue
                     if height > 0 and (width / height > MAX_ASPECT_RATIO_DEVIATION): continue
                     if width > 0 and (height / width > MAX_ASPECT_RATIO_DEVIATION): continue
-                # --- End Filtering Logic ---
 
-                validated_url = HttpUrl(abs_img_url_str) # Validate URL
+                validated_url = HttpUrl(abs_img_url_str)
                 processed_urls.add(abs_img_url_str)
                 image_counter += 1
                 
                 image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}"
-
                 alt_text = alt_text_raw or None
                 caption_text: Optional[str] = None
                 figure_parent = img_tag.find_parent('figure')
@@ -289,37 +287,37 @@ class WebAcquisitionService(BaseService):
                 if not caption_text:
                     title_attr = img_tag.get('title','').strip()
                     if title_attr: caption_text = title_attr
-                    # Removed using alt_text as caption if long, as it's often redundant.
 
-                raw_images.append(RawImageInput(
+                raw_image_obj = RawImageInput(
                     image_id=image_id,
-                    image_bytes=None, # Bytes are not downloaded by acquisition service
+                    image_bytes=None, 
                     source_url=str(validated_url),
-                    original_filename=os.path.basename(urlparse(str(validated_url)).path) or f"image_{image_counter}.png", # Best guess
-                    source_document_id=original_source_identifier_for_gcs_path, # e.g., final_url
-                    page_number=None, # Not applicable for web pages in this context
-                    bbox=None, # Not applicable from typical web <img> tags
-                    mime_type=None, # Could try to infer from URL extension, but often unreliable
+                    original_filename=os.path.basename(urlparse(str(validated_url)).path) or f"image_{image_counter}.png",
+                    source_document_id=original_source_identifier_for_gcs_path,
+                    page_number=None, 
+                    bbox=None, 
+                    mime_type=None,
                     alt_text=alt_text,
                     caption=caption_text,
                     original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
-                    source_type_for_gcs_path=source_type_for_gcs_path, # "url"
+                    source_type_for_gcs_path=source_type_for_gcs_path,
                     job_id_for_gcs_path=job_id if job_id else "unknown_job"
-                ))
-            except ValueError: # Pydantic validation error for HttpUrl
+                )
+                image_details_map[abs_img_url_str] = raw_image_obj # Store in map
+                all_raw_images_list.append(raw_image_obj) # Also add to list
+
+            except ValueError: 
                 continue
-            except Exception: # Catch any other error during image processing
-                # self.logger.warning(f"Error processing image tag {img_tag}: {e}", exc_info=True) # Optional logging
+            except Exception: 
                 continue
         
-        # 2. Consider <meta property="og:image" ...>
         og_image_tag = soup.find('meta', property='og:image')
         if og_image_tag and isinstance(og_image_tag, Tag) and og_image_tag.get('content'):
             og_image_url_str = urljoin(base_url, str(og_image_tag['content']).strip())
-            if og_image_url_str not in processed_urls:
+            if og_image_url_str not in processed_urls: # Also check if this URL is already processed
                 try:
                     validated_og_url = HttpUrl(og_image_url_str)
-                    processed_urls.add(og_image_url_str)
+                    # No need to add to processed_urls here again as it's checked by 'not in image_details_map' effectively
                     image_counter += 1
                     image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}_og"
                     
@@ -328,28 +326,31 @@ class WebAcquisitionService(BaseService):
                     if og_image_alt_tag and isinstance(og_image_alt_tag, Tag) and og_image_alt_tag.get('content'):
                         og_alt = str(og_image_alt_tag['content']).strip()
 
-                    raw_images.append(RawImageInput(
+                    raw_og_image_obj = RawImageInput(
                         image_id=image_id,
                         image_bytes=None,
                         source_url=str(validated_og_url),
                         original_filename=os.path.basename(urlparse(str(validated_og_url)).path) or f"og_image_{image_counter}.png",
                         source_document_id=original_source_identifier_for_gcs_path,
                         alt_text=og_alt,
-                        # caption usually not available for og:image
                         original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
                         source_type_for_gcs_path=source_type_for_gcs_path,
                         job_id_for_gcs_path=job_id if job_id else "unknown_job"
-                    ))
+                    )
+                    if og_image_url_str not in image_details_map: # Ensure no overwrite
+                        image_details_map[og_image_url_str] = raw_og_image_obj
+                        all_raw_images_list.append(raw_og_image_obj)
+                    elif self.logger.isEnabledFor(logging.DEBUG): # Log if already exists
+                         self.logger.debug(f"OG Image URL {og_image_url_str} already processed, not adding again.")
+
+
                 except ValueError:
-                    pass # Invalid og:image URL
+                    pass 
                 except Exception:
-                    pass # Other error with og:image
+                    pass 
 
-        # 3. Look for images in <figure> tags that might not have been caught
-        # This might be redundant if all relevant images within figures are <img> tags.
-
-        self.logger.debug(f"_extract_images_from_html: Finished processing. Found {len(raw_images)} raw images.") # ADDED
-        return raw_images
+        self.logger.debug(f"_extract_images_from_html: Finished processing. Found {len(all_raw_images_list)} raw images. Map size: {len(image_details_map)}")
+        return image_details_map, all_raw_images_list # MODIFIED RETURN
 
     async def _parse_and_structure_html(
         self, 
@@ -477,21 +478,22 @@ class WebAcquisitionService(BaseService):
         # This is done once from the full HTML content.
         image_id_map: Dict[str, str] = {} 
         image_alt_map: Dict[str, Optional[str]] = {}
+        # NEW: This will hold the map from URL to RawImageInput object
+        image_details_lookup: Dict[str, RawImageInput] = {}
 
         if processing_level == "full_content":
             self.logger.debug(f"_parse_and_structure_html: Pre-calling _extract_images_from_html. HTML length: {len(full_html_content_for_metadata_and_images) if full_html_content_for_metadata_and_images else 'None'}")
-            raw_images_list = await self._extract_images_from_html(
+            # Call the refactored _extract_images_from_html
+            image_details_lookup, raw_images_list_from_extraction = await self._extract_images_from_html( # MODIFIED
                 html_content_str=full_html_content_for_metadata_and_images, 
                 base_url=final_url,
                 job_id=job_id, 
                 original_source_identifier_for_gcs_path=final_url,
                 source_type_for_gcs_path="url"
             )
-            for raw_img in raw_images_list:
-                if raw_img.source_url: # Ensure source_url is not None before adding to map
-                    image_id_map[raw_img.source_url] = raw_img.image_id
-                    image_alt_map[raw_img.source_url] = raw_img.alt_text
-            self.logger.debug(f"Prepared image_id_map (size {len(image_id_map)}) and image_alt_map (size {len(image_alt_map)}) from {len(raw_images_list)} raw images.")
+            # raw_images_list will be populated later based on used images.
+            # The raw_images_list_from_extraction contains ALL images found, used for the final return.
+            self.logger.debug(f"Prepared image_details_lookup (size {len(image_details_lookup)}) from {len(raw_images_list_from_extraction)} raw images extracted.")
         
         # --- 2.B Process the main content soup (Trafilatura or BS4 fallback) to create PreliminaryBlocks ---
         doc_id_prefix_for_blocks = hashlib.md5(final_url.encode()).hexdigest()[:8]
@@ -519,53 +521,35 @@ class WebAcquisitionService(BaseService):
                     final_url, 
                     doc_id_prefix_for_blocks, 
                     preliminary_blocks, # Appends directly to this list
-                    image_id_map, 
-                    image_alt_map
+                    image_details_lookup # PASS THE NEW MAP
                 )
             self.logger.debug(f"Finished processing soup_for_structuring. {len(preliminary_blocks)} preliminary_blocks created so far (text, headings, inline images etc.).")
         else:
             self.logger.warning("soup_for_structuring was None. No main content elements were processed by _process_html_element.")
 
+        # Old image reconciliation logic is now removed.
+        # The new logic below constructs the final list of raw images based on used image_id_refs.
 
-        # --- 2.C Reconcile any remaining images from raw_images_list ---
-        # This adds images (like og:image or other globally found images) that were not part of the 
-        # structured content processed by _process_html_element directly.
+        # NEW: Construct the final raw_images_list based on images actually used in preliminary_blocks
+        final_raw_images_to_return: List[RawImageInput] = []
         if processing_level == "full_content":
-            processed_image_ids_in_blocks = set()
-            for pb in preliminary_blocks: # Check blocks created by _process_html_element
+            used_image_ids = set()
+            for pb in preliminary_blocks:
                 if pb.type == 'image_placeholder' and pb.image_id_ref:
-                    processed_image_ids_in_blocks.add(pb.image_id_ref)
+                    used_image_ids.add(pb.image_id_ref)
             
-            self.logger.debug(f"Image IDs already processed into blocks by _process_html_element: {processed_image_ids_in_blocks}")
-
-            for raw_img in raw_images_list: # Iterate over the raw_images_list from step 2.A
-                if raw_img.image_id not in processed_image_ids_in_blocks:
-                    self.logger.debug(f"Adding image {raw_img.image_id} ({raw_img.source_url}) from raw_images_list as it was not found in _process_html_element blocks.")
-                    new_block_order = len(preliminary_blocks) # Order is based on current length
-                    block_id_str = f"{doc_id_prefix_for_blocks}_b{new_block_order}" # Consistent block_id prefix
-                    
-                    custom_attrs_for_raw_img = {}
-                    if raw_img.alt_text:
-                        custom_attrs_for_raw_img['alt_text'] = raw_img.alt_text
-                    if raw_img.caption:
-                        custom_attrs_for_raw_img['caption'] = raw_img.caption
-                    
-                    preliminary_blocks.append(PreliminaryBlock(
-                        block_id=block_id_str,
-                        type='image_placeholder',
-                        image_id_ref=raw_img.image_id,
-                        order=new_block_order,
-                        custom_attributes=custom_attrs_for_raw_img if custom_attrs_for_raw_img else None
-                    ))
-            self.logger.debug(f"Total preliminary_blocks after adding remaining raw images: {len(preliminary_blocks)}")
-        # --- End of adding remaining images ---
+            # Iterate through the image_details_lookup (which contains all discovered RawImageInput objects keyed by URL)
+            # Or, it might be better to iterate raw_images_list_from_extraction if that's guaranteed to have all unique RawImageInput objects
+            for img_obj in raw_images_list_from_extraction: # Assuming this list holds all unique RawImageInput objects
+                if img_obj.image_id in used_image_ids:
+                    final_raw_images_to_return.append(img_obj)
+            self.logger.debug(f"Constructed final_raw_images_to_return with {len(final_raw_images_to_return)} images based on used IDs.")
         
-        return preliminary_blocks, document_metadata_obj, raw_images_list
+        return preliminary_blocks, document_metadata_obj, final_raw_images_to_return # MODIFIED: return final_raw_images_to_return
 
     async def _process_html_element(self, element: Tag, base_url: str, doc_id_prefix: str, 
                                     blocks: List[PreliminaryBlock], 
-                                    image_id_map: Dict[str, str], 
-                                    image_alt_map: Dict[str, Optional[str]]):
+                                    image_details_lookup: Dict[str, RawImageInput]): # MODIFIED PARAMETER
         """
         Recursively processes an HTML element to create PreliminaryBlock objects.
         Appends new blocks to the `blocks` list.
@@ -614,7 +598,7 @@ class WebAcquisitionService(BaseService):
             if len(children_tags) == 1 and children_tags[0].name == 'img' and not text_content_direct:
                 # Paragraph contains only an image and no other text content
                 # self.logger.debug(f"Paragraph contains only an image. Processing image: {children_tags[0]}")
-                await self._process_html_element(children_tags[0], base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
+                await self._process_html_element(children_tags[0], base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
             else:
                 full_text_content = element.get_text(strip=True)
                 if full_text_content: # Only add if there's actual text
@@ -629,23 +613,43 @@ class WebAcquisitionService(BaseService):
             src = element.get('src') or element.get('data-src')
             if src:
                 abs_img_url = urljoin(base_url, src.strip())
-                self.logger.debug(f"IMG tag: Attempting to find image_id for abs_img_url: '{abs_img_url}'. Map keys: {list(image_id_map.keys())}") # DEBUG LOGGING
-                image_id_ref = image_id_map.get(abs_img_url)
-                alt_text = image_alt_map.get(abs_img_url, element.get('alt','').strip())
+                self.logger.debug(f"IMG tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
+                
+                raw_image_detail = image_details_lookup.get(abs_img_url)
+                image_id_ref: Optional[str] = None
+                alt_text: Optional[str] = element.get('alt','').strip() # Default alt from tag
+                caption_text_for_block: Optional[str] = None # Placeholder for caption if figure is parent
 
-                if not image_id_ref: 
-                    self.logger.warning(f"Image {abs_img_url} in main content but not in pre-scanned raw_images_list. Generating temp ID.")
+                if raw_image_detail:
+                    image_id_ref = raw_image_detail.image_id
+                    alt_text = raw_image_detail.alt_text or alt_text # Prefer alt from RawImageInput if available
+                    # Caption is usually handled by <figure> context, but if raw_image_detail has it, could be used
+                    caption_text_for_block = raw_image_detail.caption 
+                else:
+                    self.logger.warning(f"Image {abs_img_url} in main content but not in pre-scanned image_details_lookup. Generating temp ID.")
                     image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
                 
-                current_custom_attrs = {'alt_text': alt_text} # Use a fresh dict for each block
+                # Check for parent <figure> to get caption, potentially overriding one from raw_image_detail if more specific
+                figure_parent = element.find_parent('figure')
+                if figure_parent and isinstance(figure_parent, Tag):
+                    figcaption = figure_parent.find('figcaption')
+                    if figcaption and isinstance(figcaption, Tag):
+                        figcaption_text_content = figcaption.get_text(strip=True)
+                        if figcaption_text_content:
+                             caption_text_for_block = figcaption_text_content
+
+
+                current_custom_attrs = {}
+                if alt_text: current_custom_attrs['alt_text'] = alt_text
+                if caption_text_for_block: current_custom_attrs['caption'] = caption_text_for_block
                 
                 block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
                 blocks.append(PreliminaryBlock(
                     block_id=block_id_str,
                     type='image_placeholder',
-                    image_id_ref=image_id_ref,
+                    image_id_ref=image_id_ref, # This must be a string
                     order=len(blocks),
-                    custom_attributes=current_custom_attrs
+                    custom_attributes=current_custom_attrs if current_custom_attrs else None
                 ))
 
         elif tag_name == 'figure':
@@ -661,25 +665,33 @@ class WebAcquisitionService(BaseService):
                 src = img_in_figure.get('src') or img_in_figure.get('data-src')
                 if src:
                     abs_img_url = urljoin(base_url, src.strip())
-                    self.logger.debug(f"FIGURE tag: Attempting to find image_id for abs_img_url: '{abs_img_url}'. Map keys: {list(image_id_map.keys())}") # DEBUG LOGGING
-                    image_id_ref = image_id_map.get(abs_img_url)
-                    alt_text = image_alt_map.get(abs_img_url, img_in_figure.get('alt','').strip())
+                    self.logger.debug(f"FIGURE tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
+                    
+                    raw_image_detail = image_details_lookup.get(abs_img_url)
+                    image_id_ref: Optional[str] = None
+                    alt_text_for_block: Optional[str] = img_in_figure.get('alt','').strip() # Default alt from img
 
-                    if not image_id_ref:
-                        self.logger.warning(f"Image {abs_img_url} in figure not in pre-scanned list. Generating temp ID.")
+                    if raw_image_detail:
+                        image_id_ref = raw_image_detail.image_id
+                        alt_text_for_block = raw_image_detail.alt_text or alt_text_for_block # Prefer from RawImageInput
+                        # If raw_image_detail has a caption, it might be from _extract_images_from_html,
+                        # but figcaption_text here is more specific to this figure context.
+                    else:
+                        self.logger.warning(f"Image {abs_img_url} in figure not in pre-scanned image_details_lookup. Generating temp ID.")
                         image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
                     
-                    current_custom_attrs = {'alt_text': alt_text}
-                    if figcaption_text:
+                    current_custom_attrs = {}
+                    if alt_text_for_block: current_custom_attrs['alt_text'] = alt_text_for_block
+                    if figcaption_text: # This is the <figcaption> specific to this <figure>
                         current_custom_attrs['caption'] = figcaption_text
 
                     block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
                     blocks.append(PreliminaryBlock(
                         block_id=block_id_str,
                         type='image_placeholder',
-                        image_id_ref=image_id_ref,
+                        image_id_ref=image_id_ref, # Must be a string
                         order=len(blocks),
-                        custom_attributes=current_custom_attrs
+                        custom_attributes=current_custom_attrs if current_custom_attrs else None
                     ))
             elif figcaption_text: # Figure with caption but no image? Treat as text.
                 block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
@@ -693,6 +705,44 @@ class WebAcquisitionService(BaseService):
             # Could add recursion here if figures can contain other block types: 
             # for child in element.children: if isinstance(child, Tag) and child not in [img_in_figure, figcaption_tag]: await self._process_html_element(...)
             
+        elif tag_name == 'graphic': # Handle Trafilatura's <graphic> tag
+            src = element.get('src')
+            if src:
+                abs_img_url = urljoin(base_url, src.strip())
+                self.logger.debug(f"GRAPHIC tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
+
+                raw_image_detail = image_details_lookup.get(abs_img_url)
+                image_id_ref: Optional[str] = None
+                alt_text_for_block: Optional[str] = None # Trafilatura <graphic> doesn't have alt
+                caption_text_for_block: Optional[str] = None # Trafilatura <graphic> doesn't have caption directly
+
+                if raw_image_detail:
+                    image_id_ref = raw_image_detail.image_id
+                    alt_text_for_block = raw_image_detail.alt_text # Get from original scan
+                    caption_text_for_block = raw_image_detail.caption # Get from original scan
+                    self.logger.debug(f"GRAPHIC tag: Found raw_image_detail. ID: {image_id_ref}, Alt: {alt_text_for_block}, Caption: {caption_text_for_block}")
+                else:
+                    # This case might occur if the image URL from <graphic> somehow differs from what was in <img> src
+                    # or if the image wasn't picked up in the initial scan of the full HTML.
+                    self.logger.warning(f"Image {abs_img_url} from <graphic> tag not in pre-scanned image_details_lookup. Generating temp ID.")
+                    image_id_ref = f"TEMP_GRAPHIC_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
+
+                current_custom_attrs = {}
+                if alt_text_for_block: current_custom_attrs['alt_text'] = alt_text_for_block
+                if caption_text_for_block: current_custom_attrs['caption'] = caption_text_for_block
+                
+                if image_id_ref: # Ensure we have an image_id_ref
+                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                    blocks.append(PreliminaryBlock(
+                        block_id=block_id_str,
+                        type='image_placeholder',
+                        image_id_ref=image_id_ref,
+                        order=len(blocks),
+                        custom_attributes=current_custom_attrs if current_custom_attrs else None
+                    ))
+                else:
+                    self.logger.warning(f"GRAPHIC tag: Could not establish an image_id_ref for src '{abs_img_url}'. Skipping block creation.")
+
         elif tag_name == 'pre':
             code_content = element.get_text() 
             lang = None
@@ -719,14 +769,9 @@ class WebAcquisitionService(BaseService):
             # The parent <ul>/<ol> itself does not become a block.
             for li in element.find_all('li', recursive=False):
                 # Process children of li to handle nested structures or complex li content
-                await self._process_html_element(li, base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
+                await self._process_html_element(li, base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
         
         elif tag_name == 'li': # Handle <li> elements when called directly (e.g. from ul/ol loop)
-            # For <li>, we create a block for its content. 
-            # If <li> contains further block elements (like a <p> or another <ul>), 
-            # the recursive calls for its children will handle them.
-            # What constitutes the "text" of the li? If it has a <p>, that p's text is usually primary.
-            # This simplified version takes all text from the <li>.
             item_text = element.get_text(strip=True)
             if item_text:
                 block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
@@ -737,14 +782,12 @@ class WebAcquisitionService(BaseService):
                     list_ordered=(element.parent.name == 'ol' if element.parent else None),
                     order=len(blocks)
                 ))
-            # After creating the list_item block for the direct text, recurse for complex children if any
+            # After creating the list_item block for its text,
+            # recurse for any complex Tag children that might form their own blocks.
             for child in element.children:
-                 if isinstance(child, Tag) and child.name not in ['ul','ol']: # Avoid double processing ul/ol within li if li itself makes a block
-                    # This recursion part for <li> children needs care to avoid duplicating content
-                    # If the get_text() above already captured children's text, this might be redundant
-                    # This is where parsing gets very tricky. For now, let's assume get_text() is sufficient for simple list items.
-                    # More complex <li> with <p> and <img> would need the child recursion.
-                    pass # Simplified: rely on get_text for <li> content for now.
+                 if isinstance(child, Tag) and child.name not in ['ul','ol']:
+                    # Let _process_html_element decide if this child tag forms a new block
+                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_details_lookup)
 
         elif tag_name == 'table':
             current_custom_attrs = {'html_table_content': str(element)}
@@ -790,7 +833,7 @@ class WebAcquisitionService(BaseService):
             for child in element.children:
                 if isinstance(child, Tag):
                     # Pass the same image_id_map and image_alt_map down
-                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_id_map, image_alt_map)
+                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
 
     def _filter_boilerplate_preliminary_blocks(self, blocks: List[PreliminaryBlock], source_url_for_logging: str) -> List[PreliminaryBlock]:
         """ 
@@ -882,8 +925,12 @@ class WebAcquisitionService(BaseService):
 
         # Initialize variables that will be part of the successful return tuple
         preliminary_blocks_list: List[PreliminaryBlock] = []
-        raw_images_list: List[RawImageInput] = [] # Use raw_images_list consistently
-        
+        # raw_images_list: List[RawImageInput] = [] # This will be populated from image_details_lookup based on used images
+        # Corrected: raw_images_list needs to be what the execute function ultimately returns.
+        # It will be derived from the full scan by _extract_images_from_html, then filtered.
+        # Let's keep its initialization here, and it will be assigned the final list of *used* images later.
+        final_raw_images_to_return_from_execute: List[RawImageInput] = []
+
         html_content_str: Optional[str] = None
         final_url_val: str = web_input.url # Start with input URL, will be updated by redirects if fetch occurs
         pdf_bytes_val: Optional[bytes] = None
@@ -1054,7 +1101,8 @@ class WebAcquisitionService(BaseService):
                             include_tables=True,
                             include_comments=False,
                             deduplicate=True, # Set deduplicate to True
-                            favor_recall=True # Add favor_recall=True
+                            favor_recall=True, # Add favor_recall=True
+                            include_images=True # Ensure images are included in Trafilatura output
                             # config=trafilatura.settings.use_config() # Consider if custom config is needed or default is better
                         )
                     )
@@ -1132,6 +1180,8 @@ class WebAcquisitionService(BaseService):
                 preliminary_blocks_list = self._filter_boilerplate_preliminary_blocks(preliminary_blocks_list, final_url_val)
                 self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks_list)} blocks remaining.")
 
+            # document_metadata_obj is returned by _parse_and_structure_html
+            # raw_images_list is also returned by _parse_and_structure_html, containing ONLY used images.
             return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
 
         except Exception as e_process: # Catch errors from PDF routing or HTML parsing/structuring
@@ -1147,6 +1197,6 @@ class WebAcquisitionService(BaseService):
                     "original_url": web_input.url,
                     "final_url_at_failure": final_url_val,
                     "exception_type": type(e_process).__name__,
-                    "original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)
+                    "original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default) # raw_images_default here is correct for failure
                 }
             )

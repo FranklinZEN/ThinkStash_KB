@@ -1,6 +1,6 @@
 {
   "status_code": "success",
-  "user_id": "frank",
+  "user_id": "default_e2e_user",
   "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
   "source_identifier": "E:\\ThinkStash\\documentation\\AI Agents Testing File\\technical-guide-to-scaling-gen-ai.pdf",
   "source_type": "pdf",
@@ -9,9 +9,9 @@
   "is_long_article": false,
   "original_content_blocks": [
     {
-      "block_id": "034b2b74-80f7-4de7-9e6c-b76b07b0a66d",
+      "block_id": "f8ccded1-9361-48eb-a7c5-4377d76be6ca",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_b0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "heading",
       "order_index": 0,
@@ -37,9 +37,9 @@
       "height": null
     },
     {
-      "block_id": "49c8a506-158a-4020-b4f1-739136c83ad4",
+      "block_id": "969df80c-3c59-4b1a-a3b0-80bc16059bf0",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_b1",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "heading",
       "order_index": 1,
@@ -65,9 +65,9 @@
       "height": null
     },
     {
-      "block_id": "462d241c-d190-4efb-8f18-ad6cda21118a",
+      "block_id": "d33185d9-4522-45ee-9d69-212b76d5f685",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 2,
@@ -93,9 +93,9 @@
       "height": null
     },
     {
-      "block_id": "30d2b151-c013-4e0d-a473-0217d4255a22",
+      "block_id": "6c63b993-aaa4-47b2-aee4-c96b3fa3dbaa",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_imgph0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "image",
       "order_index": 3,
@@ -121,9 +121,9 @@
       "height": 845
     },
     {
-      "block_id": "444b5edb-55af-49c2-be86-f2fb307d6cea",
+      "block_id": "acaa0678-16f5-43df-bb46-ee5cb904ceb5",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 4,
@@ -149,9 +149,9 @@
       "height": null
     },
     {
-      "block_id": "ea89279b-a9e2-4516-ae10-39566bdc0bcf",
+      "block_id": "8b35359d-a723-4517-a269-676b6c945a5b",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p1_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 5,
@@ -177,9 +177,9 @@
       "height": null
     },
     {
-      "block_id": "913c00c2-d2fd-4195-b8ba-5d3d076b9ad0",
+      "block_id": "2e81c04b-91bc-4db9-94d4-c1e3b039d32d",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b1",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 6,
@@ -205,9 +205,9 @@
       "height": null
     },
     {
-      "block_id": "a9075e12-98e8-4b75-925d-4c042d644d36",
+      "block_id": "f99279cb-0c0e-48a1-be2f-0fce64e450d4",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 7,
@@ -233,9 +233,9 @@
       "height": null
     },
     {
-      "block_id": "c91c0dc4-de7e-472a-9cfd-fe10ca43f7e7",
+      "block_id": "128b7326-7414-433c-9cf4-b4d2b4d8668b",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 8,
@@ -261,9 +261,9 @@
       "height": null
     },
     {
-      "block_id": "c5e5c558-e56e-4f2f-badf-737aef9921ac",
+      "block_id": "e5127465-4d66-4504-9af1-987518fab802",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 9,
@@ -289,9 +289,9 @@
       "height": null
     },
     {
-      "block_id": "5f4d7be5-e8d9-4a43-a678-8c1768138ae3",
+      "block_id": "72429222-6d9a-4111-9b31-7a6815464a40",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 10,
@@ -317,9 +317,9 @@
       "height": null
     },
     {
-      "block_id": "2044209b-3e7c-44a8-93c9-dc94da92a2d6",
+      "block_id": "d2b45b11-2c8d-4424-b2bb-c7f62981598e",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b5",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 11,
@@ -345,9 +345,9 @@
       "height": null
     },
     {
-      "block_id": "398ef880-1947-431c-b642-751ee8b4d398",
+      "block_id": "a9be7be0-2291-4051-be9c-0d70a6f177b4",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b6",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 12,
@@ -373,9 +373,9 @@
       "height": null
     },
     {
-      "block_id": "f4f66332-bb54-4314-b690-41f7498f684c",
+      "block_id": "8d0d7fe7-f4c3-4167-876e-65ab7210c913",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b7",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 13,
@@ -401,9 +401,9 @@
       "height": null
     },
     {
-      "block_id": "cc8e3236-737e-477d-9ce5-d6b37ef7fb19",
+      "block_id": "40f8e090-9f29-4068-a6f8-c4fcf4b914eb",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b8",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 14,
@@ -429,9 +429,9 @@
       "height": null
     },
     {
-      "block_id": "73f74821-a6c9-4284-a257-2964b3777cce",
+      "block_id": "d58d6cac-cfa4-4cac-918d-1343e2401cec",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b9",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 15,
@@ -457,9 +457,9 @@
       "height": null
     },
     {
-      "block_id": "33662738-318b-41a6-bfc1-e77fffb39a89",
+      "block_id": "722493d2-f7ff-4d4a-85ec-8e35d589c5bb",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p2_b10",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 16,
@@ -485,40 +485,12 @@
       "height": null
     },
     {
-      "block_id": "79da7fb9-1aec-4d23-a32b-b2535c911086",
-      "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b0",
-      "user_id": "frank",
+      "block_id": "174487a7-81dd-4f67-b48d-853e4097ae51",
+      "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b1",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 17,
-      "content": "table, allowing them to either create a new data  set or make revisions to an existing one. Some  companies have already used synthetic data  generators to create statistically similar data  sets.",
-      "page_number": 3,
-      "bbox": [
-        331.88031005859375,
-        67.8870849609375,
-        522.8483276367188,
-        132.23046875
-      ],
-      "level": null,
-      "language": null,
-      "items": null,
-      "ordered": null,
-      "list_start_number": null,
-      "image_id_ref": null,
-      "gcs_url": null,
-      "alt_text": null,
-      "caption": null,
-      "llm_description": null,
-      "width": null,
-      "height": null
-    },
-    {
-      "block_id": "2c92ca4e-05ad-474c-b94b-4baa319654bd",
-      "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b1",
-      "user_id": "frank",
-      "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
-      "type": "text",
-      "order_index": 18,
       "content": "of time checking two screens of an integrated  development environment to observe the  differences between outputs. As concurrent  use cases increase, this manual approach  quickly hits its limits. Data leaders need to  focus resources on implementing automated  evaluation methods, mechanisms to manage  versioning, and data-relevancy scoring to  enhance multimodal model output accuracy and  consistency.",
       "page_number": 3,
       "bbox": [
@@ -541,9 +513,37 @@
       "height": null
     },
     {
-      "block_id": "bca07098-fe0a-4b54-b54d-afcd5ae72ce6",
+      "block_id": "0fde396f-35ae-4f16-8c5d-186e1a3d3d13",
+      "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b0",
+      "user_id": "default_e2e_user",
+      "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
+      "type": "text",
+      "order_index": 18,
+      "content": "table, allowing them to either create a new data  set or make revisions to an existing one. Some  companies have already used synthetic data  generators to create statistically similar data  sets.",
+      "page_number": 3,
+      "bbox": [
+        331.88031005859375,
+        67.8870849609375,
+        522.8483276367188,
+        132.23046875
+      ],
+      "level": null,
+      "language": null,
+      "items": null,
+      "ordered": null,
+      "list_start_number": null,
+      "image_id_ref": null,
+      "gcs_url": null,
+      "alt_text": null,
+      "caption": null,
+      "llm_description": null,
+      "width": null,
+      "height": null
+    },
+    {
+      "block_id": "60e454fb-2109-4b76-8cb9-214d9885888a",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 19,
@@ -569,9 +569,9 @@
       "height": null
     },
     {
-      "block_id": "a3b851af-bddd-4777-9b6b-6a5784474c13",
+      "block_id": "10006258-6c32-464b-b459-5f51ece21ac4",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 20,
@@ -597,9 +597,9 @@
       "height": null
     },
     {
-      "block_id": "810726ad-c83e-4a8c-9d88-3c6b2fbabdc5",
+      "block_id": "cab82d59-a254-40e5-9350-8b1db70a7aa0",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 21,
@@ -625,9 +625,9 @@
       "height": null
     },
     {
-      "block_id": "3f6af944-0324-4292-8d08-b50e5db497a4",
+      "block_id": "3d1903f2-5979-49e2-a17f-2c9e6b2f278d",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b5",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 22,
@@ -653,9 +653,9 @@
       "height": null
     },
     {
-      "block_id": "415853e6-cec8-4b7e-8dbb-5a66e087c5f3",
+      "block_id": "3e20b25a-e9f9-4093-bcfb-69cb8f99cf77",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b6",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 23,
@@ -681,9 +681,9 @@
       "height": null
     },
     {
-      "block_id": "0a123922-945b-49e6-8497-784d833268b7",
+      "block_id": "69ec465b-7869-4cf7-8adf-72a44851d877",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b7",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 24,
@@ -709,9 +709,9 @@
       "height": null
     },
     {
-      "block_id": "ebcdb617-5667-4f4e-8d02-c71a281a4486",
+      "block_id": "a8b80266-c5c0-4b22-a799-b1157e1ed97f",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b8",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 25,
@@ -737,9 +737,9 @@
       "height": null
     },
     {
-      "block_id": "e0aba512-9419-4df7-9639-a4ae442e220f",
+      "block_id": "bf15ba7a-c797-4bda-b47c-e10ad0597eb8",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b9",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 26,
@@ -765,9 +765,9 @@
       "height": null
     },
     {
-      "block_id": "39370e6f-f964-4891-afb9-e413aff46804",
+      "block_id": "42922e94-52f7-4f49-ab4f-667a6c8d5594",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p3_b10",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 27,
@@ -793,9 +793,9 @@
       "height": null
     },
     {
-      "block_id": "65805bae-958a-4068-8f9b-ad9e5366c8d7",
+      "block_id": "8ddf9e56-d59b-4e6e-a9d6-1d6d126a8064",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b1",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 28,
@@ -821,9 +821,9 @@
       "height": null
     },
     {
-      "block_id": "9e989390-a240-4309-abab-ff89eb7f51b9",
+      "block_id": "080fc72f-3f3d-4815-be6e-fab60347e4c4",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 29,
@@ -849,9 +849,9 @@
       "height": null
     },
     {
-      "block_id": "d98a73fe-f1fe-4318-9775-f3b875b8485a",
+      "block_id": "eeb56608-1338-4308-b7b6-a6e6a5895364",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 30,
@@ -877,9 +877,9 @@
       "height": null
     },
     {
-      "block_id": "1c501849-36f9-42b6-b321-fd1fab601f70",
+      "block_id": "6b5e8419-9631-4576-8a22-4b3458991c08",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 31,
@@ -905,9 +905,9 @@
       "height": null
     },
     {
-      "block_id": "6c336231-e672-4e05-98d2-a27e1651a2be",
+      "block_id": "f5a884e4-df4c-499a-9407-89e0ff8950f2",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b5",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 32,
@@ -933,9 +933,9 @@
       "height": null
     },
     {
-      "block_id": "8981099e-ba54-4f81-8dc2-762d6cee2b45",
+      "block_id": "a1ce05e3-6598-4d9b-9fb6-4f9f7927bbd9",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 33,
@@ -961,9 +961,9 @@
       "height": null
     },
     {
-      "block_id": "5e8381a6-c6c9-4443-85d2-db26fa55637b",
+      "block_id": "8126f7af-f9a9-4ac0-a382-183c56fc7bae",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b6",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 34,
@@ -989,9 +989,9 @@
       "height": null
     },
     {
-      "block_id": "9391cd8c-9197-4b64-9d77-3fcb3f3dcd36",
+      "block_id": "f447c95a-359b-4550-b579-30406623d1f4",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p4_b7",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 35,
@@ -1017,9 +1017,9 @@
       "height": null
     },
     {
-      "block_id": "88887343-4cc2-4f09-b548-97c54c842316",
+      "block_id": "f996dcf5-064b-40ab-aa4a-f82abf0b7e93",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 36,
@@ -1045,9 +1045,9 @@
       "height": null
     },
     {
-      "block_id": "e0cfdb69-3e92-4657-a6c8-99c01ed2f137",
+      "block_id": "afc40f36-a77e-467b-8b4b-2ea1f54a7400",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b1",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 37,
@@ -1073,9 +1073,9 @@
       "height": null
     },
     {
-      "block_id": "111322d7-e13e-4a19-94bc-8738ecc02f46",
+      "block_id": "4449e60b-74eb-40c8-921c-7b5d29c21ed2",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 38,
@@ -1101,9 +1101,9 @@
       "height": null
     },
     {
-      "block_id": "540baf69-e8c7-4e06-b138-6718d011537c",
+      "block_id": "93f91fa0-61a5-475f-8d14-4627733c132b",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 39,
@@ -1129,9 +1129,9 @@
       "height": null
     },
     {
-      "block_id": "e53d4aa6-5c7e-4506-acb7-ac9f82990e20",
+      "block_id": "1d33bb2f-9e11-48b5-a1ac-eed694b7c9b5",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b5",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 40,
@@ -1157,9 +1157,9 @@
       "height": null
     },
     {
-      "block_id": "057ecedb-2537-454d-a534-4a4c7e1a26e2",
+      "block_id": "7294723e-79cd-4700-93af-d99416e75aa9",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 41,
@@ -1185,9 +1185,9 @@
       "height": null
     },
     {
-      "block_id": "ed0dbdb0-91e6-4b49-8e7e-0f5b077207f8",
+      "block_id": "c0498768-e4c5-4b91-b85d-1a9613c068f3",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b6",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 42,
@@ -1213,9 +1213,9 @@
       "height": null
     },
     {
-      "block_id": "86b5e6cb-143a-4fd9-a0ff-2c35837f07e3",
+      "block_id": "ca8a61ba-27bf-4303-8609-9f13489fe835",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b7",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 43,
@@ -1241,9 +1241,9 @@
       "height": null
     },
     {
-      "block_id": "eaea0d97-0f64-46ba-bdbc-86a89f892454",
+      "block_id": "061988e3-ab08-475d-93f9-d47b54fc79a7",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b8",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 44,
@@ -1269,9 +1269,9 @@
       "height": null
     },
     {
-      "block_id": "05933e4f-a9c3-481b-9c28-68abded6aa6a",
+      "block_id": "8393bdd3-13ce-4a8a-bb55-c654b2f80a7f",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p5_b9",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 45,
@@ -1297,9 +1297,9 @@
       "height": null
     },
     {
-      "block_id": "454a8ed8-07c1-49b1-beed-3cbaeb5ecdc4",
+      "block_id": "109c5c6a-36d9-4597-80e6-22515683d06c",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b0",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 46,
@@ -1325,9 +1325,9 @@
       "height": null
     },
     {
-      "block_id": "ee3a2ab7-3365-426a-97a7-f466b59a43b9",
+      "block_id": "f122013f-9e56-4914-b5b2-0fe14928056c",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b1",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 47,
@@ -1353,9 +1353,9 @@
       "height": null
     },
     {
-      "block_id": "4a45cfd0-baf5-41bf-9247-beefc4ed3671",
+      "block_id": "1eb74807-e632-432f-86f3-8dcce4567189",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b2",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 48,
@@ -1381,9 +1381,9 @@
       "height": null
     },
     {
-      "block_id": "7134870c-a0f6-4e2f-8ccb-86ee4b448bc0",
+      "block_id": "d186afdd-f002-4ff7-bf34-2ed984751c7a",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b3",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 49,
@@ -1409,9 +1409,9 @@
       "height": null
     },
     {
-      "block_id": "5a464122-df25-4df9-99d7-3999a3bc9b90",
+      "block_id": "4fd5f392-2af8-4e1f-b68f-86688cadb3f3",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b4",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 50,
@@ -1437,9 +1437,9 @@
       "height": null
     },
     {
-      "block_id": "fcd1bb8b-646b-4117-a150-2645d7bc3b96",
+      "block_id": "3a6bfb32-a3c8-44b5-b5d9-4afe7df82d8f",
       "tmp_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe_p6_b5",
-      "user_id": "frank",
+      "user_id": "default_e2e_user",
       "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
       "type": "text",
       "order_index": 51,
@@ -1479,7 +1479,7 @@
   },
   "document_metadata": {
     "document_id": "f082da0a-88a3-5507-a5ba-65f6912e81fe",
-    "user_id": "frank",
+    "user_id": "default_e2e_user",
     "source_identifier": "E:\\ThinkStash\\documentation\\AI Agents Testing File\\technical-guide-to-scaling-gen-ai.pdf",
     "source_type": "pdf",
     "final_url": null,
@@ -1489,7 +1489,7 @@
     "keywords": [],
     "creation_date": "2024-07-02T15:41:38",
     "modification_date": "2024-07-02T15:41:40",
-    "extracted_at": "2025-06-01T17:33:21.796015",
+    "extracted_at": "2025-06-02T17:28:52.198463",
     "total_pages": 6,
     "language_detected": null,
     "custom_fields": {}

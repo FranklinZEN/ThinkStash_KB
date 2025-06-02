@@ -316,15 +316,23 @@ class PDFAcquisitionService(BaseService):
                 primary_sort = block.page_number if block.page_number is not None else float('inf')
                 
                 secondary_sort_val = float('inf') # Default for items without a bbox or with unusual bbox
-                if block.bbox and len(block.bbox) >= 2:
+                if block.bbox and len(block.bbox) == 4: # Ensure bbox has 4 elements (x0, y0, x1, y1)
                     secondary_sort_val = block.bbox[1] # y0 - vertical position
-                    if block.type == "image_placeholder" and block.bbox[1] == 0.0 and block.bbox[0] == 0.0: # Potentially unplaced image
-                         # Attempt to place them after text blocks on the same page if y0 is 0.0 (often a sign of unplaced)
-                         # This is a heuristic. A more robust way would be to interleave based on original document structure.
-                         secondary_sort_val = float('inf') # Put at end of page if bbox is [0,0,0,0] or similar
+                    # Heuristic for unplaced images (bbox is [0.0, 0.0, 0.0, 0.0])
+                    if (block.type == "image_placeholder" and
+                        block.bbox[0] == 0.0 and
+                        block.bbox[1] == 0.0 and
+                        block.bbox[2] == 0.0 and
+                        block.bbox[3] == 0.0):
+                         secondary_sort_val = float('inf') # Put at end of page if bbox is all zeros
                 
-                # Ensure stable sort for items with same page and y0, using block_id as tie-breaker
-                return (primary_sort, secondary_sort_val, block.block_id)
+                # Add x-coordinate (bbox[0]) as a tertiary sort key for left-to-right reading order in case of same y0
+                tertiary_sort_val = float('inf')
+                if block.bbox and len(block.bbox) >= 1: # Check block.bbox again
+                    tertiary_sort_val = block.bbox[0] # x0 - horizontal position
+
+                # Ensure stable sort for items with same page, y0, and x0, using block_id as tie-breaker
+                return (primary_sort, secondary_sort_val, tertiary_sort_val, block.block_id)
 
             preliminary_blocks.sort(key=sort_key)
             

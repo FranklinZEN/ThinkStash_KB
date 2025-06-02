@@ -64,8 +64,6 @@ class FileAcquisitionService(BaseService):
                             raw_images: List[RawImageInput]
                             ) -> Optional[str]: # Return an error message string if fails, else None
         loop = asyncio.get_event_loop()
-        current_block_idx = len(preliminary_blocks)
-        img_ref_idx = len(raw_images)
         error_msg: Optional[str] = None
 
         try:
@@ -74,28 +72,26 @@ class FileAcquisitionService(BaseService):
             # Extract core properties for DocumentMetadata
             core_props = document.core_properties
             base_document_metadata.author = core_props.author or None
-            base_document_metadata.title = core_props.title or base_document_metadata.title # Keep filename if no title prop
+            # Keep filename from base_document_metadata if no title prop, or use core_props.title
+            base_document_metadata.title = core_props.title or base_document_metadata.title 
             if core_props.created:
                 try: base_document_metadata.creation_date = datetime.fromisoformat(str(core_props.created).replace("Z", "+00:00"))
-                except: pass # Ignore parsing errors for dates
+                except ValueError: self.logger.warning(f"DOCX: Could not parse core_props.created: {core_props.created}")
+                except Exception as e_date: self.logger.warning(f"DOCX: Error parsing core_props.created: {e_date}")
+
             if core_props.modified:
                 try: base_document_metadata.modification_date = datetime.fromisoformat(str(core_props.modified).replace("Z", "+00:00"))
-                except: pass
+                except ValueError: self.logger.warning(f"DOCX: Could not parse core_props.modified: {core_props.modified}")
+                except Exception as e_date: self.logger.warning(f"DOCX: Error parsing core_props.modified: {e_date}")
             base_document_metadata.subject = core_props.subject or None
             base_document_metadata.keywords = core_props.keywords.split(' ') if core_props.keywords else []
             
-            # Iterate through paragraphs and inline shapes for images
-            # This is a simplified approach. DOCX can have images in headers/footers, tables, etc.
-            # which might require deeper inspection of document.xml parts.
-
-            para_idx = 0
-            for para in document.paragraphs:
-                para_text = para.text.strip()
-                para_style_name = para.style.name.lower() if para.style else ""
-                block_id_suffix = f"docx_p{para_idx}"
-                para_idx += 1
-
-                # Attempt to identify headings (simplistic approach by style name)
+            # Iterate through paragraphs to extract text and inline images in order
+            for para_g_idx, para_object in enumerate(document.paragraphs):
+                # --- 1. Process Text-like content from the paragraph ---
+                para_text = para_object.text.strip()
+                para_style_name = para_object.style.name.lower() if para_object.style and para_object.style.name else ""
+                
                 heading_level = 0
                 if 'heading 1' in para_style_name: heading_level = 1
                 elif 'heading 2' in para_style_name: heading_level = 2
@@ -104,66 +100,122 @@ class FileAcquisitionService(BaseService):
                 elif 'heading 5' in para_style_name: heading_level = 5
                 elif 'heading 6' in para_style_name: heading_level = 6
                 
-                # Attempt to identify lists (simplistic by style name or numbering)
                 is_list_item = False
                 is_ordered_list = False
-                list_level = 0 # Basic list level, not handling complex nesting well yet
+                list_level = 0 
                 if 'list paragraph' in para_style_name or 'listbullet' in para_style_name or 'listnumber' in para_style_name:
                     is_list_item = True
-                    if para.style.element.xpath('.//w:numPr'): # Check for numbering properties
+                    # Check for numbering properties to determine if ordered
+                    # Accessing para_object.style.element.xpath requires style to be defined.
+                    if para_object.style and para_object.style.element and para_object.style.element.xpath('.//w:numPr'): 
                         is_ordered_list = True 
-                        # Basic level detection based on numId (not robust for complex lists)
-                        try: list_level = int(para.style.element.xpath('.//w:numId')[0].get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')) -1
-                        except: pass
-                        if list_level <0: list_level = 0
+                        try: 
+                            num_id_val = para_object.style.element.xpath('.//w:numId')[0].get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')
+                            if num_id_val is not None:
+                                list_level = int(num_id_val) -1
+                        except (IndexError, ValueError, TypeError): 
+                            self.logger.debug(f"DOCX: Could not determine list_level for para {para_g_idx}")
+                        if list_level < 0: list_level = 0
                 
                 if heading_level > 0 and para_text:
                     preliminary_blocks.append(PreliminaryBlock(
-                        block_id=f"{job_id}_{block_id_suffix}_h{heading_level}", type="heading",
+                        block_id=f"{job_id}_docx_p{para_g_idx}_h{heading_level}", type="heading",
                         text_content=para_text, heading_level=heading_level,
-                        order=-1, page_number=None, bbox=None # DOCX has no simple page/bbox for paragraphs
+                        order=-1, page_number=None, bbox=None
                     ))
-                    current_block_idx +=1
                 elif is_list_item and para_text:
                     preliminary_blocks.append(PreliminaryBlock(
-                        block_id=f"{job_id}_{block_id_suffix}_li", type="list_item",
+                        block_id=f"{job_id}_docx_p{para_g_idx}_li", type="list_item",
                         text_content=para_text, list_item_data=para_text,
                         list_level=list_level, list_ordered=is_ordered_list,
                         order=-1, page_number=None, bbox=None
                     ))
-                    current_block_idx += 1
-                elif para_text: # Regular text block
+                elif para_text: 
                     preliminary_blocks.append(PreliminaryBlock(
-                        block_id=f"{job_id}_{block_id_suffix}_t", type="text",
+                        block_id=f"{job_id}_docx_p{para_g_idx}_t", type="text",
                         text_content=para_text, order=-1, page_number=None, bbox=None
                     ))
-                    current_block_idx +=1
 
-            # Extract images if processing_level is full_content
-            if processing_level == "full_content":
-                for rel_id, rel in document.part.rels.items():
-                    if rel.reltype == RT.IMAGE:
-                        image_part = rel.target_part
-                        image_bytes = image_part.blob
-                        original_filename = os.path.basename(image_part.partname)
-                        img_ref_idx += 1
-                        raw_image_id = self._generate_image_id("DOCX", job_id, img_ref_idx -1)
+                # --- 2. Process Inline Images within the paragraph's runs ---
+                if processing_level == "full_content":
+                    for run in para_object.runs:
+                        # nsmap = run.element.nsmap # Namespace map from the run element - not directly used in xpath() a la lxml
                         
-                        raw_images.append(RawImageInput(
-                            image_id=raw_image_id,
-                            image_bytes=image_bytes,
-                            original_filename=original_filename,
-                            mime_type=image_part.content_type, # e.g. 'image/png'
-                            source_document_id=job_id,
-                            original_source_identifier_for_gcs_path=file_path,
-                            source_type_for_gcs_path=source_type_for_gcs,
-                            job_id_for_gcs_path=job_id
-                        ))
-                        preliminary_blocks.append(PreliminaryBlock(
-                            block_id=f"{job_id}_docx_img{img_ref_idx-1}", type="image_placeholder",
-                            image_id_ref=raw_image_id, order=-1, page_number=None, bbox=None
-                        ))
-                        current_block_idx +=1
+                        # Handle <w:drawing> elements
+                        # Corrected XPath queries without the namespaces argument
+                        for drawing_element in run.element.xpath('.//w:drawing'):
+                            blip_elements = drawing_element.xpath('.//a:graphic/a:graphicData/pic:pic/pic:blipFill/a:blip/@r:embed')
+                            if not blip_elements: # Fallback for simpler structures if the above is too specific
+                                blip_elements = drawing_element.xpath('.//a:blip/@r:embed') # Get the embed attribute directly
+
+                            for r_embed_id in blip_elements: # blip_elements now contains attribute values if found
+                                # r_embed_id is already the string value of the r:embed attribute
+                                if r_embed_id:
+                                    try:
+                                        if r_embed_id not in document.part.rels:
+                                            self.logger.warning(f"DOCX: rId {r_embed_id} from drawing not in document.part.rels (para {para_g_idx}). Skipping.")
+                                            continue
+
+                                        image_part = document.part.rels[r_embed_id].target_part
+                                        image_bytes = image_part.blob
+                                        original_filename = os.path.basename(image_part.partname)
+                                        
+                                        current_img_idx = len(raw_images)
+                                        raw_image_id = self._generate_image_id("DOCX", job_id, current_img_idx)
+                                        
+                                        raw_images.append(RawImageInput(
+                                            image_id=raw_image_id, image_bytes=image_bytes,
+                                            original_filename=original_filename, mime_type=image_part.content_type,
+                                            source_document_id=job_id,
+                                            original_source_identifier_for_gcs_path=file_path,
+                                            source_type_for_gcs_path=source_type_for_gcs,
+                                            job_id_for_gcs_path=job_id
+                                        ))
+                                        preliminary_blocks.append(PreliminaryBlock(
+                                            block_id=f"{job_id}_docx_p{para_g_idx}_draw_img{current_img_idx}", type="image_placeholder",
+                                            image_id_ref=raw_image_id, order=-1, 
+                                            page_number=None, bbox=None 
+                                        ))
+                                    except KeyError:
+                                        self.logger.warning(f"DOCX: KeyError for rId {r_embed_id} (drawing, para {para_g_idx}). Skipping.")
+                                    except Exception as e_img_inline:
+                                        self.logger.error(f"DOCX: Error processing drawing image (rId {r_embed_id}, para {para_g_idx}): {e_img_inline}", exc_info=True)
+                        
+                        # Handle <w:pict> elements (VML images)
+                        # Corrected XPath queries without the namespaces argument
+                        for pict_element in run.element.xpath('.//w:pict'):
+                            imagedata_elements = pict_element.xpath('.//v:imagedata/@r:embed') # Get the embed attribute directly
+                            for r_embed_id in imagedata_elements: # imagedata_elements now contains attribute values
+                                # r_embed_id is already the string value of the r:embed attribute
+                                if r_embed_id:
+                                    try:
+                                        if r_embed_id not in document.part.rels:
+                                            self.logger.warning(f"DOCX: rId {r_embed_id} from VML pict not in document.part.rels (para {para_g_idx}). Skipping.")
+                                            continue
+                                        
+                                        image_part = document.part.rels[r_embed_id].target_part
+                                        image_bytes = image_part.blob
+                                        original_filename = os.path.basename(image_part.partname)
+                                        current_img_idx = len(raw_images)
+                                        raw_image_id = self._generate_image_id("DOCX", job_id, current_img_idx)
+                                        
+                                        raw_images.append(RawImageInput(
+                                            image_id=raw_image_id, image_bytes=image_bytes,
+                                            original_filename=original_filename, mime_type=image_part.content_type,
+                                            source_document_id=job_id,
+                                            original_source_identifier_for_gcs_path=file_path,
+                                            source_type_for_gcs_path=source_type_for_gcs,
+                                            job_id_for_gcs_path=job_id
+                                        ))
+                                        preliminary_blocks.append(PreliminaryBlock(
+                                            block_id=f"{job_id}_docx_p{para_g_idx}_vml_img{current_img_idx}", type="image_placeholder",
+                                            image_id_ref=raw_image_id, order=-1,
+                                            page_number=None, bbox=None
+                                        ))
+                                    except KeyError:
+                                        self.logger.warning(f"DOCX: KeyError for rId {r_embed_id} (VML, para {para_g_idx}). Skipping.")
+                                    except Exception as e_img_vml:
+                                        self.logger.error(f"DOCX: Error processing VML image (rId {r_embed_id}, para {para_g_idx}): {e_img_vml}", exc_info=True)
             return None # Success
 
         except Exception as e:
@@ -181,7 +233,7 @@ class FileAcquisitionService(BaseService):
                                 raw_images: List[RawImageInput]
                                 ) -> Optional[str]: # Return an error message string if fails, else None
         loop = asyncio.get_event_loop()
-        md_parser = MarkdownIt("gfm-like") # Using gfm-like for good features like tables, strikethrough etc.
+        md_parser = MarkdownIt("gfm-like", {"linkify": False}) # Using gfm-like, disable linkify to avoid ModuleNotFoundError
         current_block_idx = len(preliminary_blocks)
         img_ref_idx = len(raw_images)
         error_msg: Optional[str] = None
@@ -214,73 +266,121 @@ class FileAcquisitionService(BaseService):
                     current_block_idx += 1
                 elif token.type == "paragraph_open":
                     idx += 1 # Move to inline content token
-                    # Combine content from potentially multiple inline tokens until paragraph_close
-                    content = ""
-                    image_in_paragraph = False
-                    temp_inline_idx = idx
-                    while tokens[temp_inline_idx].type != "paragraph_close":
-                        if tokens[temp_inline_idx].type == "inline":
-                            # Check for images within inline tokens, as they are not separate block tokens for markdown-it-py
-                            for child in tokens[temp_inline_idx].children or []:
-                                if child.type == "image":
-                                    image_in_paragraph = True
-                                    img_ref_idx +=1
-                                    img_src = child.attrs.get('src', '')
-                                    img_alt = child.content
-                                    raw_image_id = self._generate_image_id("MD", job_id, img_ref_idx -1)
-                                    
-                                    image_data_dict = {
-                                        "image_id": raw_image_id,
-                                        "alt_text": img_alt,
-                                        "source_document_id": job_id,
-                                        "original_source_identifier_for_gcs_path": file_path,
-                                        "source_type_for_gcs_path": source_type_for_gcs,
-                                        "job_id_for_gcs_path": job_id
-                                    }
-
-                                    if urlparse(img_src).scheme in ['http', 'https']:
-                                        image_data_dict["source_url"] = img_src
-                                    else:
-                                        # Try to resolve local path (relative to MD file or absolute)
-                                        resolved_path = img_src
-                                        if not os.path.isabs(resolved_path):
-                                            resolved_path = os.path.join(os.path.dirname(file_path), img_src)
-                                        
-                                        if os.path.exists(resolved_path):
-                                            try:
-                                                with open(resolved_path, 'rb') as img_f:
-                                                    image_data_dict["image_bytes"] = await loop.run_in_executor(None, img_f.read)
-                                                image_data_dict["original_filename"] = os.path.basename(resolved_path)
-                                                image_data_dict["mime_type"] = f"image/{os.path.splitext(resolved_path)[1].lstrip('.').lower() or 'unknown'}"
-                                            except Exception as e_img_read:
-                                                self.logger.warning(f"MD Service: Could not read image file {resolved_path}: {e_img_read}")
-                                                image_data_dict["source_url"] = img_src 
-                                        else:
-                                            self.logger.warning(f"MD Service: Local image not found {img_src} (resolved: {resolved_path}), storing as source_url.")
-                                            image_data_dict["source_url"] = img_src 
-                                    
-                                    if processing_level == "full_content":
-                                        raw_images.append(RawImageInput(**image_data_dict)) # type: ignore
-                                    preliminary_blocks.append(PreliminaryBlock(
-                                        block_id=f"{job_id}_{block_id_suffix}_img{img_ref_idx-1}", type="image_placeholder",
-                                        image_id_ref=raw_image_id, order=-1, page_number=None, bbox=None
-                                    ))
-                                    current_block_idx +=1 # Each image placeholder is a block
-                                else:
-                                     content += child.content
-                        elif tokens[temp_inline_idx].type == "text": # Sometimes raw text is not in inline
-                             content += tokens[temp_inline_idx].content
-                        # Skip other child types of inline like softbreak, hardbreak for simple text concatenation
-                        temp_inline_idx +=1
-                    idx = temp_inline_idx #  Move main idx past this paragraph
                     
-                    text_content = content.strip() # Use concatenated content
-                    if text_content: # Only add if there is actual text (not just an image)
+                    current_text_segment = "" # Buffer for text segments within a paragraph
+                    
+                    # Iterate through all children of the inline token that represents the paragraph content
+                    # The actual inline content is often in tokens[idx] if it's a simple paragraph,
+                    # or we might need to look at tokens[idx].children if it's more complex.
+                    # markdown-it-py usually puts paragraph content into a single 'inline' token.
+                    
+                    inline_token_children = []
+                    if tokens[idx].type == "inline" and tokens[idx].children:
+                        inline_token_children = tokens[idx].children
+                    # Sometimes, simple text might not be wrapped in an 'inline' token with children,
+                    # but could be a sequence of 'text', 'softbreak', etc., directly.
+                    # However, the common case for GFM-like is an 'inline' token containing children.
+
+                    paragraph_children_processed_until = idx # Keep track of how many tokens of the main stream are consumed by this paragraph
+                    
+                    temp_inline_idx = idx 
+                    # The 'inline' token itself (tokens[temp_inline_idx]) contains the children.
+                    # The loop should go until 'paragraph_close'.
+                    
+                    if tokens[temp_inline_idx].type == "inline":
+                        for child_token in tokens[temp_inline_idx].children or []:
+                            if child_token.type == "text":
+                                current_text_segment += child_token.content
+                            elif child_token.type == "softbreak":
+                                current_text_segment += "\\n" # Preserve soft line breaks as newlines in text
+                            elif child_token.type == "hardbreak":
+                                current_text_segment += "\\n\\n" # Preserve hard line breaks as double newlines
+                            elif child_token.type == "image":
+                                # 1. Finalize any preceding text segment
+                                if current_text_segment.strip():
+                                    preliminary_blocks.append(PreliminaryBlock(
+                                        block_id=f"{job_id}_{block_id_suffix}_p_txt{len(preliminary_blocks)}", type="text",
+                                        text_content=current_text_segment.strip(),
+                                        order=-1, page_number=None, bbox=None
+                                    ))
+                                    current_block_idx +=1
+                                current_text_segment = "" # Reset for text after image
+                                
+                                # 2. Process the image
+                                img_ref_idx +=1
+                                img_src = child_token.attrs.get('src', '')
+                                img_alt = child_token.content # alt text is in child_token.content for image
+                                raw_image_id = self._generate_image_id("MD", job_id, img_ref_idx -1)
+                                
+                                image_data_dict = {
+                                    "image_id": raw_image_id,
+                                    "alt_text": img_alt,
+                                    "source_document_id": job_id,
+                                    "original_source_identifier_for_gcs_path": file_path,
+                                    "source_type_for_gcs_path": source_type_for_gcs,
+                                    "job_id_for_gcs_path": job_id
+                                }
+
+                                if urlparse(img_src).scheme in ['http', 'https']:
+                                    image_data_dict["source_url"] = img_src
+                                else:
+                                    resolved_path = img_src
+                                    if not os.path.isabs(resolved_path):
+                                        resolved_path = os.path.join(os.path.dirname(file_path), img_src)
+                                    
+                                    if os.path.exists(resolved_path):
+                                        try:
+                                            # Reading file bytes synchronously for now as it's inside a loop
+                                            # that's already part of an async executor task for the whole md file.
+                                            with open(resolved_path, 'rb') as img_f:
+                                                image_data_dict["image_bytes"] = img_f.read()
+                                            image_data_dict["original_filename"] = os.path.basename(resolved_path)
+                                            image_data_dict["mime_type"] = f"image/{os.path.splitext(resolved_path)[1].lstrip('.').lower() or 'unknown'}"
+                                        except Exception as e_img_read:
+                                            self.logger.warning(f"MD Service: Could not read image file {resolved_path}: {e_img_read}")
+                                            image_data_dict["source_url"] = img_src 
+                                    else:
+                                        self.logger.warning(f"MD Service: Local image not found {img_src} (resolved: {resolved_path}), storing as source_url.")
+                                        image_data_dict["source_url"] = img_src 
+                                
+                                if processing_level == "full_content":
+                                    raw_images.append(RawImageInput(**image_data_dict)) # type: ignore
+                                preliminary_blocks.append(PreliminaryBlock(
+                                    block_id=f"{job_id}_{block_id_suffix}_img{img_ref_idx-1}", type="image_placeholder",
+                                    image_id_ref=raw_image_id, order=-1, page_number=None, bbox=None
+                                ))
+                                current_block_idx +=1
+                            # Other inline token types (strong, em, etc.) contribute to current_text_segment via their own .content
+                            elif hasattr(child_token, 'content') and child_token.content:
+                                current_text_segment += child_token.content
+                        
+                        # After iterating all children of the inline token, advance main 'idx' past this inline token
+                        idx = temp_inline_idx # Main idx was already pointing to the inline token. It will be incremented at the end of the outer while loop.
+                                              # We need to ensure we find paragraph_close next.
+                    
+                    # The next token after 'inline' should be 'paragraph_close'. We find it to correctly advance idx.
+                    # This ensures that idx points to paragraph_close before the outer loop increments it.
+                    temp_para_close_finder_idx = idx + 1 
+                    while temp_para_close_finder_idx < len(tokens) and tokens[temp_para_close_finder_idx].type != "paragraph_close":
+                        temp_para_close_finder_idx += 1
+                    if temp_para_close_finder_idx < len(tokens) and tokens[temp_para_close_finder_idx].type == "paragraph_close":
+                        idx = temp_para_close_finder_idx
+                    else:
+                        # This case should ideally not happen if markdown is well-formed
+                        self.logger.warning(f"MD Service: paragraph_close token not found immediately after inline content for paragraph starting near token {original_idx_for_para_open}. Might misinterpret structure.")
+                        # Advance idx by one if it's still on the inline token to avoid infinite loop.
+                        if idx == temp_inline_idx : idx +=1 
+
+
+                    # Finalize any remaining text segment for the paragraph
+                    if current_text_segment.strip():
                         preliminary_blocks.append(PreliminaryBlock(
-                            block_id=f"{job_id}_{block_id_suffix}_p", type="text",
-                            text_content=text_content, order=-1, page_number=None, bbox=None
+                            block_id=f"{job_id}_{block_id_suffix}_p_txt{len(preliminary_blocks)}", type="text",
+                            text_content=current_text_segment.strip(),
+                            order=-1, page_number=None, bbox=None
                         ))
                         current_block_idx += 1
+                    current_text_segment = "" # Reset for next paragraph
                 elif token.type == "bullet_list_open" or token.type == "ordered_list_open":
                     current_list_level += 1
                     list_type_stack.append(token.type == "ordered_list_open")
