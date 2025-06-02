@@ -63,19 +63,35 @@ export interface NextJSReconstructAndAnalyzeResponse {
   job_id: string;
 }
 
-// OrchestrationOutput seems to be an internal or alternative representation
-// of what the Python service might return or what's logged.
-// If it's the direct Python response for reconstruction, it should align with PythonReconstructAndAnalyzeServiceResponse
+// Placeholder for EnrichedImageMetadata from Python aiservice
+export interface EnrichedImageMetadata {
+  image_id: string;
+  original_url?: string;
+  gcs_url?: string;
+  description?: string;
+  width?: number;
+  height?: number;
+  format?: string;
+  // Add other relevant fields from your Python EnrichedImageMetadata model
+}
+
+// OrchestrationOutput should accurately reflect the response from the Python aiservice's
+// reconstruction pipeline (specifically, the ParallelOrchestrator's output object).
 export interface OrchestrationOutput {
-  document_id: string; // This is the reconstruction_id
-  user_id: string;
-  job_id: string;
-  document_metadata?: DocumentMetadata; // Added from V2.6 plan
-  content_blocks?: ContentBlock[]; // Added from V2.6 plan
-  status_code?: number; // Added from V2.6 plan
-  error_message?: string; // Added from V2.6 plan
-  // The following fields might be part of a more detailed/internal log or status object
-  // task_outputs?: any[];
+  document_id?: string | null; // This is the reconstruction_id (can be job_id if full doc obj not created)
+  user_id?: string | null;
+  // job_id: string; // job_id is available on the input and used as fallback for document_id in route.ts; Python output object itself has document_id.
+
+  status_code: string; // From Python: "success", "failure_routing", "partial_success_..." etc.
+  source_identifier: string; // From Python: OrchestrationOutput.source_identifier
+  source_type: string; // From Python: OrchestrationOutput.source_type
+  processing_level_used?: string; // From Python: OrchestrationOutput.processing_level_used
+  extracted_title?: string | null; // From Python: OrchestrationOutput.extracted_title
+  is_long_article: boolean; // From Python: OrchestrationOutput.is_long_article (even if placeholder)
+  original_content_blocks: ContentBlock[]; // From Python: OrchestrationOutput.original_content_blocks
+  processed_images_data?: { [key: string]: EnrichedImageMetadata }; // From Python: OrchestrationOutput.processed_images_data
+  document_metadata?: DocumentMetadata | null; // From Python: OrchestrationOutput.document_metadata
+  error_message?: string | null; // From Python: OrchestrationOutput.error_message
 }
 
 // --- /api/ai/rewrite-content ---
@@ -88,10 +104,14 @@ export interface RewriteContentRequest {
 }
 
 export interface RewriteContentResponse {
-  document_id: string;
-  rewritten_content_blocks: ContentBlock[];
-  original_content_blocks?: ContentBlock[]; // Optional: for comparison
-  error_message?: string;
+  rewritten_document_id?: string | null; // ID for the set of rewritten blocks
+  ai_rewritten_content_blocks: ContentBlock[];
+  status_code?: string; // Status from the rewrite operation
+  error_message?: string | null;
+  processing_time_ms?: number | null;
+  // original_content_blocks could be returned by Next.js if needed by client for immediate comparison,
+  // but it's not part of the Python service output for this specific call.
+  // Client can manage original blocks if submitted.
 }
 
 // --- /api/ai/generate-title ---
@@ -180,7 +200,7 @@ export interface CreateCardRequest {
 export interface KnowledgeCardResponse {
   id: string;
   title: string;
-  content: ContentBlock[]; // Assuming we parse the JSON back to this type for client
+  content: Record<string, unknown>[]; // Changed from any[] to Record<string, unknown>[]
   userId: string;
   folderId?: string | null;
   tags: { id: string; name: string }[]; // Example: populated tags

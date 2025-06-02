@@ -13,7 +13,12 @@ import { CardContentSchema } from '@/lib/validators/editorValidators'; // Restor
 import { z } from 'zod'; // Added for Zod
 // import type { UpdateCardRequest, KnowledgeCardResponse } from '@/types/api/ai-service'; // This seems like a leftover from AI services, not directly used by card CRUD. Keeping commented.
 
-// Removed getRouteHandlerUserId as direct session check is used
+// Removed CardRouteContext interface
+// interface CardRouteContext {
+//   params: {
+//     cardId: string;
+//   };
+// }
 
 const CardIdParamsSchema = z.object({
   // Restored
@@ -51,7 +56,7 @@ const UpdateCardBodySchema = z // Restored & Renamed for clarity
 // GET /api/cards/[cardId] (Get a single card)
 export async function GET(
   req: NextRequest,
-  { params }: { params: { cardId: string } },
+  context: { params: Promise<{ cardId: string }> },
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -60,7 +65,8 @@ export async function GET(
     }
     const userId = session.user.id;
 
-    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    const resolvedParams = await context.params; // Await the params
+    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
     if (!paramsValidation.success) {
       return NextResponse.json(
         {
@@ -71,8 +77,6 @@ export async function GET(
       );
     }
     const { cardId } = paramsValidation.data;
-
-    // console.log(`API /cards/${cardId} (GET) called by user ${userId}`); // Debug logging
 
     const result = await getCardLogic(cardId, userId);
 
@@ -105,7 +109,7 @@ export async function GET(
 // PUT /api/cards/[cardId] (Update a card)
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { cardId: string } },
+  context: { params: Promise<{ cardId: string }> },
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -114,7 +118,8 @@ export async function PUT(
     }
     const userId = session.user.id;
 
-    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    const resolvedParams = await context.params; // Await the params
+    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
     if (!paramsValidation.success) {
       return NextResponse.json(
         {
@@ -182,7 +187,7 @@ export async function PUT(
 // DELETE /api/cards/[cardId] (Delete a card)
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { cardId: string } },
+  context: { params: Promise<{ cardId: string }> },
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -191,7 +196,8 @@ export async function DELETE(
     }
     const userId = session.user.id;
 
-    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    const resolvedParams = await context.params; // Await the params
+    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
     if (!paramsValidation.success) {
       return NextResponse.json(
         {

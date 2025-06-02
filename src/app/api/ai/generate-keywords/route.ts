@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const pythonServicePayload = {
       content_blocks,
-      user_id: userId, // Pass userId to the Python service (optional for service, good for logging)
+      // user_id: userId, // Python KeywordExtractionRequest does not expect user_id
     };
 
     const response = await fetch(`${AISERVICE_URL}/generate-keywords`, {
@@ -77,20 +77,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const pythonServiceResponse = await response.json();
-    // Assuming the Python service returns a JSON object with a `suggested_keywords` field
-    // and potentially an `error_message` field, conforming to our GenerateKeywordsResponse.
-    const result: GenerateKeywordsResponse = {
-      suggested_keywords: pythonServiceResponse.suggested_keywords || [], // Default to empty array if undefined
-      error_message: pythonServiceResponse.error_message,
-    };
+    // If response.ok is true, we expect a payload conforming to KeywordExtractionResponse from Python,
+    // or at least { suggested_keywords: string[] }.
+    const pythonServiceResponse = (await response.json()) as {
+      suggested_keywords?: string[];
+      error_message?: string;
+    }; // Looser type for initial parsing
 
-    if (result.error_message) {
-      console.warn(
-        'Python aiservice (keywords) returned an error in the success payload:',
-        result.error_message,
-      );
-    }
+    // For a successful response (2xx), we prioritize suggested_keywords.
+    // Any error message in a 2xx response from Python for keywords is unexpected if it correctly signals errors via HTTP status codes.
+    const result: GenerateKeywordsResponse = {
+      suggested_keywords: pythonServiceResponse.suggested_keywords || [],
+      // error_message: pythonServiceResponse.error_message, // This line is removed. Errors are handled by !response.ok block.
+    };
 
     return NextResponse.json(result);
   } catch (error) {

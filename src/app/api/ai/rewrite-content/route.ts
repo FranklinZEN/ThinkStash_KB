@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type {
   RewriteContentRequest,
   RewriteContentResponse,
+  ContentBlock,
 } from '@/types/api/ai-service';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path if your authOptions are elsewhere
@@ -95,18 +96,48 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const pythonServiceResponse =
-      (await response.json()) as RewriteContentResponse;
-    // Assuming Python returns the full RewriteContentResponse structure on success
+    // Define a type for the expected broader output from the Python service
+    // This includes fields we might not directly expose via this Next.js API route,
+    // but are present in the Python 'RewriteContentOutput' model.
+    interface PythonServiceRewriteOutput {
+      rewritten_document_id?: string | null;
+      ai_rewritten_content_blocks: ContentBlock[]; // Changed from any[] to ContentBlock[]
+      status_code?: string;
+      error_message?: string | null;
+      processing_time_ms?: number | null;
+      usage_metrics?: Record<string, unknown>; // Changed from Record<string, any> to Record<string, unknown>
+      trace_id?: string; // Example of an extra field
+    }
 
-    if (pythonServiceResponse.error_message) {
+    const pythonServiceResponse =
+      (await response.json()) as PythonServiceRewriteOutput;
+
+    if (
+      pythonServiceResponse.error_message &&
+      pythonServiceResponse.status_code &&
+      pythonServiceResponse.status_code.toLowerCase().includes('success')
+    ) {
       console.warn(
-        'Python aiservice (rewrite) returned an error in the success payload:',
+        'Python aiservice (rewrite) returned an error message in an apparent success payload:',
         pythonServiceResponse.error_message,
+      );
+    } else if (pythonServiceResponse.error_message) {
+      console.info(
+        `Python aiservice (rewrite) returned an error message: ${pythonServiceResponse.error_message} with status: ${pythonServiceResponse.status_code}`,
       );
     }
 
-    return NextResponse.json(pythonServiceResponse);
+    // Construct the response for the Next.js client, adhering to RewriteContentResponse type
+    const nextJsResponsePayload: RewriteContentResponse = {
+      rewritten_document_id: pythonServiceResponse.rewritten_document_id,
+      ai_rewritten_content_blocks:
+        pythonServiceResponse.ai_rewritten_content_blocks,
+      status_code: pythonServiceResponse.status_code,
+      error_message: pythonServiceResponse.error_message,
+      processing_time_ms: pythonServiceResponse.processing_time_ms,
+    };
+
+    return NextResponse.json(nextJsResponsePayload);
   } catch (error) {
     console.error('Error in /ai/rewrite-content API route:', error);
     const errorMessage =

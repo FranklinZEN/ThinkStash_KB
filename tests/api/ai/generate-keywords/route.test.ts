@@ -2,13 +2,16 @@
  * @vitest-environment node
  */
 /// <reference types="vitest/globals" />
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { POST } from '@/app/api/ai/generate-keywords/route'; // Assuming this is the correct path
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { POST } from '@/app/api/ai/generate-keywords/route';
 import { NextRequest } from 'next/server';
+import {
+  GenerateKeywordsRequest,
+  GenerateKeywordsResponse,
+  ContentBlock,
+} from '@/types/api/ai-service';
 
-// --- Reusable Mocks (adapted from generate-title.test.ts) ---
-
-// Mock next/headers
+// Mocks for next/headers and next-auth
 const mockHeadersInstance = new Headers({ 'x-test-header': 'test' });
 const mockHeadersFn = vi.fn(() => mockHeadersInstance);
 const mockCookiesGetFn = vi.fn();
@@ -35,242 +38,246 @@ vi.mock('next/headers', () => ({
   cookies: mockCookiesFn,
 }));
 
-// Mock next-auth/next
 const { mockGetServerSession } = vi.hoisted(() => {
   return { mockGetServerSession: vi.fn() };
 });
+
 vi.mock('next-auth/next', () => ({
   __esModule: true,
   getServerSession: mockGetServerSession,
 }));
 
-// Mock @/lib/auth
 vi.mock('@/lib/auth', () => ({
-  authOptions: {}, 
+  authOptions: {},
 }));
 
-// Mock environment variables
-const mockEnv = {
-  AISERVICE_URL: 'http://mock-aiservice-url.com',
-  // Add other relevant env vars if the route uses them
-};
-
-// Placeholder types for request/response payloads (adapt as needed)
-// Actual types should be imported from '@/types/api/ai-service' if possible
-interface MockContentBlock {
-  block_id: string;
-  type: 'text' | 'image'; // Assuming content blocks can be text or image
-  text_content?: string;
-  // image_url?: string; // If images can be part of content for keyword gen
-}
-
-interface MockGenerateKeywordsRequest {
-  content_blocks: MockContentBlock[];
-  existing_keywords?: string[];
-  // add other properties as per your GenerateKeywordsRequest definition
-}
-
-interface MockGenerateKeywordsResponse {
-  suggested_keywords?: string[];
-  error_message?: string;
-  // add other properties as per your GenerateKeywordsResponse definition
-}
-
-// --- Test Suite ---
+const baseMockEnv = {};
 
 describe('/api/ai/generate-keywords POST', () => {
   let originalFetch: typeof global.fetch;
-  // Store original process.env to restore it
   let originalProcessEnv: NodeJS.ProcessEnv;
 
+  const mockUserId = 'test-user-keyword-gen';
+  const sampleContentBlocks: ContentBlock[] = [
+    { block_id: 'cb1', type: 'text', text_content: 'This is a sample text about AI and machine learning.' },
+    { block_id: 'cb2', type: 'text', text_content: 'It explores various concepts and applications.' },
+  ];
+
   beforeEach(() => {
-    // Save original process.env
     originalProcessEnv = { ...process.env };
+    vi.stubGlobal('process', { env: { ...originalProcessEnv, ...baseMockEnv } });
 
     mockGetServerSession.mockReset();
-    mockHeadersFn.mockClear();
-    mockHeadersFn.mockReturnValue(new Headers({ 'x-test-header': 'test' }));
-    mockCookiesFn.mockClear();
-    mockCookiesFn.mockReturnValue(mockCookiesObject);
+    mockHeadersFn.mockClear().mockReturnValue(new Headers({ 'x-test-header': 'test' }));
+    mockCookiesFn.mockClear().mockReturnValue(mockCookiesObject);
     mockCookiesGetFn.mockClear();
     mockCookiesHasFn.mockClear();
     mockCookiesSetFn.mockClear();
     mockCookiesDeleteFn.mockClear();
-    mockCookiesGetAllFn.mockClear();
+    mockCookiesGetAllFn.mockClear().mockReturnValue([]);
     mockCookiesClearFn.mockClear();
-    mockCookiesIteratorFn.mockClear();
+    (mockCookiesIteratorFn as Mock).mockClear();
 
-    // Stub process.env for this test suite
-    vi.stubGlobal('process', { env: { ...originalProcessEnv, ...mockEnv } });
     originalFetch = global.fetch;
     global.fetch = vi.fn();
+
+    mockGetServerSession.mockResolvedValue({
+      user: { id: mockUserId, email: 'test@example.com' },
+      expires: 'some-future-date',
+    });
+    process.env.AISERVICE_URL = 'http://mock-aiservice-url.com';
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
-    // Restore original process.env
+    vi.unstubAllGlobals();
     process.env = originalProcessEnv;
-    vi.unstubAllGlobals(); 
+  });
+
+  it('should successfully generate keywords and return them', async () => {
+    const mockSuggestedKeywords = ['AI', 'machine learning', 'concepts', 'applications'];
+    const mockPythonResponse = { suggested_keywords: mockSuggestedKeywords };
+
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockPythonResponse,
+      status: 200,
+    } as Response);
+
+    const requestBody: GenerateKeywordsRequest = { content_blocks: sampleContentBlocks };
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const response = await POST(req);
+    const responseBody = (await response.json()) as GenerateKeywordsResponse;
+
+    expect(response.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      `${process.env.AISERVICE_URL}/generate-keywords`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: expect.any(String),
+      })
+    );
+    const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
+    const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
+    expect(fetchBody).toEqual({ content_blocks: sampleContentBlocks }); // user_id is not sent
+
+    expect(responseBody.suggested_keywords).toEqual(mockSuggestedKeywords);
+    expect(responseBody.error_message).toBeUndefined();
+  });
+
+  it('should handle Python service returning empty suggested_keywords on 200 OK', async () => {
+    const mockPythonResponse = { suggested_keywords: [] };
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true, json: async () => mockPythonResponse, status: 200
+    } as Response);
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
+      method: 'POST',
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const response = await POST(req);
+    const responseBody = (await response.json()) as GenerateKeywordsResponse;
+    expect(response.status).toBe(200);
+    expect(responseBody.suggested_keywords).toEqual([]);
+    expect(responseBody.error_message).toBeUndefined();
+  });
+  
+  it('should handle Python service returning null for suggested_keywords on 200 OK', async () => {
+    const mockPythonResponse = { suggested_keywords: null }; // Python might send null
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true, json: async () => mockPythonResponse, status: 200
+    } as Response);
+     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
+      method: 'POST',
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const response = await POST(req);
+    const responseBody = (await response.json()) as GenerateKeywordsResponse;
+    expect(response.status).toBe(200);
+    expect(responseBody.suggested_keywords).toEqual([]); // Route should default to empty array
+    expect(responseBody.error_message).toBeUndefined();
+  });
+  
+  it('should handle Python service returning a response without suggested_keywords field on 200 OK', async () => {
+    const mockPythonResponse = {}; // suggested_keywords field is missing
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true, json: async () => mockPythonResponse, status: 200
+    } as Response);
+     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
+      method: 'POST',
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const response = await POST(req);
+    const responseBody = (await response.json()) as GenerateKeywordsResponse;
+    expect(response.status).toBe(200);
+    expect(responseBody.suggested_keywords).toEqual([]); // Route should default to empty array
+    expect(responseBody.error_message).toBeUndefined();
   });
 
   it('should return 401 if user is not authenticated', async () => {
     mockGetServerSession.mockResolvedValue(null);
-    const requestBody: MockGenerateKeywordsRequest = { content_blocks: [{ block_id: '1', type: 'text', text_content: 'Some text' }] };
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(401);
-    expect(responseBodyJson).toEqual({ error: 'Unauthorized' });
+    expect(responseBody).toEqual({ error: 'Unauthorized' });
   });
 
   it('should return 400 if content_blocks is missing', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
       body: JSON.stringify({}), // Missing content_blocks
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(400);
-    expect(responseBodyJson.error).toContain('content_blocks is required and must be an array');
+    expect(responseBody.error).toBe('Invalid request body: content_blocks is required and must be an array.');
   });
 
   it('should return 400 if content_blocks is not an array', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
       body: JSON.stringify({ content_blocks: 'not-an-array' }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(400);
-    expect(responseBodyJson.error).toContain('content_blocks is required and must be an array');
+    expect(responseBody.error).toBe('Invalid request body: content_blocks is required and must be an array.');
   });
 
-  it('should use fallback AISERVICE_URL if environment variable is not set and call service successfully', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    
-    // Temporarily delete AISERVICE_URL from the mocked process.env for this test
-    const originalMockEnvAiserviceUrl = mockEnv.AISERVICE_URL;
-    const tempEnv = { ...process.env }; // Create a mutable copy
-    delete tempEnv.AISERVICE_URL;
-    vi.stubGlobal('process', { env: tempEnv });
-
-    const mockRequestBody: MockGenerateKeywordsRequest = { content_blocks: [{ block_id: '1', type: 'text', text_content: 'Test content' }] };
-    const mockPythonResponse = { suggested_keywords: ['fallback', 'test', 'keywords'] }; 
-
-    (global.fetch as import('vitest').Mock).mockResolvedValueOnce({
-      ok: true, status: 200, json: async () => mockPythonResponse,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-    } as Response);
-
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+  it('should use fallback AISERVICE_URL if environment variable is not set', async () => {
+    const fallbackAIServiceURL = 'http://localhost:8000';
+    delete process.env.AISERVICE_URL;
+    (global.fetch as Mock).mockResolvedValueOnce({ ok: true, json: async () => ({ suggested_keywords: ['fallback'] }) } as Response);
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify(mockRequestBody),
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    await POST(request);
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    const fetchCallArgs = (global.fetch as import('vitest').Mock).mock.calls[0];
-    expect(fetchCallArgs[0]).toBe('http://localhost:8000/generate-keywords'); 
-
-    // Restore AISERVICE_URL in mockEnv for other tests
-    vi.stubGlobal('process', { env: { ...process.env, AISERVICE_URL: originalMockEnvAiserviceUrl } });
+    await POST(req);
+    expect(global.fetch).toHaveBeenCalledWith(`${fallbackAIServiceURL}/generate-keywords`, expect.any(Object));
   });
 
-  it('should successfully call the AI service and return suggested keywords', async () => {
-    const mockUserId = 'test-user-keywords-123';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody: MockGenerateKeywordsRequest = { content_blocks: [{ block_id: '1', type: 'text', text_content: 'This is a test for keywords.' }], existing_keywords: ['initial'] };
-    const expectedPythonResponse = { suggested_keywords: ['test', 'keywords', 'generation'] }; // Python returns this
-    
-    (global.fetch as import('vitest').Mock).mockResolvedValue({
-      ok: true, status: 200, json: async () => expectedPythonResponse,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-    } as Response);
-
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+  it('should handle Python service error (JSON response from Python)', async () => {
+    const pythonError = { message: 'Python keyword gen failed' };
+    (global.fetch as Mock).mockResolvedValueOnce({ ok: false, status: 500, json: async () => pythonError } as Response);
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(responseBodyJson).toEqual({
-        suggested_keywords: expectedPythonResponse.suggested_keywords,
-        error_message: undefined, 
-    });
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    const fetchCallArgs = (global.fetch as import('vitest').Mock).mock.calls[0];
-    expect(fetchCallArgs[0]).toBe(`${mockEnv.AISERVICE_URL}/generate-keywords`);
-    
-    const fetchOptions = fetchCallArgs[1] as RequestInit;
-    expect(fetchOptions.method).toBe('POST');
-    expect(fetchOptions.headers).toEqual({ 'Content-Type': 'application/json' });
-    
-    const sentPythonPayload = JSON.parse(fetchOptions.body as string);
-    // The route only sends content_blocks and user_id, not existing_keywords to the python service
-    expect(sentPythonPayload).toEqual({
-      content_blocks: requestBody.content_blocks,
-      user_id: mockUserId,
-    });
-  });
-
-  it('should handle errors from the AI service gracefully', async () => {
-    const mockUserId = 'test-user-keywords-error';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody: MockGenerateKeywordsRequest = { content_blocks: [{ block_id: '1', type: 'text', text_content: 'Error content for keywords' }] };
-    const mockPythonError = { message: 'AI service keyword generation failed' }; 
-
-    (global.fetch as import('vitest').Mock).mockResolvedValue({
-      ok: false, status: 500, json: async () => mockPythonError,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-    } as Response);
-
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
-      method: 'POST',
-      body: JSON.stringify(requestBody),
-    });
-
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(500);
-    expect(responseBodyJson).toEqual({
-      error: 'Python aiservice failed to generate keywords.',
-      details: mockPythonError.message,
-    });
+    expect(responseBody.error).toBe('Python aiservice failed to generate keywords.');
+    expect(responseBody.details).toBe(pythonError.message);
   });
 
-  it('should handle network errors when calling the AI service', async () => {
-    const mockUserId = 'test-user-keywords-network-error';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody: MockGenerateKeywordsRequest = { content_blocks: [{ block_id: '1', type: 'text', text_content: 'Some content for keywords' }] };
-    const networkError = new TypeError('fetch failed: Keyword service connection failed'); 
-
-    (global.fetch as import('vitest').Mock).mockRejectedValue(networkError);
-
-    const request = new NextRequest('http://localhost/api/ai/generate-keywords', {
+  it('should handle Python service error (non-JSON response from Python)', async () => {
+    const pythonErrorText = 'Python service unavailable for keyword generation';
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: false, status: 502, text: async () => pythonErrorText, json: async () => { throw new Error('not json'); },
+      headers: new Headers(), redirected: false, type: 'basic', url: 'mockurl',
+      clone: vi.fn(), arrayBuffer: vi.fn(), blob: vi.fn(), formData: vi.fn(), body: null, bodyUsed: false,
+    } as unknown as Response);
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
+    const response = await POST(req);
+    const responseBody = await response.json();
+    expect(response.status).toBe(502);
+    expect(responseBody.error).toBe('Python aiservice failed to generate keywords.');
+    expect(responseBody.details).toBe(pythonErrorText);
+  });
 
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
+  it('should handle network error when fetching from Python service', async () => {
+    (global.fetch as Mock).mockRejectedValueOnce(new TypeError('fetch failed for keywords')); // Message includes 'fetch failed'
+    const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
+      method: 'POST',
+      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(503);
-    expect(responseBodyJson).toEqual({
-      error: 'Failed to connect to Python aiservice.',
-      details: networkError.message,
-    });
+    expect(responseBody.error).toBe('Failed to connect to Python aiservice.');
+    expect(responseBody.details).toBe('fetch failed for keywords');
   });
 }); 

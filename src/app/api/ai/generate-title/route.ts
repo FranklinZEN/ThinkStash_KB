@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
     const pythonServicePayload = {
       content_blocks,
-      user_id: userId, // Pass userId to the Python service
+      // user_id: userId, // Python TitleGenerationRequest does not expect user_id
     };
 
     const response = await fetch(`${AISERVICE_URL}/generate-title`, {
@@ -77,23 +77,50 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const pythonServiceResponse = await response.json();
+    // The Python service for title generation (GeneralPurposeTitleGenerationCrew)
+    // returns a JSON object like: { "suggested_title": "Actual title or error message" }
+    interface PythonTitleServiceResponse {
+      suggested_title: string;
+      // It does not explicitly send a separate error_message field.
+      // Errors are embedded in the suggested_title string.
+    }
 
-    // Assuming the Python service returns a JSON object with a `suggested_title` field
-    // and potentially an `error_message` field, conforming to our GenerateTitleResponse type for success.
-    // If the python service returns just a string for success, we'd adjust here.
+    const pythonServiceResponse =
+      (await response.json()) as PythonTitleServiceResponse;
+
+    let final_suggested_title: string = '';
+    let final_error_message: string | undefined = undefined;
+
+    if (
+      pythonServiceResponse.suggested_title &&
+      pythonServiceResponse.suggested_title.startsWith('Error:')
+    ) {
+      final_error_message = pythonServiceResponse.suggested_title;
+      console.warn(
+        `Python aiservice (generate-title) indicated an error: ${final_error_message}`,
+      );
+    } else if (pythonServiceResponse.suggested_title) {
+      final_suggested_title = pythonServiceResponse.suggested_title;
+    } else {
+      // Should not happen if Python service always returns the suggested_title field
+      final_error_message =
+        'Python service returned an unexpected response format for title generation.';
+      console.error(final_error_message, pythonServiceResponse);
+    }
+
     const result: GenerateTitleResponse = {
-      suggested_title: pythonServiceResponse.suggested_title,
-      error_message: pythonServiceResponse.error_message, // Pass through error from service if any
+      suggested_title: final_suggested_title,
+      error_message: final_error_message,
+      // alternatives: undefined, // Not provided by this crew
     };
 
-    if (result.error_message) {
-      console.warn(
-        'Python aiservice returned an error in the success payload:',
-        result.error_message,
-      );
-      // Decide if this should be a 500 or if the client handles it based on the presence of error_message
-    }
+    // No need for the specific error check here anymore as it's handled above
+    // if (result.error_message) {
+    //   console.warn(
+    //     'Python aiservice returned an error in the success payload:',
+    //     result.error_message,
+    //   );
+    // }
 
     return NextResponse.json(result);
   } catch (error) {
@@ -101,7 +128,8 @@ export async function POST(req: NextRequest) {
     const errorMessage =
       error instanceof Error ? error.message : 'An unknown error occurred';
     // Distinguish between network/fetch errors and other errors
-    if (error instanceof TypeError && error.message.includes('fetch failed')) {
+    if (error instanceof TypeError) {
+      // Catch any TypeError as a potential network/fetch issue
       return NextResponse.json(
         {
           error: 'Failed to connect to Python aiservice.',

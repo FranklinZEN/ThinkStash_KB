@@ -92,7 +92,7 @@ class ParallelOrchestrator(BaseService):
         if not routing_result.is_success() or not routing_result.data:
             error_message = f"Routing failed: {routing_result.error_message}"
             final_status_code = "failure_routing"
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj)
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj, False)
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
@@ -144,7 +144,7 @@ class ParallelOrchestrator(BaseService):
                     final_url = document_metadata_obj.final_url or final_url
                     determined_final_source_type = document_metadata_obj.source_type or determined_final_source_type
                     
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj)
+            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj, False)
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
         
         # Successfully got data from acquisition service
@@ -174,7 +174,7 @@ class ParallelOrchestrator(BaseService):
         if not self.content_structuring_service:
             # This case should ideally not happen if DI is correct and service is mandatory.
             print("ERROR Orchestrator: self.content_structuring_service IS NONE.", file=sys.stderr) # Keep this critical error log
-            output_obj = self._prepare_final_output(orchestrator_input, "failure_system_configuration", page_title, final_content_blocks, processed_images_data_dict, "ContentStructuringService not available", final_url, determined_final_source_type, document_metadata_obj)
+            output_obj = self._prepare_final_output(orchestrator_input, "failure_system_configuration", page_title, final_content_blocks, processed_images_data_dict, "ContentStructuringService not available", final_url, determined_final_source_type, document_metadata_obj, False)
             return ServiceResult.failure(error_message="ContentStructuringService not available", error_details=output_obj.model_dump())
 
         structuring_input = ContentStructuringServiceInput(
@@ -212,6 +212,18 @@ class ParallelOrchestrator(BaseService):
         duration = time.time() - start_time
         print(f"Orchestrator: Job {job_id} completed in {duration:.2f}s with status: {final_status_code}")
 
+        # Calculate is_long_article
+        total_char_count = 0
+        for block in final_content_blocks:
+            if block.type == "text" and block.text_content:
+                total_char_count += len(block.text_content)
+        
+        # User-defined threshold for long article
+        long_article_threshold = 20000  # As per user specification
+        is_long_article_calculated = total_char_count > long_article_threshold
+        print(f"Orchestrator: Job {job_id} total character count: {total_char_count}, is_long_article: {is_long_article_calculated}")
+
+
         output_obj = self._prepare_final_output(
             orchestrator_input, 
             final_status_code, 
@@ -221,7 +233,8 @@ class ParallelOrchestrator(BaseService):
             error_message, 
             final_url, 
             determined_final_source_type,
-            document_metadata_obj # Pass the complete DocumentMetadata object
+            document_metadata_obj, # Pass the complete DocumentMetadata object
+            is_long_article_calculated # Pass the calculated value
         )
         
         if final_status_code == "success" or final_status_code.startswith("partial_success"):
@@ -240,7 +253,8 @@ class ParallelOrchestrator(BaseService):
                               err_msg: Optional[str],
                               final_url_val: Optional[str],
                               actual_source_type: Optional[str],
-                              doc_meta: Optional[DocumentMetadata] # Ensure this is DocumentMetadata
+                              doc_meta: Optional[DocumentMetadata], # Ensure this is DocumentMetadata
+                              is_long_article_calculated: bool
                               ) -> OrchestrationOutput:
         
         # Ensure doc_meta is used if available, otherwise construct a minimal one
@@ -253,6 +267,8 @@ class ParallelOrchestrator(BaseService):
 
         output_user_id = None
         output_document_id = None
+        is_long_article_val = is_long_article_calculated # Use the passed value
+
         if doc_meta:
             output_user_id = doc_meta.user_id
             output_document_id = doc_meta.document_id
@@ -270,7 +286,7 @@ class ParallelOrchestrator(BaseService):
             document_id=output_document_id, # Populate top-level document_id
             processing_level_used=inp.processing_level,
             extracted_title=title,
-            is_long_article=False, # Placeholder: Implement logic if needed
+            is_long_article=is_long_article_val, # Use the passed or default value
             original_content_blocks=blocks,
             processed_images_data=images_data,
             document_metadata=doc_meta, # Pass the full DocumentMetadata object

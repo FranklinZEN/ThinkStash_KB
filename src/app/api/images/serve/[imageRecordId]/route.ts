@@ -4,14 +4,12 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { getBucket } from '@/lib/gcs';
 
-interface RouteContext {
-  params: {
-    imageRecordId: string;
-  };
-}
-
-export async function GET(req: NextRequest, context: RouteContext) {
-  const { imageRecordId } = context.params;
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ imageRecordId: string }> },
+) {
+  const resolvedParams = await context.params;
+  const imageRecordId = resolvedParams.imageRecordId;
   try {
     console.log(`API /images/serve/${imageRecordId} (GET) called`);
 

@@ -2,14 +2,17 @@
  * @vitest-environment node
  */
 /// <reference types="vitest/globals" />
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { POST } from '@/app/api/ai/rewrite-content/route'; // Assuming this is the correct path
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { POST } from '@/app/api/ai/rewrite-content/route';
 import { NextRequest } from 'next/server';
-// import { NextResponse } from 'next/server'; // Will be used by the route, not directly in test usually
+import {
+  RewriteContentRequest,
+  RewriteContentResponse,
+  ContentBlock,
+  DocumentMetadata,
+} from '@/types/api/ai-service';
 
-// --- Reusable Mocks (adapted from reconstruct-and-analyze.test.ts) ---
-
-// Mock next/headers
+// Mocks for next/headers and next-auth (similar to reconstructAndAnalyze.test.ts)
 const mockHeadersInstance = new Headers({ 'x-test-header': 'test' });
 const mockHeadersFn = vi.fn(() => mockHeadersInstance);
 const mockCookiesGetFn = vi.fn();
@@ -36,244 +39,257 @@ vi.mock('next/headers', () => ({
   cookies: mockCookiesFn,
 }));
 
-// Mock next-auth/next
 const { mockGetServerSession } = vi.hoisted(() => {
   return { mockGetServerSession: vi.fn() };
 });
+
 vi.mock('next-auth/next', () => ({
   __esModule: true,
   getServerSession: mockGetServerSession,
 }));
 
-// Mock @/lib/auth
 vi.mock('@/lib/auth', () => ({
-  authOptions: {}, // Provide the expected structure for authOptions
+  authOptions: {},
 }));
 
-// Mock environment variables - adjust if AISERVICE_URL is different or more specific for this route
-const mockEnv = {
-  AISERVICE_URL: 'http://mock-aiservice-url.com', // Assuming same base URL for AI services
-  // Add other relevant env vars if the route uses them
-};
-
-// Placeholder types for request/response payloads (mirror actual types as needed)
-// Actual types should be imported from '@/types/api/ai-service' if possible
-interface MockContentBlock {
-  block_id: string;
-  type: 'text' | 'image';
-  text_content?: string;
-  image_url?: string;
-  // add other properties as per your ContentBlock definition
-}
-
-interface MockDocumentMetadata {
-  original_title?: string;
-  source_url?: string;
-  // add other properties as per your DocumentMetadata definition
-}
-
-// --- Test Suite ---
+const baseMockEnv = {};
 
 describe('/api/ai/rewrite-content POST', () => {
   let originalFetch: typeof global.fetch;
+  let originalProcessEnv: NodeJS.ProcessEnv;
+
+  const mockUserId = 'test-user-session-id';
+  const sampleContentBlocks: ContentBlock[] = [
+    { block_id: 'cb1', type: 'text', text_content: 'This is the first block to rewrite.' },
+    { block_id: 'cb2', type: 'text', text_content: 'This is the second block.' },
+  ];
+  const sampleDocumentMetadata: DocumentMetadata = {
+    original_title: 'Test Document',
+    source_url: 'https://example.com/original-doc',
+  };
 
   beforeEach(() => {
+    originalProcessEnv = { ...process.env };
+    vi.stubGlobal('process', { env: { ...originalProcessEnv, ...baseMockEnv } });
+
     mockGetServerSession.mockReset();
-    mockHeadersFn.mockClear();
-    mockHeadersFn.mockReturnValue(new Headers({ 'x-test-header': 'test' }));
-    mockCookiesFn.mockClear();
-    mockCookiesFn.mockReturnValue(mockCookiesObject);
+    mockHeadersFn.mockClear().mockReturnValue(new Headers({ 'x-test-header': 'test' }));
+    mockCookiesFn.mockClear().mockReturnValue(mockCookiesObject);
     mockCookiesGetFn.mockClear();
     mockCookiesHasFn.mockClear();
     mockCookiesSetFn.mockClear();
     mockCookiesDeleteFn.mockClear();
-    mockCookiesGetAllFn.mockClear();
+    mockCookiesGetAllFn.mockClear().mockReturnValue([]);
     mockCookiesClearFn.mockClear();
-    mockCookiesIteratorFn.mockClear();
+    (mockCookiesIteratorFn as Mock).mockClear();
 
-    vi.stubGlobal('process', { env: { ...process.env, ...mockEnv } });
     originalFetch = global.fetch;
     global.fetch = vi.fn();
+
+    mockGetServerSession.mockResolvedValue({
+      user: { id: mockUserId, email: 'test@example.com' },
+      expires: 'some-future-date',
+    });
+    process.env.AISERVICE_URL = 'http://mock-aiservice-url.com';
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
     vi.unstubAllGlobals();
+    process.env = originalProcessEnv;
+  });
+
+  it('should successfully rewrite content and return the mapped response', async () => {
+    const mockPythonResponsePayload: RewriteContentResponse = {
+      rewritten_document_id: 'rewritten-doc-123',
+      ai_rewritten_content_blocks: [
+        { block_id: 'rcb1', type: 'text', text_content: 'Rewritten first block.' },
+      ],
+      status_code: 'success',
+      processing_time_ms: 1500,
+      error_message: null,
+    };
+
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockPythonResponsePayload, // Python service returns fields matching RewriteContentResponse
+      status: 200,
+    } as Response);
+
+    const requestBody: RewriteContentRequest = {
+      content_blocks_to_rewrite: sampleContentBlocks,
+      document_metadata: sampleDocumentMetadata,
+      // user_id can be in request, but route prioritizes session user_id
+    };
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const response = await POST(req);
+    const responseBody = (await response.json()) as RewriteContentResponse;
+
+    expect(response.status).toBe(200);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      `${process.env.AISERVICE_URL}/rewrite-content`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: expect.any(String),
+      })
+    );
+
+    const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
+    const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
+    expect(fetchBody).toEqual({
+      content_blocks_to_rewrite: sampleContentBlocks,
+      document_metadata: sampleDocumentMetadata,
+      user_id: mockUserId, // Should use session user ID
+    });
+
+    expect(responseBody).toEqual(mockPythonResponsePayload);
   });
 
   it('should return 401 if user is not authenticated', async () => {
     mockGetServerSession.mockResolvedValue(null);
-    const requestBody = {
-      content_blocks_to_rewrite: [{ block_id: '1', type: 'text', text_content: 'Hello' }] as MockContentBlock[],
-    };
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks_to_rewrite: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(401);
-    expect(responseBodyJson).toEqual({ error: 'Unauthorized' });
+    expect(responseBody).toEqual({ error: 'Unauthorized' });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('should return 400 if content_blocks_to_rewrite is missing', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
-      body: JSON.stringify({ document_metadata: {} }), // Missing content_blocks_to_rewrite
+      body: JSON.stringify({ document_metadata: sampleDocumentMetadata }), // Missing content_blocks
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(400);
-    expect(responseBodyJson.error).toContain('content_blocks_to_rewrite is required');
+    expect(responseBody.error).toContain('content_blocks_to_rewrite is required');
   });
 
   it('should return 400 if content_blocks_to_rewrite is not an array', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
       body: JSON.stringify({ content_blocks_to_rewrite: 'not-an-array' }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(400);
-    expect(responseBodyJson.error).toContain('content_blocks_to_rewrite is required and must be an array');
+    expect(responseBody.error).toBe('Invalid request body: content_blocks_to_rewrite is required and must be an array.');
   });
-
-  // Test for AISERVICE_URL configuration (similar to reconstruct-and-analyze)
-  // Given the route's fallback, this tests if the fallback is used when env var is deleted.
-  it('should use fallback AISERVICE_URL if environment variable is not set and call service', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'test-user-id' } });
-    const originalEnvAiserviceUrl = process.env.AISERVICE_URL;
-    delete process.env.AISERVICE_URL; // Delete the env var
-
-    const mockRequestBody = {
-      content_blocks_to_rewrite: [{ block_id: '1', type: 'text', text_content: 'Test content' }] as MockContentBlock[],
-      document_metadata: { original_title: 'Test Doc' } as MockDocumentMetadata,
-    };
-    const mockPythonResponse = { 
-      ai_rewritten_content_blocks: [{ block_id: 'rewritten-1', type: 'text', text_content: 'Rewritten hello' }] as MockContentBlock[],
-      usage_metadata: { tokens: 100, cost: 0.01 },
-    }; 
-
-    (global.fetch as import('vitest').Mock).mockResolvedValueOnce({
-      ok: true, status: 200, json: async () => mockPythonResponse,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
+  
+  it('should use fallback AISERVICE_URL and succeed if process.env.AISERVICE_URL is undefined', async () => {
+    const fallbackAIServiceURL = 'http://localhost:8000'; // Default in route.ts
+    delete process.env.AISERVICE_URL;
+    const mockPythonResponse = { ai_rewritten_content_blocks: [] }; // Minimal success
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true, status: 200, json: async () => mockPythonResponse
     } as Response);
 
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
-      body: JSON.stringify(mockRequestBody),
+      body: JSON.stringify({ content_blocks_to_rewrite: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-    await POST(request); // Call the handler
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    const fetchCallArgs = (global.fetch as import('vitest').Mock).mock.calls[0];
-    // Expect it to be called with the fallback URL from the route
-    expect(fetchCallArgs[0]).toBe(`http://localhost:8000/rewrite-content`); 
-
-    process.env.AISERVICE_URL = originalEnvAiserviceUrl; // Restore
+    await POST(req);
+    expect(global.fetch).toHaveBeenCalledWith(
+      `${fallbackAIServiceURL}/rewrite-content`,
+      expect.any(Object)
+    );
   });
 
-  it('should successfully call the AI service and return rewritten content', async () => {
-    const mockUserId = 'test-user-rewrite-123';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody = {
-      content_blocks_to_rewrite: [{ block_id: '1', type: 'text', text_content: 'Hello world' }] as MockContentBlock[],
-      document_metadata: { original_title: 'Test Title' } as MockDocumentMetadata,
-      // user_id: mockUserId, // Can be sent, but route prioritizes session user_id
-    };
-    const expectedPythonResponse = { 
-      ai_rewritten_content_blocks: [{ block_id: 'rewritten-1', type: 'text', text_content: 'Rewritten hello world' }] as MockContentBlock[],
-      usage_metadata: { tokens: 120, cost: 0.012 },
-      // Potentially other fields like error_message: null
-    };
-
-    (global.fetch as import('vitest').Mock).mockResolvedValue({
-      ok: true, status: 200, json: async () => expectedPythonResponse,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
+  it('should handle Python service error (e.g., 500) with JSON response', async () => {
+    const pythonErrorResponse = { message: 'Python rewrite failed badly' };
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: false,
+      json: async () => pythonErrorResponse,
+      status: 500,
     } as Response);
-
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks_to_rewrite: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(responseBodyJson).toEqual(expectedPythonResponse); // Route directly returns Python response
-
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    const fetchCallArgs = (global.fetch as import('vitest').Mock).mock.calls[0];
-    expect(fetchCallArgs[0]).toBe(`${mockEnv.AISERVICE_URL}/rewrite-content`);
-    
-    const fetchOptions = fetchCallArgs[1] as RequestInit;
-    expect(fetchOptions.method).toBe('POST');
-    expect(fetchOptions.headers).toEqual({ 'Content-Type': 'application/json' });
-    
-    const sentPythonPayload = JSON.parse(fetchOptions.body as string);
-    expect(sentPythonPayload).toEqual({
-      content_blocks_to_rewrite: requestBody.content_blocks_to_rewrite,
-      document_metadata: requestBody.document_metadata,
-      user_id: mockUserId, // Route ensures session user_id is used
-    });
-  });
-
-  it('should handle errors from the AI service gracefully (e.g., AI service returns 500)', async () => {
-    const mockUserId = 'test-user-rewrite-error';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody = {
-      content_blocks_to_rewrite: [{ block_id: '1', type: 'text', text_content: 'Content causing error' }] as MockContentBlock[],
-    };
-    const mockPythonError = { message: 'AI service internal rewrite error' }; 
-
-    (global.fetch as import('vitest').Mock).mockResolvedValue({
-      ok: false, status: 500, json: async () => mockPythonError,
-      headers: new Headers({ 'Content-Type': 'application/json' }),
-    } as Response);
-
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
-      method: 'POST',
-      body: JSON.stringify(requestBody),
-    });
-
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(500);
-    expect(responseBodyJson).toEqual({
-      error: 'Python aiservice failed to rewrite content.',
-      details: mockPythonError.message,
-    });
+    expect(responseBody.error).toBe('Python aiservice failed to rewrite content.');
+    expect(responseBody.details).toBe(pythonErrorResponse.message);
   });
 
-  it('should handle network errors when calling the AI service (fetch throws an error)', async () => {
-    const mockUserId = 'test-user-rewrite-network-error';
-    mockGetServerSession.mockResolvedValue({ user: { id: mockUserId } });
-
-    const requestBody = {
-      content_blocks_to_rewrite: [{ block_id: '1', type: 'text', text_content: 'Some content' }] as MockContentBlock[],
-    };
-    const networkError = new TypeError('fetch failed: Rewrite service connection failed'); 
-
-    (global.fetch as import('vitest').Mock).mockRejectedValue(networkError);
-
-    const request = new NextRequest('http://localhost/api/ai/rewrite-content', {
+  it('should handle Python service error with non-JSON response (e.g., 502)', async () => {
+    const pythonErrorText = 'Gateway Timeout From Python';
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: false,
+      json: async () => { throw new Error("Not JSON"); },
+      text: async () => pythonErrorText,
+      status: 502,
+      headers: new Headers(), redirected: false, type: 'basic', url: 'mockurl',
+      clone: vi.fn(), arrayBuffer: vi.fn(), blob: vi.fn(), formData: vi.fn(), body: null, bodyUsed: false,
+    } as unknown as Response);
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ content_blocks_to_rewrite: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
     });
+    const response = await POST(req);
+    const responseBody = await response.json();
+    expect(response.status).toBe(502);
+    expect(responseBody.error).toBe('Python aiservice failed to rewrite content.');
+    expect(responseBody.details).toBe(pythonErrorText);
+  });
 
-    const response = await POST(request);
-    const responseBodyJson = await response.json();
-
+  it('should handle network error when fetching from Python service (fetch rejected)', async () => {
+    (global.fetch as Mock).mockRejectedValueOnce(new TypeError('Network fetch failed'));
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
+      method: 'POST',
+      body: JSON.stringify({ content_blocks_to_rewrite: sampleContentBlocks }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const response = await POST(req);
+    const responseBody = await response.json();
     expect(response.status).toBe(503);
-    expect(responseBodyJson).toEqual({
-      error: 'Failed to connect to Python aiservice.',
-      details: networkError.message,
+    expect(responseBody.error).toBe('Failed to connect to Python aiservice.');
+    expect(responseBody.details).toBe('Network fetch failed');
+  });
+
+  it('should prioritize session user_id even if request body contains a different user_id', async () => {
+    const requestBodyWithDifferentUserId: RewriteContentRequest = {
+      content_blocks_to_rewrite: sampleContentBlocks,
+      user_id: 'user-id-from-request-body', // Different from session mockUserId
+    };
+    const mockPythonResponsePayload = { ai_rewritten_content_blocks: [] }; // Minimal success
+
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockPythonResponsePayload,
+      status: 200,
+    } as Response);
+
+    const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
+      method: 'POST',
+      body: JSON.stringify(requestBodyWithDifferentUserId),
+      headers: { 'Content-Type': 'application/json' },
     });
+
+    await POST(req);
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
+    const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
+    expect(fetchBody.user_id).toBe(mockUserId); // Assert that session user_id was used
+    expect(fetchBody.user_id).not.toBe('user-id-from-request-body');
   });
 }); 

@@ -99,21 +99,38 @@ export async function POST(req: NextRequest) {
     const pythonServiceResponse =
       (await response.json()) as OrchestrationOutput;
 
-    // Map the Python OrchestrationOutput to the slightly different structure if needed,
-    // or ensure OrchestrationOutput in ai-service-types.ts matches exactly what Python returns
-    // and what this Next.js API should return.
-    // For now, assuming OrchestrationOutput type is suitable directly.
-    // The V2.6 plan mentioned `reconstruction_id` as a top-level field in Next.js response.
-    // OrchestrationOutput has `document_id` which should be our job_id.
+    // The V2.6 plan for this Next.js API endpoint specifies these output fields:
+    // reconstruction_id, status_code, source_identifier, document_metadata (original),
+    // is_long_article, original_content_blocks, error_message.
 
+    // Map the Python OrchestrationOutput to the defined Next.js API response structure.
     const result = {
-      ...pythonServiceResponse,
       reconstruction_id: pythonServiceResponse.document_id || job_id, // Ensure reconstruction_id is present
+      status_code: pythonServiceResponse.status_code,
+      source_identifier:
+        pythonServiceResponse.source_identifier || source_identifier, // Fallback to original input if not in response
+      document_metadata: pythonServiceResponse.document_metadata, // This is the OrchestrationOutput.document_metadata
+      is_long_article: pythonServiceResponse.is_long_article, // Will be based on Python's (currently placeholder) logic
+      original_content_blocks: pythonServiceResponse.original_content_blocks,
+      error_message: pythonServiceResponse.error_message || null, // Ensure it's null if undefined/empty
     };
 
-    if (pythonServiceResponse.error_message) {
+    if (
+      pythonServiceResponse.error_message &&
+      pythonServiceResponse.status_code.startsWith('success')
+    ) {
+      // Or a more specific success code check
       console.warn(
-        `Python aiservice (reconstruct) returned an error in the success payload for job ${job_id}:`,
+        `Python aiservice (reconstruct) returned an error message in a success payload for job ${job_id}:`,
+        pythonServiceResponse.error_message,
+      );
+    } else if (
+      !pythonServiceResponse.status_code.startsWith('success') &&
+      pythonServiceResponse.error_message
+    ) {
+      console.info(
+        // This is an expected error message given the status code
+        `Python aiservice (reconstruct) failed for job ${job_id} with status ${pythonServiceResponse.status_code}:`,
         pythonServiceResponse.error_message,
       );
     }
