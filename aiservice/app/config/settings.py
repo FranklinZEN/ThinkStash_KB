@@ -11,6 +11,30 @@ _SETTINGS_DIR = os.path.dirname(os.path.abspath(__file__))
 # So, go up two directories (config -> app -> aiservice) then find .env
 _ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(_SETTINGS_DIR)), ".env")
 
+class WebServiceSpecificSettings(BaseSettings):
+    # Copied from MockWebServiceSettings in web_service.py and defaults from WebService constructor
+    default_user_agent: str = Field(default="ThinkStashAI/1.0", env="WEB_DEFAULT_USER_AGENT")
+    trafilatura_include_comments: bool = Field(default=False, env="WEB_TRAFILATURA_INCLUDE_COMMENTS")
+    trafilatura_include_tables: bool = Field(default=True, env="WEB_TRAFILATURA_INCLUDE_TABLES")
+    trafilatura_favor_recall: bool = Field(default=True, env="WEB_TRAFILATURA_FAVOR_RECALL")
+    trafilatura_deduplicate: bool = Field(default=True, env="WEB_TRAFILATURA_DEDUPLICATE")
+    
+    # Playwright specific settings
+    use_playwright_for_image_filtering: bool = Field(default=True, env="WEB_USE_PLAYWRIGHT_FOR_IMAGE_FILTERING", description="Enable Playwright for advanced image filtering by rendered dimensions.")
+    min_image_width: int = Field(default=30, env="WEB_MIN_IMAGE_WIDTH", description="Minimum rendered width for an image to be included (if Playwright is enabled).")
+    min_image_height: int = Field(default=30, env="WEB_MIN_IMAGE_HEIGHT", description="Minimum rendered height for an image to be included (if Playwright is enabled).")
+    min_image_area: int = Field(default=900, env="WEB_MIN_IMAGE_AREA", description="Minimum rendered area (width*height) for an image to be included (if Playwright is enabled).") # 30x30
+    playwright_page_load_timeout_ms: int = Field(default=30000, env="WEB_PLAYWRIGHT_PAGE_LOAD_TIMEOUT_MS", description="Timeout for Playwright page.goto() in milliseconds.")
+    playwright_network_idle_timeout_ms: int = Field(default=10000, env="WEB_PLAYWRIGHT_NETWORK_IDLE_TIMEOUT_MS", description="Timeout for Playwright page.wait_for_load_state('networkidle') in milliseconds.")
+
+    model_config = SettingsConfigDict(
+        env_prefix='AISERVICE_', # Optional: prefix for environment variables to avoid collisions
+        env_file=_ENV_FILE_PATH,
+        env_file_encoding='utf-8',
+        extra='ignore',
+        case_sensitive=False
+    )
+
 class Settings(BaseSettings):
     # Application settings
     app_name: str = "ThinkStash AI Service"
@@ -64,6 +88,7 @@ class Settings(BaseSettings):
 
     # Image Processing Service Specific Caching & Filters
     image_processing_cache_size: int = Field(default=256, env="IMAGE_PROCESSING_CACHE_SIZE", description="Max size for LRU cache in ImageProcessingService.")
+    gcs_concurrent_upload_limit: int = Field(default=5, env="GCS_CONCURRENT_UPLOAD_LIMIT", description="Limit for concurrent GCS uploads in ImageProcessingService.")
     img_filter_min_dimension: int = Field(default=50, env="IMG_FILTER_MIN_DIMENSION", description="Min width/height for images to be kept (legacy, prefer specific width/height).")
     img_filter_min_width_px: int = Field(default=75, env="IMG_FILTER_MIN_WIDTH_PX", description="Minimum width in pixels for an image to be processed.")
     img_filter_min_height_px: int = Field(default=75, env="IMG_FILTER_MIN_HEIGHT_PX", description="Minimum height in pixels for an image to be processed.")
@@ -88,6 +113,9 @@ class Settings(BaseSettings):
     # Performance & Timeouts
     default_request_timeout_seconds: int = Field(default=30, env="DEFAULT_REQUEST_TIMEOUT_SECONDS", description="Default timeout for external HTTP requests.")
     max_concurrent_tasks: int = Field(default=10, env="MAX_CONCURRENT_TASKS", description="Max concurrent tasks for parallel operations.")
+
+    # Nested WebServiceSpecificSettings
+    web_service: WebServiceSpecificSettings = Field(default_factory=WebServiceSpecificSettings)
 
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE_PATH, # Use the explicitly determined path

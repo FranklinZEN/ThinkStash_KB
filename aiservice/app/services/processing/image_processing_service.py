@@ -45,6 +45,9 @@ class ImageProcessingService(BaseService):
         self.settings = settings # Store typed settings
         self.logger = logging.getLogger(__name__) # Initialize logger
         
+        # Default semaphore limit, to be overridden by settings if available
+        gcs_semaphore_limit = 5 
+
         if self.settings:
             if hasattr(self.settings, 'debug_mode') and self.settings.debug_mode:
                 self.logger.setLevel(logging.DEBUG)
@@ -63,6 +66,11 @@ class ImageProcessingService(BaseService):
             self.IRRELEVANT_FILENAME_URL_SEGMENTS = self.settings.img_filter_irrelevant_filename_url_segments
             processing_cache_maxsize = self.settings.image_processing_cache_size
             self.default_request_timeout_seconds = self.settings.default_request_timeout_seconds
+            # Use the new specific setting for GCS upload limit
+            if hasattr(self.settings, 'gcs_concurrent_upload_limit') and self.settings.gcs_concurrent_upload_limit is not None:
+                gcs_semaphore_limit = self.settings.gcs_concurrent_upload_limit
+            else:
+                self.logger.info(f"ImageProcessingService: gcs_concurrent_upload_limit not found in settings or is None, using default: {gcs_semaphore_limit}")
         else:
             # Fallbacks if settings object is not provided (should ideally not happen in production)
             self.logger.setLevel(logging.INFO) # Default if no settings
@@ -92,6 +100,10 @@ class ImageProcessingService(BaseService):
         # Initialize LRU Cache
         self.processing_cache = LRUCache(maxsize=processing_cache_maxsize)
 
+        # Initialize Semaphore for GCS uploads
+        self.gcs_upload_semaphore = asyncio.Semaphore(gcs_semaphore_limit)
+        self.logger.info(f"ImageProcessingService: GCS upload semaphore initialized with limit: {gcs_semaphore_limit}")
+
     def _sanitize_for_gcs_path(self, text: Optional[str], max_length: int = 100) -> str:
         if not text: return f"untitled_{uuid.uuid4().hex[:6]}"
         text = str(text)
@@ -118,19 +130,25 @@ class ImageProcessingService(BaseService):
         
         loop = asyncio.get_event_loop()
         try:
-            bucket = self.gcs_client.bucket(self.gcs_bucket_name)
-            blob = bucket.blob(gcs_blob_name)
-            
-            image_file_obj = io.BytesIO(image_bytes)
-            
-            upload_func = functools.partial(blob.upload_from_file, content_type=(mime_type or 'application/octet-stream'))
-            await loop.run_in_executor(None, upload_func, image_file_obj)
-            gs_url = f"gs://{self.gcs_bucket_name}/{gcs_blob_name}"
-            self.logger.info(f"ImageProcessingService: Successfully uploaded to {gs_url}")
-            return {"gcs_url": gs_url, "error": None}
+            # Acquire semaphore before GCS operation
+            async with self.gcs_upload_semaphore:
+                self.logger.debug(f"ImageProcessingService: Semaphore acquired for GCS upload: {gcs_blob_name}")
+                bucket = self.gcs_client.bucket(self.gcs_bucket_name)
+                blob = bucket.blob(gcs_blob_name)
+                
+                image_file_obj = io.BytesIO(image_bytes)
+                
+                upload_func = functools.partial(blob.upload_from_file, content_type=(mime_type or 'application/octet-stream'))
+                await loop.run_in_executor(None, upload_func, image_file_obj)
+                gs_url = f"gs://{self.gcs_bucket_name}/{gcs_blob_name}"
+                self.logger.info(f"ImageProcessingService: Successfully uploaded to {gs_url}")
+                return {"gcs_url": gs_url, "error": None}
         except Exception as e:
             self.logger.error(f"ImageProcessingService: ERROR - GCS Upload failed for {gcs_blob_name}: {str(e)}", exc_info=True)
             return {"gcs_url": None, "error": f"GCS upload failed: {str(e)}"}
+        finally:
+            # Semaphore is released automatically by 'async with'
+            self.logger.debug(f"ImageProcessingService: Semaphore released for GCS upload (or attempted upload): {gcs_blob_name}")
 
     async def _process_single_image(self, raw_image: RawImageInput) -> Optional[EnrichedImageMetadata]:
         current_image_bytes: Optional[bytes] = raw_image.image_bytes # Moved higher to be available for initial cache key logic if needed, though hash is after download

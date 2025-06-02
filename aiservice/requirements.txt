@@ -1,17 +1,65 @@
-# Core AI/Agent Libraries (let pip find latest compatible)
+# Core AI/Agent Libraries
 crewai
 crewai-tools
 langchain
-langchain_core # underscore used by pip, though import is often langchain.core
-langchain_community # underscore used by pip, though import is often langchain.community
-langchain_openai # underscore used by pip, though import is often langchain.openai
+langchain_core
+langchain_community
+langchain_openai # For OpenAI models, or Gemini via OpenAI compatibility layer
 
-# FastAPI and Pydantic (pinned as they are generally stable)
+# FastAPI and Pydantic
 fastapi
 pydantic[email]>=2.0,<3.0
+pydantic-settings
+uvicorn[standard]
+
+# Web Scraping, Parsing, and Content Extraction
+requests==2.32.3
+aiohttp
+beautifulsoup4==4.13.4 # Also listed below, ensure one version
+lxml[html_clean]==5.4.0 # Also listed below, ensure one version
+trafilatura==2.0.0 # Also listed below, ensure one version
+newspaper3k==0.2.8
+python-docx==1.1.2
+PyMuPDF==1.26.0 # Fitz, also listed below
+mistune==3.1.3
+markdown-it-py # Also listed below
+Markdown
+pdfminer.six
+
+# Playwright for advanced web interaction
+playwright
+
+# HTTP client (general purpose)
+httpx
+
+# Image Processing
+Pillow==11.2.1
+pdf2image==1.17.0 # For converting PDF pages to images
+
+# Google Cloud Services
+google-cloud-storage
+google-auth
+
+# Utilities
+python-dotenv>=1.0.0 # For .env file support
+cachetools # For caching
+python-magic==0.4.27 # For identifying file types
+ftfy==6.3.1 # Optional, for text fixing
+
+# Testing
+requests-mock==1.12.1
+pytest==8.3.5
+pytest-asyncio
+pytest-cov
+
+# Linting, Formatting, Type Checking
+mypy
+ruff
+
+# Ensure no major duplications from the previous version.
+# Keeping specific versions where they were pinned, otherwise letting pip resolve.
 
 # Utility and Parsing Libraries (pinned where specific versions are known good or important)
-requests==2.32.3
 aiohttp
 beautifulsoup4==4.13.4
 newspaper3k==0.2.8
@@ -74,4 +122,55 @@ httpx
 
 # Langchain (core, and specific integrations)
 langchain-openai # For OpenAI models, or Gemini via OpenAI compatibility layer
-# langchain-google-genai # For direct Gemini integration - switching back to OpenAI compatibility layer 
+# langchain-google-genai # For direct Gemini integration - switching back to OpenAI compatibility layer
+
+# Core FastAPI and Uvicorn
+uvicorn[standard]
+
+# Pydantic for data validation
+pydantic-settings
+
+# Web Scraping and Parsing
+trafilatura
+beautifulsoup4
+markdown-it-py
+python-docx
+lxml # Required by trafilatura and bs4, good to have explicit
+
+# PDF Processing
+PyMuPDF
+
+# Image Processing
+Pillow
+# google-cloud-vision # Optional, if direct Vision API features are added back here
+
+# Google Cloud Services
+google-cloud-storage
+google-auth
+
+# AI Agent Framework (Example, adjust as per actual usage)
+# crewai 
+# crewai-tools
+
+# Utilities
+python-dotenv # For .env file support
+cachetools # For caching
+
+# Logging
+# structlog # Example, if structured logging is adopted
+
+# Optional for specific database connections if not using an ORM that handles it
+# psycopg2-binary # For PostgreSQL
+
+# For development and testing
+pytest-asyncio
+pytest-cov
+mypy
+ruff # Linter and formatter
+# pre-commit # For git hooks
+
+# Other specific dependencies
+# Add any other specific libraries your project uses
+
+# Added Playwright for advanced web interaction
+playwright 

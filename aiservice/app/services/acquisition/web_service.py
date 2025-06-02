@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import time
 import aiohttp
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Tag, Comment
 import trafilatura
 from urllib.parse import urljoin, urlparse
 import re
@@ -14,6 +14,9 @@ import json
 from datetime import datetime
 import tempfile # Added for temporary file handling
 import logging # Added logging
+import httpx
+from trafilatura.settings import use_config as use_trafilatura_config
+from playwright.async_api import async_playwright # Added Playwright
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -21,6 +24,7 @@ from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
 # Import PDFAcquisitionService and its input model
 from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput
+from aiservice.app.config.settings import Settings # CORRECTED IMPORT
 
 # --- Pydantic Models for WebAcquisitionService ---
 
@@ -120,46 +124,55 @@ class WebAcquisitionService(BaseService):
 
     # Define selectors for main content identification
     MAIN_CONTENT_SELECTORS: List[str] = [
-        "article",
-        "main",
-        "[role='main']",
-        "#main",
-        "#content",
-        ".content",
-        "#main-content", # Common ID
-        ".main-content", # Common class
-        "#primary", # Common ID in WordPress
-        ".post", # Common class for blog posts
-        ".entry", # Common class for entries
-        ".page-content", # Common class
-        "#article", ".article", # Common for articles
+        "article", "main", "[role='main']", # Standard tags
+        "#main", "#content", "#body", # Common IDs
+        ".main-content", ".post", ".article", # Common classes
         "#article-body", ".article-body",
         ".post-content", ".entry-content",
         ".blog-post", # Common class
         ".text" # Sometimes used for main text container
     ]
 
-    def __init__(self, settings: Optional[Any] = None):
+    def __init__(self, settings: Optional[Settings] = None):
         super().__init__(settings)
-        self.settings_instance = settings # Store the settings instance if provided
-        self.logger = logging.getLogger(__name__) # Initialize logger
-        # TEMPORARILY FORCE DEBUG LEVEL FOR THIS LOGGER
+        self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
-        self.logger.warning("WebService logger is TEMPORARILY FORCED to DEBUG level.") # Add a warning for this override
+        self.logger.warning("WebService logger is TEMPORARILY FORCED to DEBUG level.")
         
-        # if self.settings_instance and hasattr(self.settings_instance, 'debug_mode') and self.settings_instance.debug_mode:
-        #     self.logger.setLevel(logging.DEBUG)
-        # else:
-        #     self.logger.setLevel(logging.INFO)
-        # In-memory cache for HTML content: {url: (html_string, fetch_timestamp)}
-        self.html_cache: Dict[str, Tuple[str, float]] = {}
-        # Cache Time-To-Live in seconds
-        if self.settings_instance and hasattr(self.settings_instance, 'web_html_cache_ttl_seconds'):
-            self.cache_ttl_seconds: int = self.settings_instance.web_html_cache_ttl_seconds
+        if settings and settings.web_service:
+            self.service_settings = settings.web_service
         else:
-            self.cache_ttl_seconds: int = 3600 # Fallback if settings not provided or field missing
+            from aiservice.app.config.settings import WebServiceSpecificSettings
+            self.logger.error("Main 'Settings' object or 'settings.web_service' was not provided to WebAcquisitionService. Using direct default WebServiceSpecificSettings.")
+            self.service_settings = WebServiceSpecificSettings()
+
+        # Define common HTML tags
+        self.TEXT_CONTAINER_TAGS = {'p', 'div', 'span', 'td', 'th', 'li', 'caption', 'article', 'section', 'main', 'blockquote', 'details', 'summary', 'aside'}
+        self.HEADING_TAGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
+        self.LIST_TAGS = {'ul', 'ol'}
+        self.TABLE_TAGS = {'table', 'tbody', 'thead', 'tfoot', 'tr'}
+        self.CODE_TAGS = {'pre', 'code'}
+        self.FIGURE_TAGS = {'figure', 'figcaption'}
+        self.BOILERPLATE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "form", "iframe", "noscript", "svg"}
+
+        self.html_cache: Dict[str, Tuple[str, float]] = {}
+        if settings and hasattr(settings, 'web_html_cache_ttl_seconds'):
+             self.cache_ttl_seconds: int = settings.web_html_cache_ttl_seconds
+        elif hasattr(self.service_settings, 'web_html_cache_ttl_seconds'):
+             self.cache_ttl_seconds: int = self.service_settings.web_html_cache_ttl_seconds
+        else:
+            self.cache_ttl_seconds: int = 3600
+
+        self.trafilatura_config = use_trafilatura_config()
+        self.trafilatura_config.set("DEFAULT", "EXTRACTION_TIMEOUT", str(settings.default_request_timeout_seconds // 2 if settings and settings.default_request_timeout_seconds > 4 else 2))
         
-        # For now, creating session per call for simplicity.
+        self.headers = {
+            "User-Agent": self.service_settings.default_user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5", # Optional: be a good internet citizen
+            "Accept-Encoding": "gzip, deflate, br" # Optional: httpx handles this, but doesn't hurt to specify
+        }
+        self.httpx_timeout = httpx.Timeout(settings.default_request_timeout_seconds if settings else 30)
 
     def _get_domain(self, url_str: str) -> Optional[str]:
         try:
@@ -175,1028 +188,658 @@ class WebAcquisitionService(BaseService):
                 return True
         return False
 
-    async def _extract_images_from_html(self, 
-                                        html_content_str: str, 
-                                        base_url: str, 
-                                        job_id: Optional[str],
-                                        original_source_identifier_for_gcs_path: str,
-                                        source_type_for_gcs_path: str
-                                        ) -> Tuple[Dict[str, RawImageInput], List[RawImageInput]]:
+    async def _get_playwright_image_details(self, url: str, base_url_for_resolution: str) -> Dict[str, Dict[str, Any]]:
         """
-        Extracts image URLs and metadata from HTML content.
-        Returns a map of {absolute_url: RawImageInput} and a list of all RawImageInput objects.
-        Does NOT download image bytes.
+        Uses Playwright to load a page and extract details for all images found.
+        Returns a map of absolute image URLs to their details (dimensions, alt, visibility).
         """
-        self.logger.debug(f"_extract_images_from_html: Called for base_url='{base_url}', job_id='{job_id}'. HTML length: {len(html_content_str) if html_content_str else 'None'}")
-        
-        image_details_map: Dict[str, RawImageInput] = {} # NEW: Map to store details
-        all_raw_images_list: List[RawImageInput] = [] # NEW: List to store all found RawImageInput
-
-        processed_urls: Set[str] = set()
-        
-        if not html_content_str:
-            self.logger.warning("_extract_images_from_html: html_content_str is None or empty. Returning empty map and list.")
-            return image_details_map, all_raw_images_list
-
+        image_details_map: Dict[str, Dict[str, Any]] = {}
+        self.logger.debug(f"Playwright: Starting to fetch image details for URL: {url}")
         try:
-            soup = BeautifulSoup(html_content_str, 'lxml')
-        except Exception as e_soup_init:
-            self.logger.error(f"_extract_images_from_html: BeautifulSoup initialization failed: {e_soup_init}", exc_info=True)
-            return image_details_map, all_raw_images_list
-            
-        image_counter = 0 
-        doc_id_prefix = hashlib.md5(original_source_identifier_for_gcs_path.encode()).hexdigest()[:8]
-
-        MIN_DIMENSION = 50
-        MIN_AREA = 5000
-        MAX_ASPECT_RATIO_DEVIATION = 4.0 
-
-        IRRELEVANT_ALT_STRINGS_EXACT = [
-            "logo", "avatar", "icon", "profile", "banner", "ad", "advertisement", 
-            "pinterest", "pinterest engineering", "pinterest engineering blog", "walmart global tech blog",
-            "user", "author", "default", "placeholder", "loading", "spinner", "spacer", "pixel"
-        ]
-        IRRELEVANT_SUBSTRINGS_IN_ALT = [
-            "logo", "avatar", "icon", "profile", "banner", "advert", "promo", "social", "button", "rating", 
-            "star", "user photo", "profile picture", "author bio", "site badge", "user badge", "blog logo"
-        ]
-        IRRELEVANT_URL_SEGMENTS = [
-            "/logo", "/avatar", "/icon", "/banner", "/profile", "/badge", "/sprite", 
-            "/spinner", "/loader", "/ads/", "/ad/", "/advert/", "pixel.gif", "spacer.gif",
-            "/track", "/beacon", "gravatar.com", "/share_", "_share.", "/social_", "_social.",
-            "feedburner.com", "doubleclick.net", "googlesyndication.com", "adservice.google.com",
-            "feeds.feedburner.com", "ad.doubleclick.net", "stats.wordpress.com", "blogger.googleusercontent.com/img/b"
-        ]
-        ALLOWED_CONTENT_PATH_INDICATORS = [ 
-            "/content/", "/media/", "/wp-content/uploads/", "/uploads/", "/images/", "/image/",
-            "/wp-content/uploads", "/files/", "/assets/", "/_posts/", "/posts/", "/articles/", "/article/"
-        ]
-
-        self.logger.debug(f"_extract_images_from_html: Starting <img> tag processing. Found {len(soup.find_all('img'))} img tags initially.")
-
-        for idx, img_tag in enumerate(soup.find_all('img')):
-            if not isinstance(img_tag, Tag): continue
-            src = img_tag.get('src')
-            if not src: src = img_tag.get('data-src')
-            if not src: src = img_tag.get('data-original')
-            if not src or str(src).startswith('data:image'):
-                continue
-
-            try:
-                abs_img_url_str = urljoin(base_url, str(src).strip())
-                if abs_img_url_str in processed_urls:
-                    continue
-
-                abs_img_url_lower = abs_img_url_str.lower()
-                is_url_potentially_irrelevant = any(segment in abs_img_url_lower for segment in IRRELEVANT_URL_SEGMENTS)
-                is_url_explicitly_content = any(indicator in abs_img_url_lower for indicator in ALLOWED_CONTENT_PATH_INDICATORS)
-                if is_url_potentially_irrelevant and not is_url_explicitly_content:
-                    continue
-
-                alt_text_raw = img_tag.get('alt', '').strip()
-                alt_text_lower = alt_text_raw.lower()
-                if alt_text_lower in IRRELEVANT_ALT_STRINGS_EXACT:
-                    continue
-                is_irrelevant_substring = any(substring in alt_text_lower for substring in IRRELEVANT_SUBSTRINGS_IN_ALT)
-                if is_irrelevant_substring:
-                    continue
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                page = await browser.new_page()
                 
-                width_str = img_tag.get('width')
-                height_str = img_tag.get('height')
-                width = int(width_str.replace('px','')) if width_str and width_str.replace('px','').isdigit() else None
-                height = int(height_str.replace('px','')) if height_str and height_str.replace('px','').isdigit() else None
-
-                if width is not None and width < MIN_DIMENSION: continue
-                if height is not None and height < MIN_DIMENSION: continue
-                if width is not None and height is not None:
-                    if width * height < MIN_AREA: continue
-                    if height > 0 and (width / height > MAX_ASPECT_RATIO_DEVIATION): continue
-                    if width > 0 and (height / width > MAX_ASPECT_RATIO_DEVIATION): continue
-
-                validated_url = HttpUrl(abs_img_url_str)
-                processed_urls.add(abs_img_url_str)
-                image_counter += 1
+                try:
+                    await page.goto(url, timeout=self.service_settings.playwright_page_load_timeout_ms)
+                    await page.wait_for_load_state('networkidle', timeout=self.service_settings.playwright_network_idle_timeout_ms)
+                    self.logger.debug(f"Playwright: Page loaded for {url}")
+                except Exception as e_nav:
+                    self.logger.warning(f"Playwright: Navigation or load state wait failed for {url} (timeouts: load={self.service_settings.playwright_page_load_timeout_ms}ms, idle={self.service_settings.playwright_network_idle_timeout_ms}ms): {e_nav}. Attempting to extract images anyway.")
                 
-                image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}"
-                alt_text = alt_text_raw or None
-                caption_text: Optional[str] = None
-                figure_parent = img_tag.find_parent('figure')
-                if figure_parent and isinstance(figure_parent, Tag):
-                    figcaption = figure_parent.find('figcaption')
-                    if figcaption and isinstance(figcaption, Tag): caption_text = figcaption.get_text(strip=True)
-                if not caption_text:
-                    title_attr = img_tag.get('title','').strip()
-                    if title_attr: caption_text = title_attr
+                images_on_page = await page.query_selector_all('img')
+                self.logger.debug(f"Playwright: Found {len(images_on_page)} <img> tags on {url}")
+                
+                for img_element in images_on_page:
+                    try:
+                        src = await img_element.get_attribute('src')
+                        if not src or src.startswith("data:image"): 
+                            continue
 
-                raw_image_obj = RawImageInput(
-                    image_id=image_id,
-                    image_bytes=None, 
-                    source_url=str(validated_url),
-                    original_filename=os.path.basename(urlparse(str(validated_url)).path) or f"image_{image_counter}.png",
-                    source_document_id=original_source_identifier_for_gcs_path,
+                        abs_src = urljoin(base_url_for_resolution, src.strip())
+                        
+                        bounding_box = await img_element.bounding_box()
+                        width = int(bounding_box['width']) if bounding_box else 0
+                        height = int(bounding_box['height']) if bounding_box else 0
+                        
+                        is_visible = await img_element.is_visible()
+                        alt_text_pw = await img_element.get_attribute('alt') or ""
+                        
+                        if abs_src not in image_details_map:
+                            image_details_map[abs_src] = {
+                                "rendered_width": width,
+                                "rendered_height": height,
+                                "alt_text": alt_text_pw.strip(),
+                                "is_visible": is_visible,
+                                "from_playwright": True
+                            }
+                            self.logger.debug(f"Playwright: Got details for {abs_src} - W:{width}, H:{height}, Vis:{is_visible}, Alt:'{alt_text_pw[:30]}...'")
+                    except Exception as e_img_detail:
+                        self.logger.debug(f"Playwright: Error processing an image element on {url}: {e_img_detail}")
+                await browser.close()
+        except Exception as e_pw_general:
+            # Catching playwright.helper.Error if playwright install hasn't been run.
+            if "playwright install" in str(e_pw_general).lower():
+                 self.logger.error(f"Playwright: Browsers not installed. Please run 'playwright install' or 'playwright install chromium'. Error: {e_pw_general}")
+            else:
+                self.logger.error(f"Playwright: General error during Playwright execution for {url}: {e_pw_general}", exc_info=True)
+        
+        self.logger.debug(f"Playwright: Finished fetching image details for {url}. Found details for {len(image_details_map)} images.")
+        return image_details_map
+
+    async def _process_html_element(
+        self,
+        element: Union[Tag, str],
+        blocks: List[PreliminaryBlock],
+        base_url: str, # For resolving relative URLs from element's content
+        job_id: str,
+        user_id: Optional[str],
+        # New parameters for integrated image processing
+        all_raw_images: List[RawImageInput], 
+        img_idx_counter: List[int], # Use a list to pass by reference for mutable int
+        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]],
+        original_request_url: str # For GCS path in RawImageInput
+    ) -> None:
+        """
+        Recursively processes HTML elements (Tags or strings) to extract content
+        into PreliminaryBlock objects.
+        Integrated image discovery, filtering, and RawImageInput creation.
+        """
+        element_type = type(element).__name__
+        element_details = ""
+        if isinstance(element, str):
+            element_details = f"String content (len {len(element)}): '{element[:100].strip().replace(chr(10), ' ')}...'"
+        elif hasattr(element, 'name') and element.name:
+            element_details = f"Tag: <{element.name}>, Attrs: {element.attrs if hasattr(element, 'attrs') else '{}'}"
+        elif isinstance(element, Comment):
+            element_details = f"Comment: '{str(element)[:100].strip().replace(chr(10), ' ')}...'"
+        else:
+            element_details = f"Other element: {str(element)[:100].strip().replace(chr(10), ' ')}..."
+
+        self.logger.debug(f"WebService _process_html_element: Processing {element_type} - {element_details}")
+
+        if isinstance(element, Comment):
+            self.logger.debug(f"WebService _process_html_element: Skipping comment: {str(element)[:100]}")
+            return # Skip comments
+
+        if isinstance(element, str):
+            text_content_stripped = element.strip()
+            if not text_content_stripped:
+                self.logger.debug("WebService _process_html_element: Text node is empty after strip, skipping.")
+                return
+
+            self.logger.debug(f"WebService _process_html_element: Found text node: '{text_content_stripped[:100].replace(chr(10), ' ')}...'")
+
+            if blocks and blocks[-1].type == "text":
+                current_text_from_last_block = getattr(blocks[-1], 'text_content', None)
+
+                if current_text_from_last_block: # Check if it's a non-empty string
+                    self.logger.debug(f"WebService _process_html_element: Appending to existing text block (ID: {blocks[-1].block_id}): '{text_content_stripped[:100].replace(chr(10), ' ')}...'")
+                    combined_text = current_text_from_last_block + " " + text_content_stripped
+                    blocks[-1].text_content = combined_text # Use text_content
+                else:
+                    # The last block was 'text' type but its text_content was None or empty.
+                    self.logger.debug(f"WebService _process_html_element: Setting text for existing text block (ID: {blocks[-1].block_id}) as it was None or empty: '{text_content_stripped[:100].replace(chr(10), ' ')}...'")
+                    blocks[-1].text_content = text_content_stripped # Use text_content
+            else:
+                # Create a new text block
+                new_block_id = f"pb_{job_id}_{len(blocks)}"
+                self.logger.debug(f"WebService _process_html_element: Created new text block (ID: {new_block_id}): '{text_content_stripped[:100].replace(chr(10), ' ')}...'")
+                blocks.append(PreliminaryBlock(
+                    block_id=new_block_id,
+                    type="text",
+                    text_content=text_content_stripped, # Use text_content
+                    order=len(blocks), 
                     page_number=None, 
-                    bbox=None, 
-                    mime_type=None,
-                    alt_text=alt_text,
-                    caption=caption_text,
-                    original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
-                    source_type_for_gcs_path=source_type_for_gcs_path,
-                    job_id_for_gcs_path=job_id if job_id else "unknown_job"
-                )
-                image_details_map[abs_img_url_str] = raw_image_obj # Store in map
-                all_raw_images_list.append(raw_image_obj) # Also add to list
-
-            except ValueError: 
-                continue
-            except Exception: 
-                continue
-        
-        og_image_tag = soup.find('meta', property='og:image')
-        if og_image_tag and isinstance(og_image_tag, Tag) and og_image_tag.get('content'):
-            og_image_url_str = urljoin(base_url, str(og_image_tag['content']).strip())
-            if og_image_url_str not in processed_urls: # Also check if this URL is already processed
-                try:
-                    validated_og_url = HttpUrl(og_image_url_str)
-                    # No need to add to processed_urls here again as it's checked by 'not in image_details_map' effectively
-                    image_counter += 1
-                    image_id = f"WEB_IMG_{job_id if job_id else doc_id_prefix}_{image_counter}_og"
-                    
-                    og_alt = None
-                    og_image_alt_tag = soup.find('meta', property='og:image:alt')
-                    if og_image_alt_tag and isinstance(og_image_alt_tag, Tag) and og_image_alt_tag.get('content'):
-                        og_alt = str(og_image_alt_tag['content']).strip()
-
-                    raw_og_image_obj = RawImageInput(
-                        image_id=image_id,
-                        image_bytes=None,
-                        source_url=str(validated_og_url),
-                        original_filename=os.path.basename(urlparse(str(validated_og_url)).path) or f"og_image_{image_counter}.png",
-                        source_document_id=original_source_identifier_for_gcs_path,
-                        alt_text=og_alt,
-                        original_source_identifier_for_gcs_path=original_source_identifier_for_gcs_path,
-                        source_type_for_gcs_path=source_type_for_gcs_path,
-                        job_id_for_gcs_path=job_id if job_id else "unknown_job"
-                    )
-                    if og_image_url_str not in image_details_map: # Ensure no overwrite
-                        image_details_map[og_image_url_str] = raw_og_image_obj
-                        all_raw_images_list.append(raw_og_image_obj)
-                    elif self.logger.isEnabledFor(logging.DEBUG): # Log if already exists
-                         self.logger.debug(f"OG Image URL {og_image_url_str} already processed, not adding again.")
-
-
-                except ValueError:
-                    pass 
-                except Exception:
-                    pass 
-
-        self.logger.debug(f"_extract_images_from_html: Finished processing. Found {len(all_raw_images_list)} raw images. Map size: {len(image_details_map)}")
-        return image_details_map, all_raw_images_list # MODIFIED RETURN
-
-    async def _parse_and_structure_html(
-        self, 
-        html_to_parse: str,
-        is_trafilatura_content: bool,
-        full_html_content_for_metadata_and_images: str,
-        final_url: str, 
-        job_id: Optional[str],
-        user_id: Optional[str], # Added user_id parameter
-        processing_level: str
-    ) -> Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]:
-        preliminary_blocks: List[PreliminaryBlock] = []
-        raw_images_list: List[RawImageInput] = []
-        
-        # Full page soup for metadata and image extraction - always from original full HTML
-        soup_full_page = BeautifulSoup(full_html_content_for_metadata_and_images, 'lxml')
-        
-        isolated_main_content_html: Optional[str] = None # Will be set if not using Trafilatura content
-        main_content_element_found: Optional[Tag] = None # Will be set if not using Trafilatura content
-        soup_for_structuring: Optional[Union[BeautifulSoup, Tag]] = None # Can be the whole doc or a specific tag
-
-        if is_trafilatura_content and html_to_parse:
-            self.logger.info("Using Trafilatura's extracted HTML snippet for structuring.")
-            temp_soup = BeautifulSoup(html_to_parse, 'lxml')
-            main_tag_in_snippet = temp_soup.find('main')
-            if main_tag_in_snippet:
-                soup_for_structuring = main_tag_in_snippet 
-            elif temp_soup.find('doc'): # Trafilatura often uses <doc>
-                doc_tag_in_snippet = temp_soup.find('doc')
-                soup_for_structuring = doc_tag_in_snippet
-            else:
-                soup_for_structuring = temp_soup 
-        else:
-            self.logger.info("Trafilatura content not used or empty. Falling back to BeautifulSoup parsing of full HTML.")
-            # --- Start Fallback Main Content Isolation using BeautifulSoup Selectors ---
-            main_content_element_found: Optional[Tag] = None
-            for selector in self.MAIN_CONTENT_SELECTORS:
-                try:
-                    candidate_element = soup_full_page.select_one(selector)
-                    if candidate_element:
-                        if candidate_element.find(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']) and len(candidate_element.get_text(strip=True)) > 200:
-                            main_content_element_found = candidate_element
-                            log_snippet_raw = str(main_content_element_found)[:500]
-                            log_snippet_clean = log_snippet_raw.replace('\n', ' ')
-                            self.logger.debug(f"(Fallback) Selected main content element with selector '{selector}'. HTML snippet: {log_snippet_clean}")
-                            break
-                except Exception as e_select:
-                    self.logger.warning(f"(Fallback) Selector error ('{selector}') during main content isolation: {e_select}")
-                    pass
-            self.logger.debug("Finished Main Content Isolation (Fallback BS4).")
-
-            if main_content_element_found:
-                log_isolated_snippet_raw = str(main_content_element_found)[:500]
-                log_isolated_snippet_clean = log_isolated_snippet_raw.replace('\n', ' ')
-                self.logger.debug(f"(Fallback) Using ISOLATED main content for structuring. Initial HTML: {log_isolated_snippet_clean}")
-                isolated_main_content_html = str(main_content_element_found)
-                soup_for_structuring = BeautifulSoup(isolated_main_content_html, 'lxml')
-            else:
-                self.logger.info("(Fallback) No specific main content container found by BS4, using full body/page for structuring.")
-                if soup_full_page.body:
-                    soup_for_structuring = BeautifulSoup(str(soup_full_page.body), 'lxml')
-                else:
-                    soup_for_structuring = soup_full_page
-        
-        # --- 0.B Remove Boilerplate Content (from the selected soup_for_structuring) ---
-        # This runs whether content is from Trafilatura or BS4 fallback
-        # print("--- Starting Boilerplate Removal ---") # DEBUG PRINT
-        for selector_idx, selector in enumerate(BOILERPLATE_SELECTORS):
-            try:
-                # Ensure soup_for_structuring is not None before calling .select()
-                if soup_for_structuring:
-                    # print(f"DEBUG: Processing boilerplate selector #{selector_idx+1}/{len(BOILERPLATE_SELECTORS)}: {selector}") # DEBUG PRINT
-                    elements_found = soup_for_structuring.select(selector)
-                    # print(f"DEBUG: Found {len(elements_found)} elements for selector: {selector}") # DEBUG PRINT
-                    
-                    for i, element in enumerate(elements_found):
-                        if element:
-                            # if selector in ("nav", "header", "a[data-baseweb='button'][href*='m.uber.com/looking']"): # Example of selective uncommenting
-                            #     print(f"DEBUG: Decomposing element {i+1}/{len(elements_found)} for selector '{selector}': {str(element)[:300]}")
-                            element.decompose()
-                else:
-                    # print(f"DEBUG: soup_for_structuring is None, skipping boilerplate selector: {selector}")
-                    pass # No need to print if it's none, just skip
-            except Exception as e_decompose:
-                # self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}") # Optional logging
-                self.logger.warning(f"Error decomposing boilerplate with selector '{selector}': {e_decompose}")
-                pass
-        # print("--- Finished Boilerplate Removal ---") # DEBUG PRINT
-        
-        # --- 1. Populate DocumentMetadata (using soup_full_page for broader context like <head>) ---
-        doc_title: Optional[str] = None
-        if soup_full_page.title and soup_full_page.title.string:
-            doc_title = soup_full_page.title.string.strip()
-        
-        og_title_tag = soup_full_page.find('meta', property='og:title')
-        if og_title_tag and isinstance(og_title_tag, Tag) and og_title_tag.get('content'):
-            og_title = str(og_title_tag['content']).strip()
-            if og_title: doc_title = og_title
-
-        og_description_tag = soup_full_page.find('meta', property='og:description')
-        og_description = str(og_description_tag['content']).strip() if og_description_tag and isinstance(og_description_tag, Tag) and og_description_tag.get('content') else None
-        
-        meta_description_tag = soup_full_page.find('meta', attrs={'name': 'description'})
-        meta_description = str(meta_description_tag['content']).strip() if meta_description_tag and isinstance(meta_description_tag, Tag) and meta_description_tag.get('content') else None
-        
-        description = og_description or meta_description
-
-        source_identifier_for_gcs = final_url 
-        source_type_for_gcs = "url"
-        # doc_job_id consistent with what's used in the main execute() for this operation
-        doc_job_id_for_metadata = job_id or f"web_{uuid.uuid4().hex[:8]}"
-
-        document_metadata_obj = DocumentMetadata(
-            document_id=doc_job_id_for_metadata, 
-            user_id=user_id or "unknown_user_web_service", # Use passed user_id
-            source_identifier=final_url,
-            source_type="url",
-            final_url=final_url,
-            title=doc_title,
-            custom_fields={"description": description} if description else {},
-            extracted_at=datetime.utcnow()
-        )
-
-        # --- 2.A Extract ALL RawImageInput objects and prepare helper maps (if full_content) ---
-        # This is done once from the full HTML content.
-        image_id_map: Dict[str, str] = {} 
-        image_alt_map: Dict[str, Optional[str]] = {}
-        # NEW: This will hold the map from URL to RawImageInput object
-        image_details_lookup: Dict[str, RawImageInput] = {}
-
-        if processing_level == "full_content":
-            self.logger.debug(f"_parse_and_structure_html: Pre-calling _extract_images_from_html. HTML length: {len(full_html_content_for_metadata_and_images) if full_html_content_for_metadata_and_images else 'None'}")
-            # Call the refactored _extract_images_from_html
-            image_details_lookup, raw_images_list_from_extraction = await self._extract_images_from_html( # MODIFIED
-                html_content_str=full_html_content_for_metadata_and_images, 
-                base_url=final_url,
-                job_id=job_id, 
-                original_source_identifier_for_gcs_path=final_url,
-                source_type_for_gcs_path="url"
-            )
-            # raw_images_list will be populated later based on used images.
-            # The raw_images_list_from_extraction contains ALL images found, used for the final return.
-            self.logger.debug(f"Prepared image_details_lookup (size {len(image_details_lookup)}) from {len(raw_images_list_from_extraction)} raw images extracted.")
-        
-        # --- 2.B Process the main content soup (Trafilatura or BS4 fallback) to create PreliminaryBlocks ---
-        doc_id_prefix_for_blocks = hashlib.md5(final_url.encode()).hexdigest()[:8]
-        
-        if soup_for_structuring:
-            # Iterate over direct children of the main content soup
-            # self.logger.debug(f"Starting to process direct children of soup_for_structuring ({type(soup_for_structuring)}). Number of children: {len(list(soup_for_structuring.children)) if hasattr(soup_for_structuring, 'children') else 'N/A'}")
-            
-            # Need to handle if soup_for_structuring is a Tag or a BeautifulSoup object
-            elements_to_process = []
-            if isinstance(soup_for_structuring, Tag): # e.g. <main> tag from Trafilatura snippet
-                elements_to_process = [child for child in soup_for_structuring.children if isinstance(child, Tag)]
-            elif isinstance(soup_for_structuring, BeautifulSoup): # e.g. full page soup or body soup
-                # If it's the full soup, and it has a body, process body's children. Otherwise, process its direct children.
-                if soup_for_structuring.body:
-                    elements_to_process = [child for child in soup_for_structuring.body.children if isinstance(child, Tag)]
-                else: # No body tag, process direct children of the soup document
-                    elements_to_process = [child for child in soup_for_structuring.children if isinstance(child, Tag)]
-            
-            self.logger.debug(f"Identified {len(elements_to_process)} top-level Tag elements in soup_for_structuring to process.")
-
-            for child_element in elements_to_process:
-                await self._process_html_element(
-                    child_element, 
-                    final_url, 
-                    doc_id_prefix_for_blocks, 
-                    preliminary_blocks, # Appends directly to this list
-                    image_details_lookup # PASS THE NEW MAP
-                )
-            self.logger.debug(f"Finished processing soup_for_structuring. {len(preliminary_blocks)} preliminary_blocks created so far (text, headings, inline images etc.).")
-        else:
-            self.logger.warning("soup_for_structuring was None. No main content elements were processed by _process_html_element.")
-
-        # Old image reconciliation logic is now removed.
-        # The new logic below constructs the final list of raw images based on used image_id_refs.
-
-        # NEW: Construct the final raw_images_list based on images actually used in preliminary_blocks
-        final_raw_images_to_return: List[RawImageInput] = []
-        if processing_level == "full_content":
-            used_image_ids = set()
-            for pb in preliminary_blocks:
-                if pb.type == 'image_placeholder' and pb.image_id_ref:
-                    used_image_ids.add(pb.image_id_ref)
-            
-            # Iterate through the image_details_lookup (which contains all discovered RawImageInput objects keyed by URL)
-            # Or, it might be better to iterate raw_images_list_from_extraction if that's guaranteed to have all unique RawImageInput objects
-            for img_obj in raw_images_list_from_extraction: # Assuming this list holds all unique RawImageInput objects
-                if img_obj.image_id in used_image_ids:
-                    final_raw_images_to_return.append(img_obj)
-            self.logger.debug(f"Constructed final_raw_images_to_return with {len(final_raw_images_to_return)} images based on used IDs.")
-        
-        return preliminary_blocks, document_metadata_obj, final_raw_images_to_return # MODIFIED: return final_raw_images_to_return
-
-    async def _process_html_element(self, element: Tag, base_url: str, doc_id_prefix: str, 
-                                    blocks: List[PreliminaryBlock], 
-                                    image_details_lookup: Dict[str, RawImageInput]): # MODIFIED PARAMETER
-        """
-        Recursively processes an HTML element to create PreliminaryBlock objects.
-        Appends new blocks to the `blocks` list.
-        Order is determined by the length of the blocks list at the time of append.
-        """
-        self.logger.debug(f"_process_html_element CALLED with tag: <{element.name}> Attributes: {element.attrs}") # ENTRY LOGGING
-        
-        tag_name = element.name
-        custom_attrs = {}
-
-        # Handle Trafilatura's <head rend="hX"> for headings
-        if tag_name == 'head' and element.get('rend') and element.get('rend','').startswith('h'):
-            heading_level_str = element.get('rend','')[1:]
-            if heading_level_str.isdigit():
-                heading_level = int(heading_level_str)
-                if 1 <= heading_level <= 6:
-                    text_content = element.get_text(strip=True)
-                    if text_content:
-                        block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                        blocks.append(PreliminaryBlock(
-                            block_id=block_id_str,
-                            type='heading',
-                            text_content=text_content,
-                            heading_level=heading_level,
-                            order=len(blocks) # Order is current size before append
-                        ))
-                        return # Processed as a heading, no further processing for this element
-
-        if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-            text_content = element.get_text(strip=True)
-            if text_content:
-                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                blocks.append(PreliminaryBlock(
-                    block_id=block_id_str,
-                    type='heading',
-                    text_content=text_content,
-                    heading_level=int(tag_name[1]),
-                    order=len(blocks) # Order is current size before append
+                    bbox=None 
                 ))
-        elif tag_name == 'p':
-            # Handle <p> tags. If a <p> only contains an <img>, process <img> directly.
-            # Otherwise, create a text block.
-            children_tags = [child for child in element.children if isinstance(child, Tag)]
-            text_content_direct = (''.join(c.string for c in element.children if isinstance(c, str) and c.string)).strip()
-            
-            if len(children_tags) == 1 and children_tags[0].name == 'img' and not text_content_direct:
-                # Paragraph contains only an image and no other text content
-                # self.logger.debug(f"Paragraph contains only an image. Processing image: {children_tags[0]}")
-                await self._process_html_element(children_tags[0], base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
-            else:
-                full_text_content = element.get_text(strip=True)
-                if full_text_content: # Only add if there's actual text
-                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                    blocks.append(PreliminaryBlock(
-                        block_id=block_id_str,
-                        type='text',
-                        text_content=full_text_content,
-                        order=len(blocks)
-                    ))
-        elif tag_name == 'img':
-            src = element.get('src') or element.get('data-src')
-            if src:
-                abs_img_url = urljoin(base_url, src.strip())
-                self.logger.debug(f"IMG tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
-                
-                raw_image_detail = image_details_lookup.get(abs_img_url)
-                image_id_ref: Optional[str] = None
-                alt_text: Optional[str] = element.get('alt','').strip() # Default alt from tag
-                caption_text_for_block: Optional[str] = None # Placeholder for caption if figure is parent
+            return # Return after processing the string node
 
-                if raw_image_detail:
-                    image_id_ref = raw_image_detail.image_id
-                    alt_text = raw_image_detail.alt_text or alt_text # Prefer alt from RawImageInput if available
-                    # Caption is usually handled by <figure> context, but if raw_image_detail has it, could be used
-                    caption_text_for_block = raw_image_detail.caption 
-                else:
-                    self.logger.warning(f"Image {abs_img_url} in main content but not in pre-scanned image_details_lookup. Generating temp ID.")
-                    image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
-                
-                # Check for parent <figure> to get caption, potentially overriding one from raw_image_detail if more specific
-                figure_parent = element.find_parent('figure')
-                if figure_parent and isinstance(figure_parent, Tag):
-                    figcaption = figure_parent.find('figcaption')
-                    if figcaption and isinstance(figcaption, Tag):
-                        figcaption_text_content = figcaption.get_text(strip=True)
-                        if figcaption_text_content:
-                             caption_text_for_block = figcaption_text_content
+        # --- Handling specific HTML tags ---
+        tag_name = element.name.lower() if element.name else ""
+        self.logger.debug(f"WebService _process_html_element: Handling tag: <{tag_name}>")
 
+        # Handle Trafilatura's <graphic> tags for images
+        if tag_name == 'graphic':
+            self.logger.debug(f"WebService _process_html_element: Encountered <graphic> tag.")
+            img_src = element.get('url') or element.get('src')
+            if img_src and not img_src.startswith("data:image"):
+                abs_img_url = urljoin(base_url, img_src.strip())
+                alt_text_from_tag = element.get('alt', '').strip()
+                self.logger.debug(f"WebService _process_html_element: <graphic> src='{abs_img_url}', alt='{alt_text_from_tag}'")
 
-                current_custom_attrs = {}
-                if alt_text: current_custom_attrs['alt_text'] = alt_text
-                if caption_text_for_block: current_custom_attrs['caption'] = caption_text_for_block
-                
-                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                blocks.append(PreliminaryBlock(
-                    block_id=block_id_str,
-                    type='image_placeholder',
-                    image_id_ref=image_id_ref, # This must be a string
-                    order=len(blocks),
-                    custom_attributes=current_custom_attrs if current_custom_attrs else None
-                ))
+                rendered_width = 0
+                rendered_height = 0
+                is_visible_on_page = True # Default to visible if not using Playwright or not found
+                final_alt_text = alt_text_from_tag
+                passed_playwright_filter = False
 
-        elif tag_name == 'figure':
-            img_in_figure = element.find('img')
-            figcaption_text: Optional[str] = None
-            figcaption_tag = element.find('figcaption')
-            if figcaption_tag:
-                figcaption_text = figcaption_tag.get_text(strip=True)
-
-            if img_in_figure:
-                # If figure contains an image, prioritize the image block.
-                # The caption will be part of the image block's custom_attributes.
-                src = img_in_figure.get('src') or img_in_figure.get('data-src')
-                if src:
-                    abs_img_url = urljoin(base_url, src.strip())
-                    self.logger.debug(f"FIGURE tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
-                    
-                    raw_image_detail = image_details_lookup.get(abs_img_url)
-                    image_id_ref: Optional[str] = None
-                    alt_text_for_block: Optional[str] = img_in_figure.get('alt','').strip() # Default alt from img
-
-                    if raw_image_detail:
-                        image_id_ref = raw_image_detail.image_id
-                        alt_text_for_block = raw_image_detail.alt_text or alt_text_for_block # Prefer from RawImageInput
-                        # If raw_image_detail has a caption, it might be from _extract_images_from_html,
-                        # but figcaption_text here is more specific to this figure context.
+                if self.service_settings.use_playwright_for_image_filtering and playwright_image_details_map:
+                    self.logger.debug(f"WebService _process_html_element: Playwright filtering is ON for <graphic> {abs_img_url}")
+                    if abs_img_url in playwright_image_details_map:
+                        details = playwright_image_details_map[abs_img_url]
+                        rendered_width = details.get("rendered_width", 0)
+                        rendered_height = details.get("rendered_height", 0)
+                        is_visible_on_page = details.get("is_visible", False)
+                        if details.get("alt_text") or not final_alt_text: 
+                            final_alt_text = details.get("alt_text", "")
+                        
+                        self.logger.debug(f"Playwright Filtering Check for Trafilatura graphic {abs_img_url}: W:{rendered_width}, H:{rendered_height}, Vis:{is_visible_on_page}, Area:{rendered_width * rendered_height}")
+                        
+                        if not is_visible_on_page:
+                            self.logger.debug(f"Filtered out (not visible via Playwright): {abs_img_url}")
+                        elif rendered_width < self.service_settings.min_image_width:
+                            self.logger.debug(f"Filtered out (width < {self.service_settings.min_image_width}): {abs_img_url} (width: {rendered_width})")
+                        elif rendered_height < self.service_settings.min_image_height:
+                            self.logger.debug(f"Filtered out (height < {self.service_settings.min_image_height}): {abs_img_url} (height: {rendered_height})")
+                        elif (rendered_width * rendered_height) < self.service_settings.min_image_area:
+                            self.logger.debug(f"Filtered out (area < {self.service_settings.min_image_area}): {abs_img_url} (area: {rendered_width * rendered_height})")
+                        else:
+                            self.logger.debug(f"PASSED Playwright filter: {abs_img_url}")
+                            passed_playwright_filter = True
                     else:
-                        self.logger.warning(f"Image {abs_img_url} in figure not in pre-scanned image_details_lookup. Generating temp ID.")
-                        image_id_ref = f"TEMP_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
-                    
-                    current_custom_attrs = {}
-                    if alt_text_for_block: current_custom_attrs['alt_text'] = alt_text_for_block
-                    if figcaption_text: # This is the <figcaption> specific to this <figure>
-                        current_custom_attrs['caption'] = figcaption_text
+                        self.logger.debug(f"Image {abs_img_url} (from Trafilatura graphic) not found in Playwright details map. Keys: {list(playwright_image_details_map.keys())[:5]}...")
+                        if self.service_settings.playwright_filter_strict_if_enabled:
+                             self.logger.debug(f"Strict Playwright filtering: {abs_img_url} not found in PW details, skipping.")
+                        else:
+                            passed_playwright_filter = True # Allow if not strict
+                            self.logger.debug(f"Non-strict Playwright: Allowing {abs_img_url} despite not being in PW map.")
 
-                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                    blocks.append(PreliminaryBlock(
-                        block_id=block_id_str,
-                        type='image_placeholder',
-                        image_id_ref=image_id_ref, # Must be a string
-                        order=len(blocks),
-                        custom_attributes=current_custom_attrs if current_custom_attrs else None
-                    ))
-            elif figcaption_text: # Figure with caption but no image? Treat as text.
-                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                blocks.append(PreliminaryBlock(
-                    block_id=block_id_str,
-                    type='text',
-                    text_content=figcaption_text,
-                    order=len(blocks)
-                ))
-            # else: Figure with neither, or complex content not handled by this simple parser.
-            # Could add recursion here if figures can contain other block types: 
-            # for child in element.children: if isinstance(child, Tag) and child not in [img_in_figure, figcaption_tag]: await self._process_html_element(...)
-            
-        elif tag_name == 'graphic': # Handle Trafilatura's <graphic> tag
-            src = element.get('src')
-            if src:
-                abs_img_url = urljoin(base_url, src.strip())
-                self.logger.debug(f"GRAPHIC tag: Attempting to find image details for abs_img_url: '{abs_img_url}'. Map keys: {list(image_details_lookup.keys())}")
-
-                raw_image_detail = image_details_lookup.get(abs_img_url)
-                image_id_ref: Optional[str] = None
-                alt_text_for_block: Optional[str] = None # Trafilatura <graphic> doesn't have alt
-                caption_text_for_block: Optional[str] = None # Trafilatura <graphic> doesn't have caption directly
-
-                if raw_image_detail:
-                    image_id_ref = raw_image_detail.image_id
-                    alt_text_for_block = raw_image_detail.alt_text # Get from original scan
-                    caption_text_for_block = raw_image_detail.caption # Get from original scan
-                    self.logger.debug(f"GRAPHIC tag: Found raw_image_detail. ID: {image_id_ref}, Alt: {alt_text_for_block}, Caption: {caption_text_for_block}")
-                else:
-                    # This case might occur if the image URL from <graphic> somehow differs from what was in <img> src
-                    # or if the image wasn't picked up in the initial scan of the full HTML.
-                    self.logger.warning(f"Image {abs_img_url} from <graphic> tag not in pre-scanned image_details_lookup. Generating temp ID.")
-                    image_id_ref = f"TEMP_GRAPHIC_IMG_{hashlib.md5(abs_img_url.encode()).hexdigest()[:10]}"
-
-                current_custom_attrs = {}
-                if alt_text_for_block: current_custom_attrs['alt_text'] = alt_text_for_block
-                if caption_text_for_block: current_custom_attrs['caption'] = caption_text_for_block
+                elif not self.service_settings.use_playwright_for_image_filtering:
+                    passed_playwright_filter = True # Playwright filtering is disabled, so it passes
+                    self.logger.debug(f"WebService _process_html_element: Playwright filtering is OFF. <graphic> {abs_img_url} passes by default.")
                 
-                if image_id_ref: # Ensure we have an image_id_ref
-                    block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
+                if passed_playwright_filter:
+                    image_id = f"web_{job_id}_img{img_idx_counter[0]}"
+                    img_idx_counter[0] += 1
+                    
+                    raw_image = RawImageInput(
+                        image_id=image_id,
+                        source_url=abs_img_url,
+                        alt_text=final_alt_text,
+                        caption=None,
+                        source_document_id=job_id,
+                        original_source_identifier_for_gcs_path=original_request_url,
+                        source_type_for_gcs_path="web",
+                        job_id_for_gcs_path=job_id,
+                        width=rendered_width if self.service_settings.use_playwright_for_image_filtering and (abs_img_url in (playwright_image_details_map or {})) else None,
+                        height=rendered_height if self.service_settings.use_playwright_for_image_filtering and (abs_img_url in (playwright_image_details_map or {})) else None,
+                    )
+                    all_raw_images.append(raw_image)
+                    
+                    new_block_id = f"pb_{job_id}_{len(blocks)}"
                     blocks.append(PreliminaryBlock(
-                        block_id=block_id_str,
-                        type='image_placeholder',
-                        image_id_ref=image_id_ref,
+                        block_id=new_block_id,
+                        type="image_placeholder",
+                        image_id_ref=image_id,
                         order=len(blocks),
-                        custom_attributes=current_custom_attrs if current_custom_attrs else None
+                        text=final_alt_text or "Image", 
                     ))
+                    self.logger.info(f"WebService _process_html_element: CREATED RawImageInput & Placeholder for <graphic>: ID {image_id}, URL {abs_img_url}, BlockID {new_block_id}")
                 else:
-                    self.logger.warning(f"GRAPHIC tag: Could not establish an image_id_ref for src '{abs_img_url}'. Skipping block creation.")
+                    self.logger.info(f"WebService _process_html_element: SKIPPED <graphic> due to Playwright filter: {abs_img_url}")
+
+            else:
+                self.logger.debug(f"WebService _process_html_element: <graphic> has no valid src or is data URI: '{img_src}'")
+            return
+
+        # Handle <img> tags
+        elif tag_name == 'img':
+            self.logger.debug(f"WebService _process_html_element: Encountered <img> tag.")
+            img_src = element.get('src') or element.get('data-src')
+            if img_src and not img_src.startswith("data:image"):
+                abs_img_url = urljoin(base_url, img_src.strip())
+                alt_text_from_tag = element.get('alt', '').strip()
+                self.logger.debug(f"WebService _process_html_element: <img> src='{abs_img_url}', alt='{alt_text_from_tag}'")
+                
+                rendered_width = 0
+                rendered_height = 0
+                is_visible_on_page = True
+                final_alt_text = alt_text_from_tag
+                passed_playwright_filter = False
+
+                if self.service_settings.use_playwright_for_image_filtering and playwright_image_details_map:
+                    self.logger.debug(f"WebService _process_html_element: Playwright filtering is ON for <img> {abs_img_url}")
+                    if abs_img_url in playwright_image_details_map:
+                        details = playwright_image_details_map[abs_img_url]
+                        rendered_width = details.get("rendered_width", 0)
+                        rendered_height = details.get("rendered_height", 0)
+                        is_visible_on_page = details.get("is_visible", False)
+                        if details.get("alt_text") or not final_alt_text:
+                            final_alt_text = details.get("alt_text", "")
+
+                        self.logger.debug(f"Playwright Filtering Check for <img> {abs_img_url}: W:{rendered_width}, H:{rendered_height}, Vis:{is_visible_on_page}, Area:{rendered_width * rendered_height}")
+                        if not is_visible_on_page:
+                            self.logger.debug(f"Filtered out <img> (not visible via Playwright): {abs_img_url}")
+                        elif rendered_width < self.service_settings.min_image_width:
+                            self.logger.debug(f"Filtered out <img> (width < {self.service_settings.min_image_width}): {abs_img_url} (width: {rendered_width})")
+                        elif rendered_height < self.service_settings.min_image_height:
+                            self.logger.debug(f"Filtered out <img> (height < {self.service_settings.min_image_height}): {abs_img_url} (height: {rendered_height})")
+                        elif (rendered_width * rendered_height) < self.service_settings.min_image_area:
+                            self.logger.debug(f"Filtered out <img> (area < {self.service_settings.min_image_area}): {abs_img_url} (area: {rendered_width * rendered_height})")
+                        else:
+                            passed_playwright_filter = True
+                            self.logger.debug(f"PASSED Playwright filter for <img>: {abs_img_url}")
+                    else:
+                        self.logger.debug(f"Image {abs_img_url} (from <img>) not found in Playwright details map. Keys: {list(playwright_image_details_map.keys())[:5]}...")
+                        if self.service_settings.playwright_filter_strict_if_enabled:
+                             self.logger.debug(f"Strict Playwright filtering: <img> {abs_img_url} not found in PW details, skipping.")
+                        else:
+                            passed_playwright_filter = True
+                            self.logger.debug(f"Non-strict Playwright: Allowing <img> {abs_img_url} despite not being in PW map.")
+
+                elif not self.service_settings.use_playwright_for_image_filtering:
+                    passed_playwright_filter = True
+                    self.logger.debug(f"WebService _process_html_element: Playwright filtering is OFF. <img> {abs_img_url} passes by default.")
+
+                if passed_playwright_filter:
+                    image_id = f"web_{job_id}_img{img_idx_counter[0]}"
+                    img_idx_counter[0] += 1
+                    raw_image = RawImageInput(
+                        image_id=image_id,
+                        source_url=abs_img_url,
+                        alt_text=final_alt_text,
+                        caption=None,
+                        source_document_id=job_id,
+                        original_source_identifier_for_gcs_path=original_request_url,
+                        source_type_for_gcs_path="web",
+                        job_id_for_gcs_path=job_id,
+                        width=rendered_width if self.service_settings.use_playwright_for_image_filtering and (abs_img_url in (playwright_image_details_map or {})) else None,
+                        height=rendered_height if self.service_settings.use_playwright_for_image_filtering and (abs_img_url in (playwright_image_details_map or {})) else None,
+                    )
+                    all_raw_images.append(raw_image)
+                    
+                    new_block_id = f"pb_{job_id}_{len(blocks)}"
+                    blocks.append(PreliminaryBlock(
+                        block_id=new_block_id,
+                        type="image_placeholder",
+                        image_id_ref=image_id,
+                        order=len(blocks),
+                        text=final_alt_text or "Image",
+                    ))
+                    self.logger.info(f"WebService _process_html_element: CREATED RawImageInput & Placeholder for <img>: ID {image_id}, URL {abs_img_url}, BlockID {new_block_id}")
+                else:
+                    self.logger.info(f"WebService _process_html_element: SKIPPED <img> due to Playwright filter: {abs_img_url}")
+
+            else:
+                self.logger.debug(f"WebService _process_html_element: <img> has no valid src or is data URI: '{img_src}'")
+            return
+
+        # --- Boilerplate Removal ---
+        if tag_name in {"nav", "footer", "header", "aside", "script", "style", "form", "iframe", "noscript", "svg"}:
+            self.logger.debug(f"WebService _process_html_element: Skipping boilerplate element by tag: <{tag_name}>")
+            return
+
+        # --- Content Extraction from common block-level elements ---
+        block_type: Optional[str] = None
+        text_content = ""
+
+        if tag_name in {'p', 'div', 'span', 'td', 'th', 'li', 'caption', 'article', 'section', 'main', 'blockquote', 'details', 'summary', 'aside'}:
+            self.logger.debug(f"WebService _process_html_element: Tag <{tag_name}> is a text container, will recurse for children.")
+            pass 
+
+        # Heading tags (h1-h6 and Trafilatura's <head rend="hX">)
+        elif tag_name in self.HEADING_TAGS or \
+             (tag_name == "head" and element.attrs.get("rend", "").lower().startswith("h")):
+            self.logger.debug(f"WebService _process_html_element: Handling tag: <{element.name}> as heading with attrs {element.attrs}.")
+            
+            heading_text_content = element.get_text(separator=" ", strip=True)
+            self.logger.debug(f"WebService _process_html_element: Initial get_text() for <{element.name}>: '{heading_text_content[:100]}...'")
+
+            if not heading_text_content and tag_name == "head":
+                # Workaround for Trafilatura <head> tags if get_text() fails but children exist
+                if hasattr(element, 'contents') and element.contents:
+                    self.logger.debug(f"WebService _process_html_element: <{element.name}> get_text() was empty. Trying to build from children.")
+                    child_texts = []
+                    for child_node in element.contents:
+                        # Recursively get text from all children, similar to what get_text() does
+                        child_text_segment = ""
+                        if hasattr(child_node, 'get_text'):
+                            child_text_segment = child_node.get_text(separator=" ", strip=True)
+                        elif isinstance(child_node, NavigableString): # NavigableString is a subclass of str
+                            child_text_segment = str(child_node).strip()
+                        
+                        if child_text_segment:
+                            child_texts.append(child_text_segment)
+                    
+                    if child_texts:
+                        heading_text_content = " ".join(child_texts)
+                        self.logger.debug(f"WebService _process_html_element: Reconstructed text for <{element.name}> from children: '{heading_text_content[:100]}...'")
+            
+            if heading_text_content:
+                # Determine heading level
+                level = 0
+                if element.name.startswith("h") and len(element.name) == 2 and element.name[1].isdigit():
+                    level = int(element.name[1])
+                elif element.name == "head" and element.attrs.get("rend","").lower().startswith("h"):
+                    rend_level_match = re.match(r"h(\d)", element.attrs.get("rend","").lower())
+                    if rend_level_match:
+                        level = int(rend_level_match.group(1))
+                
+                level = max(1, min(level if level > 0 else 1, 6)) # Ensure level 1-6, default to 1 if not parsable or 0
+
+                block_id = f"pb_{job_id}_{len(blocks)}"
+                heading_block = PreliminaryBlock(
+                    block_id=block_id,
+                    type="heading",
+                    text=heading_text_content,
+                    order=len(blocks),
+                    page_number=None,
+                    bbox=None
+                )
+                blocks.append(heading_block)
+                self.logger.info(f"CREATED PreliminaryBlock (Heading L{level}) ID: {block_id} - Content: '{heading_text_content[:100]}...'")
+                return # Processed, do not recurse further as text is captured.
+            else:
+                self.logger.warning(f"WebService _process_html_element: Heading tag <{element.name}> (attrs: {element.attrs}) resulted in no text content. Skipping block creation, will recurse for children if any.")
+                # Fall through to general child recursion logic.
+                # This path should ideally not be hit for valid headings.
 
         elif tag_name == 'pre':
-            code_content = element.get_text() 
-            lang = None
-            # Look for class="language-xxx" on <pre> or a child <code> tag
-            lang_classes = element.get('class', [])
-            if element.code and element.code.get('class'):
-                lang_classes.extend(element.code.get('class'))
-            
-            for c in lang_classes:
-                if c.startswith('language-'):
-                    lang = c.replace('language-', '')
-                    break
-            block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-            blocks.append(PreliminaryBlock(
-                block_id=block_id_str,
-                type='code_snippet',
-                text_content=code_content, 
-                code_language=lang, 
-                order=len(blocks)
-            ))
-
-        elif tag_name in ['ul', 'ol']:
-            # Each <li> will become a separate 'list_item' block.
-            # The parent <ul>/<ol> itself does not become a block.
-            for li in element.find_all('li', recursive=False):
-                # Process children of li to handle nested structures or complex li content
-                await self._process_html_element(li, base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
-        
-        elif tag_name == 'li': # Handle <li> elements when called directly (e.g. from ul/ol loop)
-            item_text = element.get_text(strip=True)
-            if item_text:
-                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                blocks.append(PreliminaryBlock(
-                    block_id=block_id_str,
-                    type='list_item',
-                    text_content=item_text,
-                    list_ordered=(element.parent.name == 'ol' if element.parent else None),
-                    order=len(blocks)
-                ))
-            # After creating the list_item block for its text,
-            # recurse for any complex Tag children that might form their own blocks.
-            for child in element.children:
-                 if isinstance(child, Tag) and child.name not in ['ul','ol']:
-                    # Let _process_html_element decide if this child tag forms a new block
-                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_details_lookup)
-
-        elif tag_name == 'table':
-            current_custom_attrs = {'html_table_content': str(element)}
-            block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-            blocks.append(PreliminaryBlock(
-                block_id=block_id_str,
-                type='table_placeholder', 
-                text_content="[Table Content]", 
-                order=len(blocks),
-                custom_attributes=current_custom_attrs
-            ))
-        
-        # Generic container processing: if a div/section etc. has direct text not part of a sub-block, make a text block.
-        # Must be careful not to re-process elements that created their own blocks (p, h1, img etc.)
-        # The primary loop in _parse_and_structure_html iterates, and this _process_html_element is called for each.
-        # If `element` is one of p, h1, img etc., it's handled above. 
-        # If `element` is div, section, etc., we then recurse for its children below.
-        # This `elif` is for cases where a div might have text directly like <div>Text</div>, not <div><p>Text</p></div>
-        elif tag_name in ['div', 'span', 'section', 'article', 'main', 'aside'] and not element.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'figure', 'pre', 'ul', 'ol', 'table'], recursive=False):
-            # Only consider if it has no known block-level children, but might have direct text.
-            # This check is a heuristic.
-            direct_text = (''.join(c.string for c in element.children if isinstance(c, str) and c.string)).strip()
-            if direct_text:
-                # Avoid creating blocks for divs that are just wrappers around elements we will process via recursion
-                # This requires checking if any child tag would form a block itself.
-                # This heuristic is tricky. For now, if direct_text exists, make a block.
-                # It might lead to some duplication if children are also block-formers.
-                block_id_str = f"{doc_id_prefix}_b{len(blocks)}"
-                blocks.append(PreliminaryBlock(
-                    block_id=block_id_str,
-                    type='text',
-                    text_content=direct_text, 
-                    order=len(blocks)
-                ))
-
-        # Recursive call for children of the CURRENT element, 
-        # IF the current element itself didn't form a block that consumed all its relevant content
-        # OR if it's a known container type.
-        # This is the most complex part to get right to avoid duplicates and missed content.
-        if tag_name in ['div', 'section', 'article', 'main', 'aside', 'details', 'summary', 'blockquote', 'body', 'doc']:
-            # For these container tags, always try to process their children.
-            # (Removed 'li' from here as its direct content should form a block, and its children handling needs to be more specific)
-            for child in element.children:
-                if isinstance(child, Tag):
-                    # Pass the same image_id_map and image_alt_map down
-                    await self._process_html_element(child, base_url, doc_id_prefix, blocks, image_details_lookup) # PASS NEW MAP
-
-    def _filter_boilerplate_preliminary_blocks(self, blocks: List[PreliminaryBlock], source_url_for_logging: str) -> List[PreliminaryBlock]:
-        """ 
-        Filters PreliminaryBlock objects that are likely boilerplate based on common patterns
-        in their text_content. This is a secondary filter after HTML element decomposition.
-        """
-        if not blocks:
-            return []
-
-        # Compile regex patterns for efficiency if they are numerous or complex
-        # For now, using simple string checks
-        # Updated to be more conservative and focus on very common boilerplate indicators
-        # that often survive initial HTML tag-based removal.
-        PATTERNS_TO_FILTER = [
-            re.compile(r"^\s*copyright\s*(©|\(c\))?\s*\d{4}(-\d{4})?\s*.+", re.IGNORECASE),
-            re.compile(r"all\s+rights\s+reserved", re.IGNORECASE),
-            re.compile(r"privacy\s+policy", re.IGNORECASE),
-            re.compile(r"terms\s+of\s+(service|use|condition)", re.IGNORECASE),
-            re.compile(r"cookie\s+(settings|preferences|policy)", re.IGNORECASE),
-            re.compile(r"site\s+map", re.IGNORECASE),
-            re.compile(r"powered\s+by", re.IGNORECASE),
-            re.compile(r"^(subscribe|follow us|newsletter|sign up for our newsletter)$", re.IGNORECASE),
-            re.compile(r"share\s+this\s+page", re.IGNORECASE),
-            re.compile(r"log\s+in\s+/\s+register", re.IGNORECASE),
-            re.compile(r"(previous|next)\s+(post|article)", re.IGNORECASE),
-            re.compile(r"related\s+(articles|posts)", re.IGNORECASE),
-            re.compile(r"leave\s+a\s+comment", re.IGNORECASE),
-            re.compile(r"you\s+may\s+also\s+like", re.IGNORECASE),
-            re.compile(r"advertisement", re.IGNORECASE), # Generic ad text
-            re.compile(r"back\s+to\s+top", re.IGNORECASE),
-            # Very short, likely navigation/utility links (be careful with these)
-            re.compile(r"^\s*(home|about|contact|help|faq|blog|docs|support|careers)\s*$", re.IGNORECASE),
-        ]
-
-        MIN_TEXT_LENGTH_FOR_FILTERING = 10 # Don't filter very short text unless it's an exact match above
-        MAX_TEXT_LENGTH_FOR_SHORT_LINK_FILTER = 25 # Max length for the very generic link filter
-
-        filtered_blocks = []
-        for block in blocks:
-            if block.type == "text" and block.text_content:
-                text_to_check = block.text_content.strip()
-                is_boilerplate = False
-                for pattern in PATTERNS_TO_FILTER:
-                    if pattern.search(text_to_check):
-                        # For the short link filter, apply length constraint
-                        if pattern.pattern == r"^\s*(home|about|contact|help|faq|blog|docs|support|careers)\s*$" and len(text_to_check) > MAX_TEXT_LENGTH_FOR_SHORT_LINK_FILTER:
-                            continue # Don't filter if it's a short link pattern but the text is longer
-                        
-                        # self.logger.debug(f"Filtering block ID {block.block_id} due to pattern: '{pattern.pattern}'. Text: '{text_to_check[:100]}...'")
-                        is_boilerplate = True
-                        break
-                
-                if not is_boilerplate:
-                    filtered_blocks.append(block)
-                # else: Keep the print above for when a block IS filtered by text
+            code_tag = element.find('code')
+            language = None
+            if code_tag:
+                text_content = code_tag.get_text(strip=False) 
+                language_class = code_tag.get('class', [])
+                language = next((cls.replace('language-', '') for cls in language_class if cls.startswith('language-')), None)
+                self.logger.debug(f"WebService _process_html_element: Extracted <code> block (lang: {language}): '{text_content[:100]}...'")
             else:
-                # Non-text blocks or text blocks with no content are kept
-                filtered_blocks.append(block)
-        
-        if len(blocks) != len(filtered_blocks):
-            # self.logger.debug(f"Filtered out {len(blocks) - len(filtered_blocks)} boilerplate PreliminaryBlocks based on text patterns from {source_url_for_logging}.")
+                text_content = element.get_text(strip=False)
+                self.logger.debug(f"WebService _process_html_element: Extracted <pre> block (no lang): '{text_content[:100]}...'")
+            
+            if text_content.strip():
+                new_block_id = f"pb_{job_id}_{len(blocks)}"
+                blocks.append(PreliminaryBlock(
+                    block_id=new_block_id,
+                    type="code",
+                    text=text_content, 
+                    language=language,
+                    order=len(blocks)
+                ))
+                self.logger.debug(f"WebService _process_html_element: Created code block (ID: {new_block_id}).")
+            else:
+                self.logger.debug(f"WebService _process_html_element: <pre> or <code> content is empty after strip, skipping block creation.")
+            return 
+
+        elif tag_name == 'figure':
+            self.logger.debug(f"WebService _process_html_element: Encountered <figure>, will recurse for children (e.g., figcaption, images).")
             pass
 
-        return filtered_blocks
+        elif tag_name == 'table':
+            self.logger.debug(f"WebService _process_html_element: Encountered <table>, will recurse for children (td, th, caption).")
+            pass
+        
+        elif tag_name == 'ul' or tag_name == 'ol':
+            self.logger.debug(f"WebService _process_html_element: Encountered <{tag_name}> list, will recurse for <li> children.")
+            pass
+        
+
+        if block_type and text_content.strip():
+            new_block_id = f"pb_{job_id}_{len(blocks)}"
+            blocks.append(PreliminaryBlock(
+                block_id=new_block_id,
+                type=block_type,
+                text=text_content.strip(),
+                order=len(blocks)
+            ))
+            self.logger.debug(f"WebService _process_html_element: Created {block_type} block (ID: {new_block_id}).")
+            return 
+        
+        # --- Recursive processing for children ---
+        if hasattr(element, 'contents') and element.contents:
+            self.logger.debug(f"WebService _process_html_element: Element <{tag_name}> has {len(element.contents)} children. Recursing...")
+            for i, child_element in enumerate(element.contents):
+                child_type = type(child_element).__name__
+                child_details_preview = ""
+                if isinstance(child_element, str):
+                    child_details_preview = f"'{child_element[:50].strip().replace(chr(10), ' ')}...'"
+                elif hasattr(child_element, 'name') and child_element.name:
+                    child_details_preview = f"<{child_element.name}>"
+                else:
+                     child_details_preview = f"Other: {str(child_element)[:50].strip().replace(chr(10), ' ')}..."
+                self.logger.debug(f"WebService _process_html_element: Recursing for child {i+1}/{len(element.contents)} of <{tag_name}> (Type: {child_type}, Preview: {child_details_preview})")
+                await self._process_html_element(
+                    child_element, 
+                    blocks, 
+                    base_url, 
+                    job_id, 
+                    user_id, 
+                    all_raw_images, 
+                    img_idx_counter, 
+                    playwright_image_details_map,
+                    original_request_url
+                )
+            self.logger.debug(f"WebService _process_html_element: Finished recursing for children of <{tag_name}>.")
+        else:
+            self.logger.debug(f"WebService _process_html_element: Element <{tag_name}> has no children to recurse into or 'contents' attribute missing.")
+
+    async def _parse_and_structure_html(
+        self,
+        html_content: str,
+        base_url: str, # URL associated with the html_content
+        original_request_url: str, # The very first URL user provided (for GCS path in RawImageInput & PW)
+        job_id: str,
+        user_id: Optional[str],
+        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]] # Details from Playwright
+    ) -> Tuple[List[PreliminaryBlock], List[RawImageInput]]:
+        
+        preliminary_blocks: List[PreliminaryBlock] = []
+        all_raw_images: List[RawImageInput] = [] # To be populated by _process_html_element
+        img_idx_counter: List[int] = [0] # Mutable int passed by reference
+
+        self.logger.debug(f"WebService _parse_and_structure_html: Input html_content snippet (first 500 chars):\\n{html_content[:500] if html_content else 'None'}")
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        if soup.contents:
+            self.logger.debug(f"WebService _parse_and_structure_html: soup.contents length: {len(soup.contents)}")
+            self.logger.debug(f"WebService _parse_and_structure_html: type(soup.contents[0]): {type(soup.contents[0])}")
+            self.logger.debug(f"WebService _parse_and_structure_html: soup.contents[0] snippet (first 100 chars):\\n{str(soup.contents[0])[:100] if soup.contents[0] else 'None'}")
+        else:
+            self.logger.debug("WebService _parse_and_structure_html: soup.contents is empty.")
+
+        # Determine the main content container to process.
+        # If html_content is from Trafilatura, it's likely already focused.
+        # Otherwise, find common main content tags or fall back to body.
+        # Note: Trafilatura's output might not have a single <article> or <main> if it combines sections.
+        # It often produces a sequence of <p>, <head level="h2">, <graphic>, etc.
+        # So, using soup (which is the Trafilatura output if available) directly might be best.
+        
+        # The root for processing will be the entire soup object derived from main_content_html_to_parse
+        # In _process_html_element, we'll iterate its children.
+        # Children of the root 'soup' object are usually the top-level tags of the parsed document fragment.
+        
+        for child_element in soup.contents: # Iterate over top-level elements in the parsed HTML
+            await self._process_html_element(
+                child_element, 
+                preliminary_blocks, 
+                base_url, # base_url is where html_content came from
+                job_id, 
+                user_id,
+                all_raw_images,
+                img_idx_counter,
+                playwright_image_details_map,
+                original_request_url
+            )
+        
+        # Post-processing: Consolidate adjacent text blocks if necessary
+        # (This logic can be enhanced or moved to ContentStructuringService)
+        consolidated_blocks: List[PreliminaryBlock] = []
+        if preliminary_blocks:
+            current_block = preliminary_blocks[0]
+            for next_block in preliminary_blocks[1:]:
+                current_text_val = getattr(current_block, 'text_content', None)
+                next_text_val = getattr(next_block, 'text_content', None)
+
+                if current_block.type == "text" and next_block.type == "text" and \
+                   current_text_val and next_text_val: 
+                    self.logger.debug(f"Consolidating text block {next_block.block_id} into {current_block.block_id}")
+                    current_block.text_content = current_text_val + " " + next_text_val
+                else:
+                    consolidated_blocks.append(current_block)
+                    current_block = next_block
+            consolidated_blocks.append(current_block) 
+        
+        if len(consolidated_blocks) != len(preliminary_blocks) and consolidated_blocks:
+            self.logger.debug(f"Re-assigning order to {len(consolidated_blocks)} consolidated blocks.")
+            for i, block in enumerate(consolidated_blocks):
+                block.order = i
+        
+        final_blocks = [b for b in consolidated_blocks if not (b.type == "text" and not getattr(b, 'text_content', "").strip())] # Remove empty text blocks
+
+
+        self.logger.info(f"WebService _parse_and_structure_html: Blocks: {len(final_blocks)}, Final Raw Images: {len(all_raw_images)}")
+        return final_blocks, all_raw_images
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
-        request_start_time = time.time()
-        url = web_input.url
-        # job_id for the current operation, used in default objects if error occurs early
-        current_operation_job_id = web_input.job_id or f"web_job_{uuid.uuid4().hex[:8]}"
-        # user_id for the current operation, used in default objects
-        current_operation_user_id = web_input.user_id or "unknown_user_web_service"
-        
-        processing_level = web_input.processing_level
+        start_time = time.time()
+        job_id = web_input.job_id or uuid.uuid4().hex[:12]
+        user_id = web_input.user_id
+        original_request_url = str(web_input.url) # Keep the original requested URL separate
 
-        # Define the default structures specifically for the error_details["original_data"] tuple
-        # These are used if an error occurs very early, before main accumulators are properly set.
-        preliminary_blocks_default: List[PreliminaryBlock] = []
-        raw_images_default: List[RawImageInput] = []
-        document_metadata_default = DocumentMetadata(
-            document_id=current_operation_job_id,
-            user_id=current_operation_user_id,
-            source_identifier=url, # Original input URL
-            source_type='url',
-            final_url=url, # Default final_url to original input URL
-            extracted_at=datetime.utcnow(), # Timestamp of this default object creation
-            custom_fields={"status": "default_metadata_for_early_failure", "job_id_ref": current_operation_job_id}
-        )
+        self.logger.info(f"WebService starting for URL: {original_request_url}, Job ID: {job_id}")
 
-        # Initialize variables that will be part of the successful return tuple
-        preliminary_blocks_list: List[PreliminaryBlock] = []
-        # raw_images_list: List[RawImageInput] = [] # This will be populated from image_details_lookup based on used images
-        # Corrected: raw_images_list needs to be what the execute function ultimately returns.
-        # It will be derived from the full scan by _extract_images_from_html, then filtered.
-        # Let's keep its initialization here, and it will be assigned the final list of *used* images later.
-        final_raw_images_to_return_from_execute: List[RawImageInput] = []
+        fetched_content: Optional[str] = None
+        final_url_after_redirects = original_request_url # Initialize with original, update after fetch
+        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]] = None
 
-        html_content_str: Optional[str] = None
-        final_url_val: str = web_input.url # Start with input URL, will be updated by redirects if fetch occurs
-        pdf_bytes_val: Optional[bytes] = None
-        temp_pdf_file_path: Optional[str] = None
-
-        # --- Cache Check ---
-        current_time = time.time()
-        if web_input.url in self.html_cache:
-            cached_html, fetch_time = self.html_cache[web_input.url]
-            if (current_time - fetch_time) < self.cache_ttl_seconds:
-                self.logger.info(f"HTML cache HIT for {web_input.url}")
-                html_content_str = cached_html
-                # final_url_val remains 'url' (original input) if from cache
-            else:
-                self.logger.info(f"HTML cache STALE for {web_input.url}")
-                del self.html_cache[web_input.url]
-
-        # --- If cache miss or stale, proceed to fetch and then process ---
-        if html_content_str is None: 
-            self.logger.info(f"HTML cache MISS for {web_input.url}. Fetching...")
-            
-            normalized_url = web_input.url 
-            if normalized_url.startswith("chrome-extension://"):
-                match = re.search(r"(https?:\\\\/\\\\/[^\\\\s]+)", normalized_url)
-                if match:
-                    normalized_url = match.group(1)
-                else:
-                    return ServiceResult.failure(
-                        error_message=f"Cannot fetch local file from chrome-extension URL: {web_input.url}",
-                        error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
-                    )
-            
-            parsed_normalized_url = urlparse(normalized_url)
-            if not parsed_normalized_url.scheme:
-                if parsed_normalized_url.netloc or (parsed_normalized_url.path and '.' in parsed_normalized_url.path.split('/')[0]):
-                    normalized_url = f"https://{normalized_url}"
-                else:
-                     return ServiceResult.failure(
-                        error_message=f"Invalid URL format (cannot determine scheme): {web_input.url}",
-                        error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
-                    )
-            elif parsed_normalized_url.scheme not in ["http", "https"]:
-                return ServiceResult.failure(
-                    error_message=f"Unsupported URL scheme '{parsed_normalized_url.scheme}' in URL: {normalized_url}",
-                    error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)}
-                )
-
-            try: # This try is for the network fetching part
-                parsed_url_for_domain_check = urlparse(normalized_url) # Use normalized for domain checks
-                if not all([parsed_url_for_domain_check.scheme, parsed_url_for_domain_check.netloc]):
-                     return ServiceResult.failure(error_message=f"Invalid URL format after normalization: {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-
-                domain = self._get_domain(normalized_url)
-                if self._check_domain_in_set(domain, UNSUPPORTED_URL_TYPE_DOMAINS):
-                    is_allowed_social = any(re.search(pattern, normalized_url, re.IGNORECASE) for pattern in ALLOWED_SOCIAL_MEDIA_POST_PATTERNS)
-                    if not is_allowed_social:
-                        return ServiceResult.failure(error_message=f"Unsupported domain: {domain} in URL: {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-
-                async with aiohttp.ClientSession() as session:
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    }
-                    async with session.get(normalized_url, timeout=30, allow_redirects=True, headers=headers) as response:
-                        final_url_val = str(response.url) # Update final_url_val after actual fetch
-                        # Use document_metadata_default here as document_metadata_obj might not be fully initialized yet
-                        document_metadata_default.final_url = final_url_val 
-
-                        if response.status != 200:
-                            return ServiceResult.failure(error_message=f"HTTP error {response.status} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-
-                        content_type = response.headers.get('Content-Type', '').lower()
-                        if 'application/pdf' in content_type:
-                            pdf_bytes_val = await response.read()
-                        elif 'text/html' in content_type or 'application/xhtml+xml' in content_type or not content_type:
-                            html_content_str = await response.text()
-                            if html_content_str: # Store non-empty HTML in cache
-                                self.html_cache[web_input.url] = (html_content_str, time.time()) # Use original 'url' as key
-                                self.logger.info(f"Stored HTML in cache for {web_input.url}")
-                        else:
-                            return ServiceResult.failure(error_message=f"Unsupported content type: {content_type} for URL: {final_url_val}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-            
-            except aiohttp.ClientError as e_net:
-                return ServiceResult.failure(error_message=f"Network/HTTP error fetching URL {normalized_url}: {str(e_net)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-            except asyncio.TimeoutError:
-                return ServiceResult.failure(error_message=f"Timeout fetching URL {normalized_url}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-            except Exception as e_fetch_prep: # Catch other errors during pre-fetch or fetch setup
-                return ServiceResult.failure(error_message=f"Error during URL fetch preparation for {web_input.url}: {str(e_fetch_prep)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-        
-        # --- Content Processing (PDF or HTML) ---
-        # This block executes if html_content_str was from cache OR successfully fetched and set.
-        # Or if pdf_bytes_val was set.
         try:
-            if pdf_bytes_val: # final_url_val would have been updated if fetch occurred
-                # --- Route to PDFAcquisitionService ---
+            # Step 1: Fetch initial HTML content using httpx
+            async with httpx.AsyncClient(timeout=self.httpx_timeout, headers=self.headers, follow_redirects=True) as client:
                 try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-                        tmpfile.write(pdf_bytes_val)
-                        temp_pdf_file_path = tmpfile.name
-                    
-                    pdf_acq_service = PDFAcquisitionService(settings=self.settings) # Assuming settings can be passed
-                    pdf_acq_input = PDFAcquisitionServiceInput(
-                        file_path=temp_pdf_file_path,
-                        processing_level=web_input.processing_level,
-                        job_id=current_operation_job_id, # Use current_operation_job_id
-                        user_id=current_operation_user_id # Use current_operation_user_id
-                    )
-                    pdf_service_result = await pdf_acq_service.execute(pdf_acq_input)
-
-                    if pdf_service_result.success and pdf_service_result.data:
-                        preliminary_blocks_list, pdf_doc_metadata, raw_images_list = pdf_service_result.data
-                        
-                        # Merge DocumentMetadata: Keep original web URL, update with PDF specific info if valuable
-                        # The document_metadata_obj is already initialized with web source info.
-                        # We can enrich it with PDF-specific metadata if needed.
-                        if document_metadata_default and pdf_doc_metadata:
-                            document_metadata_default.title = pdf_doc_metadata.title or document_metadata_default.title
-                            document_metadata_default.author = pdf_doc_metadata.author or document_metadata_default.author
-                            document_metadata_default.subject = pdf_doc_metadata.subject or document_metadata_default.subject
-                            document_metadata_default.keywords = pdf_doc_metadata.keywords or document_metadata_default.keywords
-                            document_metadata_default.creation_date = pdf_doc_metadata.creation_date or document_metadata_default.creation_date
-                            document_metadata_default.modification_date = pdf_doc_metadata.modification_date or document_metadata_default.modification_date
-                            document_metadata_default.total_pages = pdf_doc_metadata.total_pages
-                            # Ensure source_identifier remains the original URL, source_type 'url'
-                            document_metadata_default.source_type = "pdf_from_url" # Or keep as 'url' and add custom field? Let's mark as pdf_from_url
-                        
-                        # Job ID in PreliminaryBlocks and RawImageInput from PDFAcquisitionService should already be set
-                        # based on the job_id passed to it.
-
-                    else: # PDF service failed
-                        error_msg = f"PDFAcquisitionService failed for PDF from URL {final_url_val}: {pdf_service_result.error_message if pdf_service_result else 'Unknown error'}"
-                        if document_metadata_default:
-                            document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
-                            document_metadata_default.custom_fields["pdf_processing_error"] = error_msg
-                        return ServiceResult.failure(error_message=error_msg, error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-
-                except Exception as e_pdf_route:
-                    # self.logger.error(f"Error routing PDF from {final_url_val} to PDFAcquisitionService: {e_pdf_route}", exc_info=True) # Optional logging
-                    if document_metadata_default:
-                        document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
-                        document_metadata_default.custom_fields["pdf_processing_error"] = f"Routing/Tempfile error: {str(e_pdf_route)}"
-                    return ServiceResult.failure(error_message=f"Error processing PDF from URL {final_url_val} via PDFAcquisitionService: {str(e_pdf_route)}", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
-                finally:
-                    if temp_pdf_file_path and os.path.exists(temp_pdf_file_path):
+                    response = await client.get(original_request_url)
+                    response.raise_for_status()
+                    fetched_content_bytes = response.content
+                    final_url_after_redirects = str(response.url)
+                    try:
+                        fetched_content = fetched_content_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
                         try:
-                            os.remove(temp_pdf_file_path)
-                        except Exception as e_remove:
-                            # self.logger.warning(f"Could not remove temporary PDF file {temp_pdf_file_path}: {e_remove}") # Optional logging
-                            pass
-                # --- End Routing to PDFAcquisitionService ---
-
-            elif html_content_str and final_url_val:
-                # --- Start Trafilatura Integration ---
-                main_content_html_snippet_by_trafilatura: Optional[str] = None
-                is_trafilatura_content_available = False
-                loop = asyncio.get_event_loop()
-                try:
-                    self.logger.info(f"Attempting main content HTML extraction with Trafilatura for {final_url_val}")
-                    # Use run_in_executor for the synchronous trafilatura call
-                    main_content_html_snippet_by_trafilatura = await loop.run_in_executor(
-                        None, # Default thread pool executor
-                        functools.partial(
-                            trafilatura.extract,
-                            html_content_str,
-                            url=final_url_val,
-                            output_format='xml', # Get structured HTML/XML
-                            include_tables=True,
-                            include_comments=False,
-                            deduplicate=True, # Set deduplicate to True
-                            favor_recall=True, # Add favor_recall=True
-                            include_images=True # Ensure images are included in Trafilatura output
-                            # config=trafilatura.settings.use_config() # Consider if custom config is needed or default is better
-                        )
-                    )
-                    if main_content_html_snippet_by_trafilatura:
-                        # Check for substantial content beyond just structural tags
-                        temp_soup_for_text_check = BeautifulSoup(main_content_html_snippet_by_trafilatura, 'lxml')
-                        extracted_text_check = temp_soup_for_text_check.get_text(strip=True)
-                        min_substantial_text_length = 250 # Define a threshold for "substantial"
-
-                        if len(extracted_text_check) >= min_substantial_text_length:
-                            self.logger.info(f"Trafilatura successfully extracted a substantial HTML snippet (text length: {len(extracted_text_check)}, snippet length: {len(main_content_html_snippet_by_trafilatura)}). Preview: {main_content_html_snippet_by_trafilatura[:200]}...")
-                            is_trafilatura_content_available = True
-                        else:
-                            self.logger.info(f"Trafilatura snippet's text content (length: {len(extracted_text_check)}) is below threshold ({min_substantial_text_length}). Snippet length {len(main_content_html_snippet_by_trafilatura)}. Will use BS4 fallback.")
-                            main_content_html_snippet_by_trafilatura = None # Ensure it's None to trigger fallback
-                            is_trafilatura_content_available = False # Explicitly set to false
-                    else:
-                        self.logger.info(f"Trafilatura returned empty snippet. Will use BS4 fallback.")
-                        main_content_html_snippet_by_trafilatura = None # Ensure it's None if not substantial
-                        is_trafilatura_content_available = False # Explicitly set to false
-                except Exception as e_traf:
-                    self.logger.error(f"Trafilatura extraction failed for {final_url_val}: {e_traf}", exc_info=True)
-                    main_content_html_snippet_by_trafilatura = None # Ensure it's None on error
-                # --- End Trafilatura Integration ---
-
-                # Paywall check should still happen on original full HTML
-                soup_for_paywall_check = BeautifulSoup(html_content_str, 'lxml')
-                is_paywalled = False
-                if self._check_domain_in_set(self._get_domain(final_url_val), VERY_STRICT_PAYWALL_DOMAINS): # Use final_url_val
-                    is_paywalled = True 
-                else:
-                    for selector in PAYWALL_HTML_SELECTORS:
-                        if soup_for_paywall_check.select_one(selector): # Use soup_for_paywall_check
-                            is_paywalled = True; break
-                    if not is_paywalled:
-                        text_lower_for_paywall = html_content_str.lower() # Use html_content_str
-                        if any(keyword in text_lower_for_paywall for keyword in PAYWALL_KEYWORDS): # Use text_lower_for_paywall
-                            is_paywalled = True
+                            fetched_content = fetched_content_bytes.decode('latin-1')
+                        except UnicodeDecodeError:
+                            self.logger.error(f"Failed to decode content from {final_url_after_redirects} with utf-8 or latin-1.")
+                            # Fallback to Trafilatura's internal fetch if primary decoding fails
+                            fetched_content = await self._fetch_content_with_trafilatura(original_request_url)
+                            if fetched_content is None:
+                                return ServiceResult.failure(f"Failed to fetch or decode content from {original_request_url}")
                 
-                if is_paywalled and document_metadata_default:
-                    document_metadata_default.custom_fields = document_metadata_default.custom_fields or {}
-                    document_metadata_default.custom_fields["paywall_detected"] = True
-                
-                # Determine what HTML to pass for parsing
-                html_for_parsing: str
-                if is_trafilatura_content_available and main_content_html_snippet_by_trafilatura:
-                    html_for_parsing = main_content_html_snippet_by_trafilatura
-                else:
-                    html_for_parsing = html_content_str # Fallback to full original HTML
+                except httpx.RequestError as e_httpx:
+                    self.logger.error(f"HTTPX request failed for {original_request_url}: {e_httpx}", exc_info=True)
+                    return ServiceResult.failure(f"Request failed for {original_request_url}: {e_httpx}")
+                except httpx.HTTPStatusError as e_http_status:
+                     self.logger.error(f"HTTP Error {e_http_status.response.status_code} for {original_request_url}: {e_http_status}", exc_info=True)
+                     return ServiceResult.failure(f"HTTP Error {e_http_status.response.status_code} for {original_request_url}")
 
-                preliminary_blocks_list, document_metadata_obj, raw_images_list = await self._parse_and_structure_html(
-                    html_to_parse=html_for_parsing,
-                    is_trafilatura_content=is_trafilatura_content_available, # Pass the flag
-                    full_html_content_for_metadata_and_images=html_content_str, # Always pass original full HTML for metadata/images
-                    final_url=final_url_val,
-                    job_id=current_operation_job_id, # Pass current_operation_job_id
-                    user_id=web_input.user_id, # Pass user_id here
-                    processing_level=processing_level
-                )
+            if not fetched_content:
+                 return ServiceResult.failure(f"No content fetched from {original_request_url}")
+
+            # Step 2: (Optional) Get image details using Playwright from the ORIGINAL URL
+            if self.service_settings.use_playwright_for_image_filtering:
+                self.logger.debug(f"Playwright enabled. Fetching image details for original URL: {original_request_url}")
+                # Pass original_request_url as base_url_for_resolution as well, since PW loads this directly.
+                playwright_image_details_map = await self._get_playwright_image_details(original_request_url, original_request_url)
+            
+            # Step 3: Extract main content using Trafilatura
+            # Trafilatura should operate on the full fetched_content from final_url_after_redirects
+            main_content_html_trafilatura = trafilatura.extract(
+                fetched_content, 
+                url=final_url_after_redirects, # Tell Trafilatura the base URL of this content
+                output_format='xml',  # Explicitly request XML output
+                include_links=True,
+                include_images=True, # Important for getting <graphic> tags
+                include_comments=self.service_settings.trafilatura_include_comments,
+                include_tables=self.service_settings.trafilatura_include_tables,
+                favor_recall=self.service_settings.trafilatura_favor_recall,
+                deduplicate=self.service_settings.trafilatura_deduplicate,
+                config=self.trafilatura_config
+            )
+
+            if main_content_html_trafilatura:
+                self.logger.debug(f"WebService execute: Trafilatura output type: {type(main_content_html_trafilatura)}, Length: {len(main_content_html_trafilatura)}")
+                self.logger.debug(f"WebService execute: Trafilatura output snippet (first 500 chars):\\n{main_content_html_trafilatura[:500]}")
             else:
-                # Should not happen if fetching was successful and content type was one of the above
-                return ServiceResult.failure(error_message="No content (HTML or PDF) to process after fetching.", error_details={"original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default)})
+                self.logger.debug("WebService execute: Trafilatura output is None or empty.")
 
-            processing_duration = time.time() - request_start_time # Corrected start_time variable
-            if document_metadata_default: # Changed from document_metadata_obj
-                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {} # Changed from document_metadata_obj
-                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3) # Changed from document_metadata_obj
+            # Determine what HTML to parse: Trafilatura's output if available, else full page
+            main_content_html_to_parse = main_content_html_trafilatura if main_content_html_trafilatura else fetched_content
+            if not main_content_html_trafilatura:
+                 self.logger.warning(f"Trafilatura extracted no main content from {final_url_after_redirects}. Using full fetched_content as fallback for parsing.")
+            else:
+                self.logger.debug(f"Trafilatura extracted main content. Length: {len(main_content_html_trafilatura)}") # Original log, good for comparison
+
+            # Step 4: Extract metadata (e.g., title) from the FULL original page
+            soup_full_page = BeautifulSoup(fetched_content, 'html.parser')
+            title_tag = soup_full_page.find('title')
+            page_title = title_tag.string.strip() if title_tag and title_tag.string else None
+
+            if not page_title and main_content_html_trafilatura: # Try title from Trafilatura's main content if full page lacks it
+                soup_trafilatura_content = BeautifulSoup(main_content_html_trafilatura, 'html.parser')
+                # Trafilatura often puts title in <head><title> or as first <head level="h1">
+                # Let's check for h1 in Trafilatura output as a common pattern.
+                h1_tag_traf = soup_trafilatura_content.find('h1') # General h1
+                if not h1_tag_traf: # Trafilatura also uses <head type="title"> or <head level="h1">
+                    head_tag_traf = soup_trafilatura_content.find('head', {'level': ['h1', 'title']})
+                    if head_tag_traf: page_title = head_tag_traf.get_text(strip=True)
+                elif h1_tag_traf:
+                     page_title = h1_tag_traf.get_text(strip=True)
+
+
+            if not page_title: # Fallback title
+                 page_title = os.path.basename(urlparse(final_url_after_redirects).path) or "Untitled Webpage"
+
+            document_metadata = DocumentMetadata(
+                document_id=job_id,
+                user_id=user_id or f"unknown_user_ws_{job_id}",
+                source_identifier=original_request_url, # The URL user initially provided
+                source_type="web",
+                title=page_title,
+                extracted_at=datetime.utcnow(),
+                url_resolved=final_url_after_redirects
+            )
             
-            # Ensure preliminary_blocks are sorted by order before returning
-            preliminary_blocks_list.sort(key=lambda b: b.order)
+            # Step 5: Parse the chosen HTML content and structure it, integrating Playwright details
+            preliminary_blocks, raw_images = await self._parse_and_structure_html(
+                html_content=main_content_html_to_parse, # This is key: parse Trafilatura's output
+                base_url=final_url_after_redirects,    # Base for resolving relative links in the parsed HTML
+                original_request_url=original_request_url, # For GCS paths and if PW needs to re-resolve
+                job_id=job_id,
+                user_id=user_id,
+                playwright_image_details_map=playwright_image_details_map
+            )
             
-            # Filter boilerplate text blocks AFTER all blocks (including images) have been ordered
-            if preliminary_blocks_list: # Only filter if there are any blocks
-                self.logger.debug(f"Calling _filter_boilerplate_preliminary_blocks with {len(preliminary_blocks_list)} blocks.")
-                preliminary_blocks_list = self._filter_boilerplate_preliminary_blocks(preliminary_blocks_list, final_url_val)
-                self.logger.debug(f"After _filter_boilerplate_preliminary_blocks, {len(preliminary_blocks_list)} blocks remaining.")
+            duration = time.time() - start_time
+            self.logger.info(f"WebService execution for {original_request_url} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
+            
+            if not preliminary_blocks and not raw_images:
+                self.logger.warning(f"No content blocks or images were extracted for {original_request_url}. Trafilatura output length: {len(main_content_html_trafilatura or '')}. Full page length: {len(fetched_content)}.")
+                # Consider if this should be a failure or an empty success
+                # For now, let it proceed as success with empty content, Orchestrator might flag it.
 
-            # document_metadata_obj is returned by _parse_and_structure_html
-            # raw_images_list is also returned by _parse_and_structure_html, containing ONLY used images.
-            return ServiceResult.success(data=(preliminary_blocks_list, document_metadata_obj, raw_images_list))
+            return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
 
-        except Exception as e_process: # Catch errors from PDF routing or HTML parsing/structuring
-            processing_duration = time.time() - request_start_time # Corrected start_time variable
-            if document_metadata_default: # Changed from document_metadata_obj
-                 document_metadata_default.custom_fields = document_metadata_default.custom_fields or {} # Changed from document_metadata_obj
-                 document_metadata_default.custom_fields["web_processing_duration_seconds"] = round(processing_duration, 3) # Changed from document_metadata_obj
-                 document_metadata_default.custom_fields["error"] = f"ContentProcessingError: {str(e_process)}" # Changed from document_metadata_obj
-            self.logger.exception(f"WEB_SERVICE_CONTENT_PROCESSING_ERROR for {final_url_val}", exc_info=True) # Use logger.exception for traceback
+        except Exception as e_main:
+            duration = time.time() - start_time
+            self.logger.error(f"WebService failed for {original_request_url} in {duration:.2f}s: {e_main}", exc_info=True)
             return ServiceResult.failure(
-                error_message=f"WEB_SERVICE_CONTENT_PROCESSING_ERROR: {type(e_process).__name__} for {final_url_val}. Details: {str(e_process)}",
-                error_details={
-                    "original_url": web_input.url,
-                    "final_url_at_failure": final_url_val,
-                    "exception_type": type(e_process).__name__,
-                    "original_data": (preliminary_blocks_default, document_metadata_default, raw_images_default) # raw_images_default here is correct for failure
-                }
+                error_message=f"Failed to process URL {original_request_url}: {str(e_main)}",
+                error_details={"url": original_request_url, "duration_seconds": duration}
             )
