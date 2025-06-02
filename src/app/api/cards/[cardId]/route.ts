@@ -1,63 +1,40 @@
-// console.log('[[CARDS ROUTE MODULE LOAD]] src/app/api/cards/[cardId]/route.ts loaded');
+// console.log('[CARDS ROUTE MODULE LOAD] src/app/api/cards/[cardId]/route.ts loaded');
 
 import { NextRequest, NextResponse } from 'next/server';
-// import { getServerSession } from 'next-auth/next'; // Remove unused
-// import { authOptions } from '@/lib/auth'; // Remove unused
-import { z } from 'zod';
-// import { Prisma } from '@prisma/client'; // Remove unused
-import { getServerSession } from 'next-auth/next'; // Keep for actual auth
-import { authOptions } from '@/lib/auth'; // Keep for actual auth
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import {
   getCardLogic,
   updateCardLogic,
   deleteCardLogic,
-  UpdateCardData, // Assuming this DTO is defined in cardService.ts
-  // ServiceResult, // Not needed directly in route if just passing through
-} from '@/lib/services/cardService';
-import { CardContentSchema } from '@/lib/validators/editorValidators'; // Import CardContentSchema
+  UpdateCardData,
+} from '@/lib/services/cardService'; // Restored
+import { CardContentSchema } from '@/lib/validators/editorValidators'; // Restored
+import { z } from 'zod'; // Added for Zod
+// import type { UpdateCardRequest, KnowledgeCardResponse } from '@/types/api/ai-service'; // This seems like a leftover from AI services, not directly used by card CRUD. Keeping commented.
 
-// Helper function for test authentication
-async function getRouteHandlerUserId(
-  request: NextRequest,
-): Promise<string | null> {
-  // console.log(`[getRouteHandlerUserId] APP_ENV: ${process.env.APP_ENV}`); // Keep for now if helpful
-  if (process.env.APP_ENV === 'test') {
-    const testUserId = request.headers.get('X-Test-User-Id');
-    // console.log(`[getRouteHandlerUserId] Test mode. X-Test-User-Id header: ${testUserId}`);
-    if (testUserId) {
-      if (testUserId === 'null') return null;
-      return testUserId;
-    }
-  }
-  const session = await getServerSession(authOptions);
-  return session?.user?.id ?? null;
-}
+// Removed getRouteHandlerUserId as direct session check is used
 
-// interface RouteParams { // This interface will be removed
-//   params: Promise<{ cardId: string }>;
-// }
-
-// Schema for validating route parameters (params object directly)
 const CardIdParamsSchema = z.object({
+  // Restored
   cardId: z.string().cuid({ message: 'Invalid card ID format' }),
 });
 
-// Schema for validating the update request body (PATCH/PUT)
-// Allow partial updates: title, content, or folderId
-const UpdateCardSchema = z
+const UpdateCardBodySchema = z // Restored & Renamed for clarity
   .object({
     title: z
       .string()
       .min(1, { message: 'Title cannot be empty' })
       .trim()
       .optional(),
-    content: CardContentSchema.optional(), // Use CardContentSchema for content validation
+    content: CardContentSchema.optional(),
     folderId: z
       .string()
       .cuid({ message: 'Invalid folder ID format.' })
       .optional()
-      .nullable(), // Reverted to CUID check for folderId
-    tags: z.array(z.string().trim().min(1)).optional(), // Ensure tags are non-empty strings if array is provided
+      .nullable(),
+    tags: z.array(z.string().trim().min(1)).optional(),
+    // isStarred, isPublic, isArchived could be added here if they are updatable via this route
   })
   .partial()
   .refine((data) => Object.keys(data).length > 0, {
@@ -65,128 +42,198 @@ const UpdateCardSchema = z
       'At least one field (title, content, folderId, tags) must be provided for update',
   });
 
-// --- GET Handler (Get Specific Card) ---
+// interface RouteContext { // Not explicitly needed as Next.js infers it with { params }
+//   params: {
+//     cardId: string;
+//   };
+// }
+
+// GET /api/cards/[cardId] (Get a single card)
 export async function GET(
-  request: NextRequest,
-  context: { params: Promise<{ cardId: string }> },
-) {
-  // console.log('[[CARDS ROUTE DEBUG]] GET /api/cards/[cardId] HANDLER ENTERED');
-  const resolvedParams = await context.params;
-  const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
-
-  if (!paramsValidation.success) {
-    // console.error('[GET /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
-    return NextResponse.json(
-      {
-        error: 'Invalid card ID format',
-        details: paramsValidation.error.format(),
-      },
-      { status: 400 },
-    );
-  }
-  const { cardId } = paramsValidation.data;
-  const userId = await getRouteHandlerUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const result = await getCardLogic(cardId, userId);
-  if (result.success) {
-    return NextResponse.json(result.data, { status: result.status });
-  } else {
-    return NextResponse.json(
-      { error: result.error, details: result.details },
-      { status: result.status || 500 },
-    );
-  }
-}
-
-// --- PUT Handler (Update Specific Card) ---
-export async function PUT(
   req: NextRequest,
-  context: { params: Promise<{ cardId: string }> },
+  { params }: { params: { cardId: string } },
 ) {
-  const resolvedParams = await context.params;
-  const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
-
-  if (!paramsValidation.success) {
-    // console.error('[PUT /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
-    return NextResponse.json(
-      {
-        error: 'Invalid card ID format',
-        details: paramsValidation.error.format(),
-      },
-      { status: 400 },
-    );
-  }
-  const { cardId } = paramsValidation.data;
-  const userId = await getRouteHandlerUserId(req);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  let validatedBody: UpdateCardData;
   try {
-    const body = await req.json();
-    const validationResult = UpdateCardSchema.safeParse(body);
-    if (!validationResult.success) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user.id;
+
+    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    if (!paramsValidation.success) {
       return NextResponse.json(
         {
-          error: 'Validation failed',
-          details: validationResult.error.flatten().fieldErrors,
+          error: 'Invalid card ID format',
+          details: paramsValidation.error.flatten().fieldErrors,
         },
         { status: 400 },
       );
     }
-    validatedBody = validationResult.data as UpdateCardData;
-  } catch {
+    const { cardId } = paramsValidation.data;
+
+    // console.log(`API /cards/${cardId} (GET) called by user ${userId}`); // Debug logging
+
+    const result = await getCardLogic(cardId, userId);
+
+    if (!result.success || !result.data) {
+      return NextResponse.json(
+        { error: result.error || 'Card not found or access denied' },
+        { status: result.status || 404 },
+      );
+    }
+    // On success, return only the card data.
+    return NextResponse.json(result.data);
+  } catch (error) {
+    console.error(`Error in /cards/[cardId] (GET):`, error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'An unknown error occurred';
+    // Check for ZodError for more specific client messages if needed
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: error.flatten().fieldErrors },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
-      { error: 'Invalid request body' },
-      { status: 400 },
-    );
-  }
-  const result = await updateCardLogic(cardId, userId, validatedBody);
-  if (result.success) {
-    return NextResponse.json(result.data, { status: result.status });
-  } else {
-    return NextResponse.json(
-      { error: result.error, details: result.details },
-      { status: result.status || 500 },
+      { error: 'Failed to fetch card.', details: errorMessage },
+      { status: 500 },
     );
   }
 }
 
-// --- DELETE Handler (Delete Specific Card) ---
-export async function DELETE(
-  request: NextRequest,
-  context: { params: Promise<{ cardId: string }> },
+// PUT /api/cards/[cardId] (Update a card)
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: { cardId: string } },
 ) {
-  const resolvedParams = await context.params;
-  const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams);
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user.id;
 
-  if (!paramsValidation.success) {
-    // console.error('[DELETE /api/cards/[cardId]] Params validation failed:', paramsValidation.error.format()); // Reduced logging
+    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    if (!paramsValidation.success) {
+      return NextResponse.json(
+        {
+          error: 'Invalid card ID format',
+          details: paramsValidation.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+    const { cardId } = paramsValidation.data;
+
+    let rawBody;
+    try {
+      rawBody = await req.json();
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_) {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const bodyValidation = UpdateCardBodySchema.safeParse(rawBody);
+    if (!bodyValidation.success) {
+      return NextResponse.json(
+        {
+          error: 'Validation failed',
+          details: bodyValidation.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+    const validatedBody = bodyValidation.data as UpdateCardData;
+
+    // console.log(`API /cards/${cardId} (PUT) called by user ${userId} with body:`, validatedBody); // Debug logging
+
+    const result = await updateCardLogic(cardId, userId, validatedBody);
+
+    if (!result.success || !result.data) {
+      return NextResponse.json(
+        { error: result.error || 'Failed to update card or card not found' },
+        {
+          status:
+            result.status || (result.error?.includes('not found') ? 404 : 500),
+        },
+      );
+    }
+    // On success, return only the updated card data.
+    return NextResponse.json(result.data);
+  } catch (error) {
+    console.error(`Error in /cards/[cardId] (PUT):`, error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'An unknown error occurred';
+    if (error instanceof z.ZodError) {
+      // Catch Zod errors from body parsing if not caught earlier or service re-throws
+      return NextResponse.json(
+        { error: 'Validation failed', details: error.flatten().fieldErrors },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
-      {
-        error: 'Invalid card ID format',
-        details: paramsValidation.error.format(),
-      },
-      { status: 400 },
+      { error: 'Failed to update card.', details: errorMessage },
+      { status: 500 },
     );
   }
-  const { cardId } = paramsValidation.data;
-  const userId = await getRouteHandlerUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  const result = await deleteCardLogic(cardId, userId);
-  if (result.success) {
+}
+
+// DELETE /api/cards/[cardId] (Delete a card)
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { cardId: string } },
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user.id;
+
+    const paramsValidation = CardIdParamsSchema.safeParse(params);
+    if (!paramsValidation.success) {
+      return NextResponse.json(
+        {
+          error: 'Invalid card ID format',
+          details: paramsValidation.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+    const { cardId } = paramsValidation.data;
+
+    // console.log(`API /cards/${cardId} (DELETE) called by user ${userId}`); // Debug logging
+
+    const result = await deleteCardLogic(cardId, userId);
+
+    if (!result.success) {
+      return NextResponse.json(
+        {
+          error: result.error || 'Failed to delete card',
+          details: result.details,
+        },
+        { status: result.status || 404 },
+      );
+    }
+    // If deleteCardLogic returns a success payload (even if data is minimal/just an ID or null)
     return NextResponse.json(
       { message: 'Card deleted successfully' },
-      { status: result.status },
+      { status: 200 },
     );
-  } else {
+  } catch (error) {
+    console.error(`Error in /cards/[cardId] (DELETE):`, error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'An unknown error occurred';
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: error.flatten().fieldErrors },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
-      { error: result.error, details: result.details },
-      { status: result.status || 500 },
+      { error: 'Failed to delete card.', details: errorMessage },
+      { status: 500 },
     );
   }
 }

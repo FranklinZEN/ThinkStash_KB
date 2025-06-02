@@ -17,6 +17,32 @@ console.log('[vitest.setup.ts] Initializing global __PRISMA_INSTANCE__ mock...')
 (globalThis as any).__PRISMA_INSTANCE__ = createMockedPrismaClient();
 console.log('[vitest.setup.ts] Global __PRISMA_INSTANCE__ mock initialized.');
 
+// !!! --- TOP LEVEL FETCH MOCK --- !!!
+// Try to catch any fetch call happening during setup
+const originalGlobalFetch = global.fetch;
+global.fetch = vi.fn((...args) => {
+  console.log('!!! GLOBAL FETCH MOCK CALLED (top of vitest.setup.ts) !!!', args);
+  // Return a generic successful response to prevent hanging
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: async () => ({ mockResponse: true }),
+    text: async () => 'mocked text response',
+    headers: new Headers(),
+    clone: function() { return this; }, // Add clone method
+    arrayBuffer: async () => new ArrayBuffer(0),
+    blob: async () => new Blob(),
+    formData: async () => new FormData(),
+    redirect: function() { return this; }, // Add redirect method
+    type: 'basic', // Add type property
+    url: args[0] instanceof Request ? args[0].url : String(args[0]), // Add url property
+    statusText: 'OK', // Add statusText
+    body: null, // Add body
+    bodyUsed: false, // Add bodyUsed
+  } as unknown as Response);
+});
+// !!! --- END TOP LEVEL FETCH MOCK --- !!!
+
 // ---- GCS Mocking ----
 // Centralized mock for the GCS utility module, using functions from apiTestSetup
 // This runs in the correct Vitest context (before each test file).
@@ -51,7 +77,7 @@ declare global {
 // However, for resetting handlers, this is standard.
 beforeAll(() => {
   console.log('[vitest.setup.ts] MSW mswServer.listen() called for a test file.');
-  mswServer.listen({ onUnhandledRequest: 'bypass' });
+  mswServer.listen({ onUnhandledRequest: 'warn' });
 });
 
 // Reset any request handlers that may be added during the tests,
