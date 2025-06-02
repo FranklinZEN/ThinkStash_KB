@@ -215,8 +215,8 @@ class ParallelOrchestrator(BaseService):
         # Calculate is_long_article
         total_char_count = 0
         for block in final_content_blocks:
-            if block.type == "text" and block.text_content:
-                total_char_count += len(block.text_content)
+            if block.type == "text" and block.content:
+                total_char_count += len(block.content)
         
         # User-defined threshold for long article
         long_article_threshold = 20000  # As per user specification

@@ -1,59 +1,168 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi.concurrency import run_in_threadpool # Added for non-blocking execution
 from typing import List, Optional
 
 # Pydantic Models for request/response bodies
 from aiservice.app.models.insight_generation_models import (
     RewriteContentInput, RewriteContentOutput,
-    GenerateTitleInput, GenerateTitleOutput,
-    GenerateKeywordsInput, GenerateKeywordsOutput,
     TitleGenerationRequest, TitleGenerationResponse,
     KeywordExtractionRequest, KeywordExtractionResponse
 )
-from aiservice.app.models.orchestration_models import ContentBlock # For type hinting in crew results
+from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationInput, OrchestrationOutput # Added OrchestrationInput, OrchestrationOutput
 
-# LLM Configuration
-from aiservice.app.config.llm_config import get_configured_llm
+# LLM Configuration - This might be handled within the crew/agents now
+# from aiservice.app.config.llm_config import get_configured_llm # Commented out as manager should handle LLM
 
 # Crews
-from aiservice.app.crews.content_rewrite_crew import ContentRewriteCrew
+from aiservice.app.crews.content_rewrite_crew import ContentRewriteCrewManager # Changed import
 from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew as TitleGenerationCrew
 from aiservice.app.crews.keyword_extraction_crew import GeneralPurposeKeywordExtractionCrew
 
+# Settings and Services for Orchestrator
+from aiservice.app.config.settings import Settings
+from aiservice.app.services.orchestrator import ParallelOrchestrator
+from aiservice.app.services.routing_service import RoutingService
+from aiservice.app.services.acquisition.web_service import WebAcquisitionService
+from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService
+from aiservice.app.services.acquisition.file_service import FileAcquisitionService
+from aiservice.app.services.processing.image_processing_service import ImageProcessingService
+from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
+# TODO: Check if any of the above services require additional tool imports for their instantiation if not using DI
+
 router = APIRouter()
 
+# --- Dependency Provider for Settings (Example, can be expanded for other services) ---
+# This is a more robust way to handle dependencies like settings.
+# For now, we will instantiate directly in the endpoint for simplicity,
+# but this is a good pattern for future refactoring.
+# async def get_settings() -> Settings:
+# return Settings()
+
+async def get_orchestrator() -> ParallelOrchestrator:
+    settings = Settings()
+    # Instantiate all services needed by ParallelOrchestrator
+    # This assumes these services can be instantiated simply with settings or no args
+    # This might need adjustment if services have more complex dependencies
+    routing_s = RoutingService(settings=settings)
+    web_acq_s = WebAcquisitionService(settings=settings)
+    pdf_acq_s = PDFAcquisitionService(settings=settings) # Assuming PDF service init
+    file_acq_s = FileAcquisitionService(settings=settings) # Assuming File service init
+    img_proc_s = ImageProcessingService(settings=settings)
+    content_struct_s = ContentStructuringService(settings=settings) # Assuming Content Structuring service init
+    
+    return ParallelOrchestrator(
+        routing_service=routing_s,
+        web_acquisition_service=web_acq_s,
+        pdf_acquisition_service=pdf_acq_s,
+        file_acquisition_service=file_acq_s,
+        image_processing_service=img_proc_s,
+        content_structuring_service=content_struct_s,
+        settings=settings
+    )
+
+
 # --- AI Insight Generation Endpoints --- #
+
+@router.post("/reconstruct-and-analyze", response_model=OrchestrationOutput,
+              summary="Reconstruct and Analyze Content",
+              description="Takes a source (URL or file_id) and uses the ParallelOrchestrator to reconstruct and analyze content.")
+async def reconstruct_and_analyze_content(
+    payload: OrchestrationInput = Body(...),
+    orchestrator: ParallelOrchestrator = Depends(get_orchestrator) # Use dependency injection
+) -> OrchestrationOutput:
+    """
+    Endpoint to reconstruct and analyze content using the ParallelOrchestrator.
+    This service is responsible for the full pipeline: routing, acquisition, processing, structuring.
+    """
+    try:
+        # The orchestrator.process method returns a ServiceResult
+        orchestrator_result = await orchestrator.process(payload)
+        
+        if orchestrator_result.is_success() and orchestrator_result.data:
+            return orchestrator_result.data # OrchestrationOutput
+        else:
+            # Log the error for server-side diagnosis
+            print(f"Orchestration failed: {orchestrator_result.error_message}")
+            print(f"Error details: {orchestrator_result.error_details}")
+            
+            # Try to return the OrchestrationOutput even on failure, if it's in error_details
+            if isinstance(orchestrator_result.error_details, dict):
+                try:
+                    # Attempt to parse the error_details as OrchestrationOutput if it contains one
+                    # This is common if _prepare_final_output was called before failure
+                    failed_output = OrchestrationOutput(**orchestrator_result.error_details)
+                    # Determine an appropriate HTTP status code based on the failure
+                    # For simplicity, using 500 for now, but could be more specific (e.g., 400 for bad input if status indicates)
+                    # We need to decide how to map OrchestrationOutput.status_code to HTTP status codes
+                    http_status_code = 500 
+                    if failed_output.status_code == "failure_routing" or failed_output.status_code == "failure_acquisition":
+                        http_status_code = 400 # Example: Bad request if routing/acquisition fails due to input
+                    elif failed_output.status_code == "unsupported_type":
+                         http_status_code = 415 # Unsupported Media Type
+
+                    # To return the OrchestrationOutput model as the body of an HTTPException,
+                    # we need to make sure it's serializable or manually construct the detail.
+                    # For now, returning the error message.
+                    raise HTTPException(
+                        status_code=http_status_code, 
+                        detail=failed_output.error_message or "Orchestration process failed."
+                    )
+                except Exception as e_parse:
+                    print(f"Could not parse error_details into OrchestrationOutput: {e_parse}")
+                    # Fallback if error_details is not a valid OrchestrationOutput
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=orchestrator_result.error_message or "Orchestration process failed and error details were not parsable as OrchestrationOutput."
+                    )
+            else: # If error_details is not a dict or not present
+                 raise HTTPException(
+                    status_code=500, 
+                    detail=orchestrator_result.error_message or "Orchestration process failed."
+                )
+
+    except HTTPException as http_exc: # Re-raise HTTPExceptions directly
+        raise http_exc
+    except Exception as e:
+        # Catch any other unexpected errors
+        print(f"Unexpected error during content reconstruction: {e}")
+        # import traceback
+        # traceback.print_exc() # For more detailed logs
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during content reconstruction: {str(e)}")
 
 @router.post("/rewrite-content", response_model=RewriteContentOutput,
               summary="Rewrite/Summarize Content Blocks",
               description="Takes a list of content blocks and uses an AI crew to rewrite or summarize them.")
 async def rewrite_content(payload: RewriteContentInput = Body(...)) -> RewriteContentOutput:
     """
-    Endpoint to rewrite content using the ContentRewriteCrew.
+    Endpoint to rewrite content using the ContentRewriteCrewManager.
     Performance Target for this "Rewrite Content" action: P99 latency under 30 seconds, average latency 10-15 seconds.
     """
-    llm = get_configured_llm()
-    if not llm:
-        raise HTTPException(status_code=500, detail="LLM service not available or configured correctly.")
+    # The ContentRewriteCrewManager is expected to handle LLM configuration internally or via its agents.
+    # llm = get_configured_llm()
+    # if not llm:
+    #     raise HTTPException(status_code=500, detail="LLM service not available or configured correctly.")
 
-    rewrite_crew = ContentRewriteCrew(llm=llm)
+    manager = ContentRewriteCrewManager(rewrite_input=payload)
     
     try:
-        rewritten_blocks: List[ContentBlock] = rewrite_crew.run(
-            original_content_blocks=payload.content_blocks_to_rewrite,
-            document_metadata=payload.document_metadata
-        )
+        # The manager.run() method is synchronous and potentially long-running.
+        # Execute it in a thread pool to avoid blocking the FastAPI event loop.
+        result: RewriteContentOutput = await run_in_threadpool(manager.run)
         
-        if not rewritten_blocks:
-            # This case might occur if the crew completes but produces no valid output (e.g., empty list from run method)
-            raise HTTPException(status_code=500, detail="Content rewrite crew did not produce valid output.")
-            
-        return RewriteContentOutput(
-            ai_rewritten_content_blocks=rewritten_blocks,
-            status_message="Content rewrite completed successfully."
-        )
+        # The manager's run method returns a RewriteContentOutput which includes status and error messages.
+        # We can directly return this. If there are specific error statuses from the crew
+        # that should translate to HTTP errors, that logic can be added here.
+        # For example, if result.status_code indicates a specific type of failure:
+        # if result.status_code == "error_some_specific_crew_failure":
+        #     raise HTTPException(status_code=400, detail=result.error_message or "Crew processing failed")
+
+        return result
+        
     except Exception as e:
-        # Catch any other unexpected errors from the crew execution
-        print(f"Error during content rewrite: {e}") # Log the full error for debugging
+        # This catches unexpected errors during manager instantiation, run_in_threadpool, or if manager.run() itself raises an unhandled exception.
+        print(f"Error during content rewrite endpoint: {e}") # Log the full error for debugging
+        # import traceback
+        # traceback.print_exc() # For more detailed logs if needed
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during content rewriting: {str(e)}")
 
 @router.post("/generate-title", response_model=TitleGenerationResponse,
@@ -78,7 +187,8 @@ async def generate_title_endpoint(request_data: TitleGenerationRequest = Body(..
         # The crew constructor might take user_id if needed, but the run method is key for data.
         title_crew = TitleGenerationCrew() # Use default user_id from crew if not passed
         
-        suggested_title_str = title_crew.run(content_blocks=request_data.content_blocks)
+        # Run synchronous crew method in thread pool
+        suggested_title_str = await run_in_threadpool(title_crew.run, content_blocks=request_data.content_blocks)
 
         if suggested_title_str.startswith("Error:"):
             # Log the error server-side as well
@@ -111,7 +221,9 @@ async def generate_keywords_endpoint(request_data: KeywordExtractionRequest = Bo
     try:
         keyword_crew = GeneralPurposeKeywordExtractionCrew() # Instantiate the correct crew
         
-        suggested_keywords_list: List[str] = keyword_crew.run(
+        # Run synchronous crew method in thread pool
+        suggested_keywords_list: List[str] = await run_in_threadpool(
+            keyword_crew.run,
             content_blocks=request_data.content_blocks
         )
         

@@ -2,10 +2,47 @@ import { NextRequest, NextResponse } from 'next/server';
 import type {
   ReconstructAndAnalyzeRequest,
   OrchestrationOutput,
+  ContentBlock as AIServiceContentBlock, // Ensure this type matches what aiservice returns (with gcs_url)
 } from '@/types/api/ai-service';
 import { v4 as uuidv4 } from 'uuid'; // For generating job_id
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path if your authOptions are elsewhere
+import { Storage } from '@google-cloud/storage'; // Added for GCS Signed URL
+
+// Initialize GCS Storage client
+// Make sure your Next.js environment has GOOGLE_APPLICATION_CREDENTIALS set up
+// or that the credentials are provided in another secure way.
+let storage: Storage;
+try {
+  storage = new Storage();
+} catch (e) {
+  console.error("Failed to initialize Google Cloud Storage client. Ensure GOOGLE_APPLICATION_CREDENTIALS are set.", e);
+  // Depending on your error handling strategy, you might throw here or handle it later
+}
+
+// Helper function to generate signed URL
+async function generateV4ReadSignedUrl(bucketName: string, fileName: string): Promise<string> {
+  if (!storage) {
+    throw new Error("GCS Storage client not initialized.");
+  }
+  // These options will allow temporary read access to the file
+  const options = {
+    version: 'v4' as const,
+    action: 'read' as const,
+    expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+  };
+
+  try {
+    // Get a v4 signed URL for reading the file
+    const [url] = await storage.bucket(bucketName).file(fileName).getSignedUrl(options);
+    return url;
+  } catch (error) {
+    console.error(`Failed to generate signed URL for gs://${bucketName}/${fileName}`, error);
+    // Depending on how critical this is, you might return a placeholder or throw
+    // For now, returning a placeholder that indicates an error.
+    return `https://example.com/error-generating-signed-url-for-${fileName.split('/').pop()}`;
+  }
+}
 
 // const AISERVICE_URL = process.env.AISERVICE_URL || 'http://localhost:8000'; // Moved inside POST
 
@@ -23,6 +60,13 @@ export async function POST(req: NextRequest) {
       console.error('AISERVICE_URL environment variable is not set.');
       return NextResponse.json(
         { error: 'AI service configuration error.' },
+        { status: 500 },
+      );
+    }
+    if (!storage) {
+      console.error('GCS Storage client is not initialized. Cannot process image URLs.');
+      return NextResponse.json(
+        { error: 'Server configuration error related to GCS.' },
         { status: 500 },
       );
     }
@@ -64,8 +108,8 @@ export async function POST(req: NextRequest) {
       // output_format_options: {}, // Default in Python OrchestrationInput
     };
 
-    const response = await fetch(`${AISERVICE_URL}/reconstruct-and-analyze`, {
-      // Ensure this matches Python API endpoint
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/reconstruct-and-analyze`, {
+      // Corrected to match Python service's full path prefix /api/v1/ai
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -91,35 +135,55 @@ export async function POST(req: NextRequest) {
             'Unknown error from Python service',
           reconstruction_id: job_id, // Return job_id even on failure for tracking
         },
-        { status: response.status },
+        { status: response.status }, // Propagate Python service status if appropriate
       );
     }
 
-    // Expecting the Python service to return the OrchestrationOutput structure
     const pythonServiceResponse =
       (await response.json()) as OrchestrationOutput;
 
-    // The V2.6 plan for this Next.js API endpoint specifies these output fields:
-    // reconstruction_id, status_code, source_identifier, document_metadata (original),
-    // is_long_article, original_content_blocks, error_message.
+    // Process content blocks to generate signed URLs for images
+    if (pythonServiceResponse.original_content_blocks && storage) {
+      for (const block of pythonServiceResponse.original_content_blocks as AIServiceContentBlock[]) { // Cast to ensure type safety
+        if (block.type === 'image' && block.gcs_url && block.gcs_url.startsWith('gs://')) {
+          try {
+            const gcsPath = block.gcs_url.substring('gs://'.length);
+            const firstSlashIndex = gcsPath.indexOf('/');
+            if (firstSlashIndex > 0) {
+              const bucketName = gcsPath.substring(0, firstSlashIndex);
+              const fileName = gcsPath.substring(firstSlashIndex + 1);
+              
+              console.log(`[GCS Signed URL] Generating for: gs://${bucketName}/${fileName}`);
+              const signedUrl = await generateV4ReadSignedUrl(bucketName, fileName);
+              block.gcs_url = signedUrl; // Replace gs:// URL with signed HTTPS URL
+              console.log(`[GCS Signed URL] Generated: ${signedUrl.substring(0,100)}...`);
+            } else {
+              console.warn(`[GCS Signed URL] Could not parse bucket/file from GCS URL: ${block.gcs_url}`);
+            }
+          } catch (e) {
+            console.error(`[GCS Signed URL] Error processing GCS URL ${block.gcs_url}:`, e);
+            // Optionally, set gcs_url to a placeholder or error indicator if generation fails
+            // block.gcs_url = 'error-generating-signed-url'; 
+          }
+        }
+      }
+    }
 
-    // Map the Python OrchestrationOutput to the defined Next.js API response structure.
     const result = {
-      reconstruction_id: pythonServiceResponse.document_id || job_id, // Ensure reconstruction_id is present
+      reconstruction_id: pythonServiceResponse.document_id || job_id, 
       status_code: pythonServiceResponse.status_code,
       source_identifier:
-        pythonServiceResponse.source_identifier || source_identifier, // Fallback to original input if not in response
-      document_metadata: pythonServiceResponse.document_metadata, // This is the OrchestrationOutput.document_metadata
-      is_long_article: pythonServiceResponse.is_long_article, // Will be based on Python's (currently placeholder) logic
+        pythonServiceResponse.source_identifier || source_identifier, 
+      document_metadata: pythonServiceResponse.document_metadata, 
+      is_long_article: pythonServiceResponse.is_long_article, 
       original_content_blocks: pythonServiceResponse.original_content_blocks,
-      error_message: pythonServiceResponse.error_message || null, // Ensure it's null if undefined/empty
+      error_message: pythonServiceResponse.error_message || null, 
     };
 
     if (
       pythonServiceResponse.error_message &&
       pythonServiceResponse.status_code.startsWith('success')
     ) {
-      // Or a more specific success code check
       console.warn(
         `Python aiservice (reconstruct) returned an error message in a success payload for job ${job_id}:`,
         pythonServiceResponse.error_message,
@@ -129,7 +193,6 @@ export async function POST(req: NextRequest) {
       pythonServiceResponse.error_message
     ) {
       console.info(
-        // This is an expected error message given the status code
         `Python aiservice (reconstruct) failed for job ${job_id} with status ${pythonServiceResponse.status_code}:`,
         pythonServiceResponse.error_message,
       );
@@ -146,7 +209,7 @@ export async function POST(req: NextRequest) {
           error: 'Failed to connect to Python aiservice.',
           details: errorMessage,
         },
-        { status: 503 },
+        { status: 503 }, // Service Unavailable
       );
     }
     return NextResponse.json(
@@ -157,4 +220,9 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+export async function GET(request: NextRequest) {
+  console.log('!!! /api/ai/reconstruct-and-analyze GET endpoint WAS HIT !!!');
+  return NextResponse.json({ message: "Hello from GET /api/ai/reconstruct-and-analyze!" });
 }

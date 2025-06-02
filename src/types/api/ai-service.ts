@@ -1,15 +1,30 @@
 // --- Common Types ---
 export interface ContentBlock {
   block_id: string;
-  type: 'text' | 'image' | 'video' | 'audio' | 'file' | 'link' | 'embed'; // Expanded types
-  text_content?: string;
-  image_url?: string;
-  // Add other type-specific properties as needed (e.g., video_url, audio_url)
-  metadata?: Record<string, unknown>; // Changed any to unknown
+  tmp_id?: string | null;
+  user_id: string;
+  document_id: string;
+  type: string; // e.g., 'text', 'heading', 'list', 'image', 'code_snippet', etc.
+  order_index?: number | null;
+  content?: string | null; // Primary text for 'text', 'heading', 'code_snippet', 'table'
+  page_number?: number | null;
+  bbox?: number[] | null;
+  level?: number | null; // For 'heading'
+  language?: string | null; // For 'code_snippet'
+  items?: (string | Record<string, any>)[] | null; // For 'list'
+  ordered?: boolean | null; // For 'list'
+  list_start_number?: number | null; // For 'list'
+  image_id_ref?: string | null; // For 'image'
+  gcs_url?: string | null; // For 'image'
+  alt_text?: string | null; // For 'image'
+  caption?: string | null; // For 'image'
+  llm_description?: string | null; // For 'image'
+  width?: number | null; // For 'image'
+  height?: number | null; // For 'image'
 }
 
 export interface DocumentMetadata {
-  original_title?: string;
+  title?: string;
   source_url?: string;
   publication_date?: string;
   author?: string;
