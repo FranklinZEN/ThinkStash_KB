@@ -21,11 +21,23 @@ class WebServiceSpecificSettings(BaseSettings):
     
     # Playwright specific settings
     use_playwright_for_image_filtering: bool = Field(default=True, env="WEB_USE_PLAYWRIGHT_FOR_IMAGE_FILTERING", description="Enable Playwright for advanced image filtering by rendered dimensions.")
-    min_image_width: int = Field(default=30, env="WEB_MIN_IMAGE_WIDTH", description="Minimum rendered width for an image to be included (if Playwright is enabled).")
-    min_image_height: int = Field(default=30, env="WEB_MIN_IMAGE_HEIGHT", description="Minimum rendered height for an image to be included (if Playwright is enabled).")
-    min_image_area: int = Field(default=900, env="WEB_MIN_IMAGE_AREA", description="Minimum rendered area (width*height) for an image to be included (if Playwright is enabled).") # 30x30
+    min_image_width: int = Field(default=300, env="WEB_MIN_IMAGE_WIDTH", description="Minimum rendered width for an image to be included (if Playwright is enabled).")
+    min_image_height: int = Field(default=75, env="WEB_MIN_IMAGE_HEIGHT", description="Minimum rendered height for an image to be included (if Playwright is enabled).")
+    min_image_area: int = Field(default=22500, env="WEB_MIN_IMAGE_AREA", description="Minimum rendered area (width*height) for an image to be included (if Playwright is enabled).")
     playwright_page_load_timeout_ms: int = Field(default=30000, env="WEB_PLAYWRIGHT_PAGE_LOAD_TIMEOUT_MS", description="Timeout for Playwright page.goto() in milliseconds.")
     playwright_network_idle_timeout_ms: int = Field(default=10000, env="WEB_PLAYWRIGHT_NETWORK_IDLE_TIMEOUT_MS", description="Timeout for Playwright page.wait_for_load_state('networkidle') in milliseconds.")
+
+    stop_processing_heading_texts: Set[str] = Field(
+        default_factory=lambda: {
+            "related articles", "most popular", "comments", "further reading", 
+            "posted on", "share this article", "leave a comment", "you might also like", 
+            "related posts", "keep reading", "next article", "previous article", 
+            "also on", "more from", "recommended for you", "explore more", "sign up",
+            "acknowledgements", "about the author", "about the authors"
+        },
+        env="WEB_STOP_PROCESSING_HEADING_TEXTS",
+        description="Set of lowercase heading texts that signal the end of main content."
+    )
 
     model_config = SettingsConfigDict(
         env_prefix='AISERVICE_', # Optional: prefix for environment variables to avoid collisions
@@ -93,21 +105,22 @@ class Settings(BaseSettings):
     img_filter_min_width_px: int = Field(default=75, env="IMG_FILTER_MIN_WIDTH_PX", description="Minimum width in pixels for an image to be processed.")
     img_filter_min_height_px: int = Field(default=75, env="IMG_FILTER_MIN_HEIGHT_PX", description="Minimum height in pixels for an image to be processed.")
     img_filter_min_area: int = Field(default=5000, env="IMG_FILTER_MIN_AREA", description="Min area (width*height) for images.")
-    img_filter_max_aspect_ratio_deviation: float = Field(default=4.0, env="IMG_FILTER_MAX_ASPECT_RATIO_DEVIATION", description="Max aspect ratio deviation for images.")
+    img_filter_max_aspect_ratio_deviation: float = Field(default=999.0, env="IMG_FILTER_MAX_ASPECT_RATIO_DEVIATION", description="Max aspect ratio deviation for images.")
     
     img_filter_irrelevant_alt_text_exact: Set[str] = Field(default={
         "icon", "logo", "avatar", "profile", "button", "spinner", "loading", "pixel", "spacer", "ad", "advertisement"
     }, description="Exact alt text matches for filtering images.")
     
     img_filter_irrelevant_alt_text_substrings: Set[str] = Field(default={
-        "icon", "logo", "avatar", "profile", "button", "advert", "social", "badge", "promo", "rating", "user photo", "profile picture"
+        "icon", "logo", "avatar", "profile", "button", "advert", "social", "badge", "promo", "rating", "user photo", "profile picture", "thumbnail"
     }, description="Substrings in alt text for filtering images.")
 
     img_filter_irrelevant_filename_url_segments: Set[str] = Field(default={
         "/icon", "/logo", "/avatar", "/profile", "/button", "/badge", "/sprite", 
         "/spinner", "/loader", "/ads/", "/ad/", "pixel.gif", "spacer.gif", 
         "/social_", "_social.", "gravatar.com", "default-avatar", "profile-pic", 
-        "-icon.", "-logo.", "/thumb/", "_thumb.", "avatar-", "/avatars/", "/users/"
+        "-icon.", "-logo.", "/thumb/", "_thumb.", "avatar-", "/avatars/", "/users/",
+        "thumbnail"
     }, description="URL/filename segments for filtering images.")
 
     # Performance & Timeouts
