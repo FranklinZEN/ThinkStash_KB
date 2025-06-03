@@ -5,6 +5,7 @@ import uuid
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
 
 # Add project root to sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

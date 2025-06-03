@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 import uuid
@@ -11,7 +12,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, PROJECT_ROOT)
 
 from aiservice.app.models.pipeline_models import (
-    PreliminaryBlock, DocumentMetadata, EnrichedImageMetadata
+    PreliminaryBlock, DocumentMetadata, RawImageInput, EnrichedImageMetadata
 )
 from aiservice.app.models.orchestration_models import ContentBlock
 from aiservice.app.models.content_structuring_models import ContentStructuringServiceInput

@@ -9,9 +9,12 @@ from crewai.tools import BaseTool
 import os
 import uuid # For generating unique filenames
 import io # For handling image bytes
-from aiservice.app.config.settings import settings # New import for V2.5 settings
-from aiservice.app.models.orchestration_models import ContentBlock # Adjust import if needed
+from aiservice.app.config.settings import settings # Corrected import for V2.5 settings
+from aiservice.app.models.orchestration_models import ContentBlock # Corrected import
 from typing import List, Dict, Any
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field # Assuming Pydantic v2
+from markdownify import markdownify as md # For converting HTML to Markdown
 
 class ImageDownloaderTool(BaseTool):
     name: str = "Image Downloader from URL"

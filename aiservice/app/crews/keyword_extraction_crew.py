@@ -3,7 +3,7 @@
 """
 Defines the Crew for General Purpose AI Keyword Extraction.
 """
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 import json # For parsing stringified list output from LLM if necessary
 import re # Added for robust parsing of LLM list output
 import ast # Added for robust parsing of LLM list output
@@ -12,7 +12,8 @@ from aiservice.app.config.logging_config import get_logger
 from aiservice.app.config.settings import Settings # MODIFIED: Import Settings
 
 from crewai import Crew, Process, Task
-# from crewai.tasks.task_output import TaskOutput # TaskOutput is available via crew_result.tasks_output[0] if needed
+from crewai.tasks.task_output import TaskOutput
+# from langchain_openai import ChatOpenAI # If using OpenAI directly for Agent LLMs
 
 from aiservice.app.agents.keyword_extraction_agents import KeywordExtractionAgents
 from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool

@@ -58,9 +58,14 @@ describe('/api/ai/generate-title POST', () => {
   let originalProcessEnv: NodeJS.ProcessEnv;
 
   const mockUserId = 'test-user-title-gen';
-  const sampleContentBlocks: ContentBlock[] = [
-    { block_id: 'cb1', type: 'text', text_content: 'This is some fascinating content about AI.' },
-    { block_id: 'cb2', type: 'text', text_content: 'It has multiple blocks and implications.' },
+  const mockContentBlocks: ContentBlock[] = [
+    { block_id: 'cb1', user_id: 'user1', document_id: 'doc1', type: 'text', content: 'Main topic of the document, covering various aspects.' },
+    { block_id: 'cb2', user_id: 'user1', document_id: 'doc1', type: 'text', content: 'Secondary details and elaborations.' },
+  ];
+
+  const mockEmptyContentBlocks: ContentBlock[] = [
+    { block_id: 'cb1', user_id: 'user1', document_id: 'doc1', type: 'text', content: '' },
+    { block_id: 'cb2', user_id: 'user1', document_id: 'doc1', type: 'text', content: null },
   ];
 
   beforeEach(() => {
@@ -104,7 +109,7 @@ describe('/api/ai/generate-title POST', () => {
       status: 200,
     } as Response);
 
-    const requestBody: GenerateTitleRequest = { content_blocks: sampleContentBlocks };
+    const requestBody: GenerateTitleRequest = { content_blocks: mockContentBlocks };
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
       body: JSON.stringify(requestBody),
@@ -126,7 +131,10 @@ describe('/api/ai/generate-title POST', () => {
     );
     const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
     const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
-    expect(fetchBody).toEqual({ content_blocks: sampleContentBlocks }); // user_id is not sent to Python for this service
+    expect(fetchBody).toEqual({
+      content_blocks: mockContentBlocks,
+      existing_title: undefined,
+    });
 
     expect(responseBody.suggested_title).toBe(mockSuggestedTitle);
     expect(responseBody.error_message).toBeUndefined();
@@ -141,7 +149,7 @@ describe('/api/ai/generate-title POST', () => {
 
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -158,7 +166,7 @@ describe('/api/ai/generate-title POST', () => {
     } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -173,7 +181,7 @@ describe('/api/ai/generate-title POST', () => {
     mockGetServerSession.mockResolvedValue(null);
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -212,7 +220,7 @@ describe('/api/ai/generate-title POST', () => {
     (global.fetch as Mock).mockResolvedValueOnce({ ok: true, json: async () => ({ suggested_title: 'Fallback Title' }) } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     await POST(req);
@@ -224,7 +232,7 @@ describe('/api/ai/generate-title POST', () => {
     (global.fetch as Mock).mockResolvedValueOnce({ ok: false, status: 500, json: async () => pythonError } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -243,7 +251,7 @@ describe('/api/ai/generate-title POST', () => {
     } as unknown as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -257,7 +265,7 @@ describe('/api/ai/generate-title POST', () => {
     (global.fetch as Mock).mockRejectedValueOnce(new TypeError('Network error for title gen'));
     const req = new NextRequest('http://localhost/api/ai/generate-title', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -265,5 +273,36 @@ describe('/api/ai/generate-title POST', () => {
     expect(response.status).toBe(503);
     expect(responseBody.error).toBe('Failed to connect to Python aiservice.');
     expect(responseBody.details).toBe('Network error for title gen');
+  });
+
+  it('should handle empty/null content blocks', async () => {
+    const mockSuggestedTitle = 'A Fascinating Look into AI Content';
+    const mockPythonResponse = { suggested_title: mockSuggestedTitle };
+
+    (global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockPythonResponse,
+      status: 200,
+    } as Response);
+
+    const requestBody: GenerateTitleRequest = {
+      content_blocks: mockEmptyContentBlocks,
+      existing_title: undefined,
+    };
+    const req = new NextRequest('http://localhost/api/ai/generate-title', {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const response = await POST(req);
+    const responseBody = (await response.json()) as GenerateTitleResponse;
+
+    expect(response.status).toBe(200);
+    const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
+    const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
+    expect(fetchBody.content_blocks).toEqual(mockEmptyContentBlocks);
+    expect(fetchBody.existing_title).toBeUndefined();
+    expect(responseBody.suggested_title).toBe(mockSuggestedTitle);
   });
 }); 

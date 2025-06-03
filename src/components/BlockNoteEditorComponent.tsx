@@ -5,14 +5,16 @@ import { Box, Flex, Spinner, Text } from '@chakra-ui/react';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
 import {
-  BlockNoteEditor as BlockNoteEditorType,
-  PartialBlock,
-  BlockNoteSchema,
-  defaultBlockSpecs,
-  getDefaultSlashMenuItems,
   insertOrUpdateBlock,
 } from '@blocknote/core';
 import '@blocknote/mantine/style.css';
+
+// Import the centralized schema and its derived types
+import {
+  appSchema,
+  type AppEditor,
+  type AppPartialBlock,
+} from '@/lib/blocknote/appSchema';
 
 // --- Helper functions ---
 const handleFileUpload = async (file: File): Promise<string> => {
@@ -89,11 +91,7 @@ const isValidURL = (string: string) => {
 
 async function handlePastedImageURL(
   pastedText: string,
-  editor: BlockNoteEditorType<
-    typeof appSchema.blockSchema,
-    typeof appSchema.inlineContentSchema,
-    typeof appSchema.styleSchema
-  >,
+  editor: AppEditor,
 ): Promise<void> {
   console.log(
     '[BlockNoteEditorComponent] handlePastedImageURL triggered with text:',
@@ -146,11 +144,7 @@ async function handlePastedImageURL(
 
 async function processPastedOrDroppedFile(
   file: File,
-  editor: BlockNoteEditorType<
-    typeof appSchema.blockSchema,
-    typeof appSchema.inlineContentSchema,
-    typeof appSchema.styleSchema
-  >,
+  editor: AppEditor,
 ): Promise<void> {
   try {
     const appServedUrl = await handleFileUpload(file);
@@ -174,16 +168,25 @@ async function processPastedOrDroppedFile(
   }
 }
 
-// Export appSchema so it can be used by parent components for typing
-export const appSchema = BlockNoteSchema.create({
-  blockSpecs: defaultBlockSpecs,
-});
+// ADDED HELPER: Convert data URI to File object
+async function dataUriToImageFile(dataUri: string, filenamePrefix = 'pasted_data_uri'): Promise<File | null> {
+  try {
+    const response = await fetch(dataUri);
+    const blob = await response.blob();
+    const extension = blob.type.split('/')[1] || 'png'; // Default to png if type is generic
+    const filename = `${filenamePrefix}_${Date.now()}.${extension}`;
+    return new File([blob], filename, { type: blob.type });
+  } catch (error) {
+    console.error('[BlockNoteEditorComponent] Error converting data URI to File:', error);
+    return null;
+  }
+}
 
 interface BlockNoteEditorComponentProps {
-  onEditorChange: (editor: BlockNoteEditorType | null) => void;
-  onContentUpdate?: (blocks: PartialBlock[]) => void;
+  onEditorChange: (editor: AppEditor | null) => void;
+  onContentUpdate?: (documentState: AppPartialBlock[]) => void;
   editable?: boolean;
-  initialContent?: PartialBlock[];
+  initialContent?: AppPartialBlock[];
 }
 
 export default function BlockNoteEditorComponent({
@@ -203,158 +206,151 @@ export default function BlockNoteEditorComponent({
       defaultPasteHandler,
     }: {
       event: ClipboardEvent;
-      editor: BlockNoteEditorType<
-        typeof appSchema.blockSchema,
-        typeof appSchema.inlineContentSchema,
-        typeof appSchema.styleSchema
-      >;
+      editor: AppEditor;
       defaultPasteHandler: () => boolean;
     }) => {
       console.log(
         '%c[BlockNoteEditorComponent] PASTE EVENT DETECTED',
         'color: blue; font-weight: bold;',
       );
-      if (event.clipboardData) {
-        const types = event.clipboardData.types;
-        console.log('[BlockNoteEditorComponent] Clipboard types:', types);
-        types.forEach((type) => {
-          try {
-            const data = event.clipboardData!.getData(type);
-            console.log(
-              `[BlockNoteEditorComponent] Data for type "${type}":`,
-              type === 'text/html' ||
-                type === 'text/plain' ||
-                type.startsWith('image/')
-                ? data.length > 300
-                  ? data.substring(0, 300) + '... (truncated)'
-                  : data
-                : `[Non-text or too long: ${data.length} chars/bytes]`,
-            );
-            if (type === 'text/html') {
-              const tempDiv = document.createElement('div');
-              tempDiv.innerHTML = data;
-              const imagesInHtml = Array.from(tempDiv.querySelectorAll('img'));
-              console.log(
-                '[BlockNoteEditorComponent] Images found in pasted HTML (src attributes):',
-                imagesInHtml.map((img) => img.src),
-              );
-            }
-          } catch (e) {
-            console.warn(
-              `[BlockNoteEditorComponent] Could not getData for type "${type}"`,
-              e,
-            );
-          }
-        });
 
-        const pastedFiles = event.clipboardData.files;
-        if (pastedFiles && pastedFiles.length > 0) {
-          console.log(
-            '[BlockNoteEditorComponent] Files found on clipboard (event.clipboardData.files) - count:',
-            pastedFiles.length,
-          );
-          let imageFileProcessed = false;
-          Array.from(pastedFiles).forEach((file) => {
-            console.log('[BlockNoteEditorComponent] Pasted file details:', {
-              name: file.name,
-              size: file.size,
-              type: file.type,
-            });
-            if (file.type.startsWith('image/')) {
-              console.log(
-                '[BlockNoteEditorComponent] Processing pasted image FILE via processPastedOrDroppedFile:',
-                file.name,
-              );
-              processPastedOrDroppedFile(file, currentEditor);
-              imageFileProcessed = true;
-            }
-          });
-          if (imageFileProcessed) {
-            console.log(
-              '[BlockNoteEditorComponent] Image file from clipboard processed, returning true from pasteHandler.',
-            );
-            return true; // Indicate paste was handled if an image file was processed
-          }
-        } else {
-          console.log(
-            '[BlockNoteEditorComponent] No files found on clipboard via event.clipboardData.files.',
-          );
-        }
-      } else {
-        console.log('[BlockNoteEditorComponent] event.clipboardData is null.');
+      if (!event.clipboardData) {
+        return defaultPasteHandler();
       }
 
-      const pastedText = event.clipboardData?.getData('text/plain');
-      if (pastedText && isValidURL(pastedText)) {
-        const isDirectImageExtension = IMAGE_URL_REGEX.test(pastedText);
-        const isKnownImageDomain = pastedText.includes('gstatic.com/images');
-
-        if (isDirectImageExtension || isKnownImageDomain) {
-          console.log(
-            '[BlockNoteEditorComponent] HTTP/HTTPS Image URL detected for import via handlePastedImageURL:',
-            pastedText.substring(0, 100) + '...',
-          );
-          handlePastedImageURL(pastedText, currentEditor);
-          return true;
+      // --- 1. Handle Direct File Pastes ---
+      const pastedFiles = event.clipboardData.files;
+      if (pastedFiles && pastedFiles.length > 0) {
+        let imageFilePasted = false;
+        for (const file of Array.from(pastedFiles)) {
+          if (file.type.startsWith('image/')) {
+            console.log(
+              '[BlockNoteEditorComponent] Processing pasted image FILE via processPastedOrDroppedFile:',
+              file.name,
+            );
+            event.preventDefault(); // Prevent default if we are handling an image file
+            // Fire-and-forget: processPastedOrDroppedFile is async but we don't await it here.
+            // It will insert the image into the editor when done.
+            processPastedOrDroppedFile(file, currentEditor);
+            imageFilePasted = true;
+          }
+        }
+        if (imageFilePasted) {
+          console.log('[BlockNoteEditorComponent] Direct image file paste initiated.');
+          return true; // Indicate paste was handled (or initiated)
         }
       }
 
-      // New check for plain text data: URLs pasted directly
-      if (
-        pastedText &&
-        pastedText.startsWith('data:image') &&
-        pastedText.includes(';base64,')
-      ) {
-        console.log(
-          '[BlockNoteEditorComponent] Plain text data: URL pasted, creating image block:',
-          pastedText.substring(0, 100) + '...',
-        );
+      // --- 2. Handle Pasted HTML for <img> tags with data: URIs ---
+      const htmlContent = event.clipboardData.getData('text/html');
+      let dataUriImagesFoundInHtml = false;
+      if (htmlContent) {
+        console.log('[BlockNoteEditorComponent] Checking pasted HTML content for data URI images...');
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = htmlContent;
+        const imagesInHtml = Array.from(tempDiv.querySelectorAll('img'));
 
-        // Use insertOrUpdateBlock utility function, passing the editor as the first argument
-        insertOrUpdateBlock(currentEditor, {
-          type: 'image',
-          props: { url: pastedText, caption: 'Pasted Image' },
-        });
-        return true; // We've handled this paste.
+        for (const img of imagesInHtml) {
+          const originalSrc = img.getAttribute('src');
+          if (originalSrc && originalSrc.startsWith('data:image/')) {
+            dataUriImagesFoundInHtml = true;
+            event.preventDefault(); // Prevent default paste of original HTML if we process data URIs
+            console.log('[BlockNoteEditorComponent] Found data URI image in HTML. Kicking off async upload...', originalSrc.substring(0,50) + '...');
+            
+            // Async IIFE to handle upload and insertion
+            (async () => {
+              const imageFile = await dataUriToImageFile(originalSrc);
+              if (imageFile) {
+                try {
+                  const appServedUrl = await handleFileUpload(imageFile);
+                  if (appServedUrl) {
+                    console.log('[BlockNoteEditorComponent] Data URI image uploaded. Inserting new image block with URL:', appServedUrl);
+                    currentEditor.insertBlocks([
+                      { type: 'image', props: { url: appServedUrl, caption: imageFile.name } }
+                    ], currentEditor.getTextCursorPosition().block, 'after');
+                  } else {
+                     console.warn('[BlockNoteEditorComponent] Upload of data URI successful but no appServedUrl returned.');
+                  }
+                } catch (uploadError) {
+                  console.error('[BlockNoteEditorComponent] Failed to upload image from data URI:', uploadError);
+                }
+              }
+            })(); // End of async IIFE
+          }
+        }
+        
+        if (dataUriImagesFoundInHtml) {
+            console.log('[BlockNoteEditorComponent] data: URI image processing initiated from HTML paste.');
+            // We already called preventDefault inside the loop if a data URI was found.
+            // The original HTML (minus data URIs if they get replaced by this async process, or plus new blocks)
+            // won't be pasted by default. This simple version doesn't try to re-paste the non-image parts of HTML.
+            return true; // Indicate we've started handling it.
+        }
       }
 
+      // --- 3. Handle Pasted Plain Text for Image URLs ---
+      // This should run only if direct files or data URIs in HTML weren't the primary content handled.
+      if (!dataUriImagesFoundInHtml) { // Avoid processing plain text URL if it was part of an HTML data URI image.
+        const pastedText = event.clipboardData.getData('text/plain');
+        if (pastedText && isValidURL(pastedText) && IMAGE_URL_REGEX.test(pastedText)) {
+            console.log(
+                '[BlockNoteEditorComponent] Pasted text is a valid image URL, processing via handlePastedImageURL:',
+                pastedText,
+            );
+            event.preventDefault(); // Prevent default paste of plain text
+            // Fire-and-forget: handlePastedImageURL is async.
+            handlePastedImageURL(pastedText, currentEditor);
+            console.log('[BlockNoteEditorComponent] Plain text image URL paste initiated.');
+            return true; // Indicate paste was handled (or initiated)
+        }
+      }
+
+      // If none of the above custom handlers dealt with the paste, use BlockNote's default.
+      console.log('[BlockNoteEditorComponent] No custom image handlers applied, falling back to defaultPasteHandler.');
       return defaultPasteHandler();
     },
-    slashMenuItems: getDefaultSlashMenuItems,
   };
 
-  const editor = useCreateBlockNote<
-    typeof appSchema.blockSchema,
-    typeof appSchema.inlineContentSchema,
-    typeof appSchema.styleSchema
-  >(editorOptions);
+  // Ensure the type of editor from useCreateBlockNote matches AppEditor for consistency if needed elsewhere.
+  const editor = useCreateBlockNote<typeof appSchema.blockSchema, typeof appSchema.inlineContentSchema, typeof appSchema.styleSchema>(editorOptions) as AppEditor;
 
   useEffect(() => {
-    if (editor) {
-      onEditorChange(editor);
-    }
+    onEditorChange(editor); // Removed `as AppEditor | null` because `editor` is now typed as AppEditor.
   }, [editor, onEditorChange]);
 
+  useEffect(() => {
+    if (editor && onContentUpdate && editable) {
+      // Define the event handler function within the useEffect scope
+      const handleChange = () => {
+        // The onContentUpdate captured by this useEffect closure
+        if (onContentUpdate) { 
+          onContentUpdate(editor.document as AppPartialBlock[]);
+        }
+      };
+
+      const unsubscribe = editor.onEditorContentChange(handleChange);
+      
+      return () => {
+        if (typeof unsubscribe === 'function') {
+          // @ts-ignore - Linter struggles with type inference here despite the typeof check
+          unsubscribe();
+        }
+      };
+    }
+  }, [editor, onContentUpdate, editable]);
+
+  if (!editor) {
+    return (
+      <Flex justify="center" align="center" minH="300px">
+        <Spinner />
+        <Text ml={3}>Loading Editor Core...</Text>
+      </Flex>
+    );
+  }
+
   return (
-    <Box borderWidth="1px" borderRadius="md" p={0} minH="300px">
-      {editor ? (
-        <BlockNoteView
-          editor={editor}
-          theme="light"
-          editable={editable}
-          onChange={() => {
-            if (onContentUpdate && editor) {
-              onContentUpdate(editor.topLevelBlocks);
-            }
-          }}
-          slashMenu={true}
-        />
-      ) : (
-        <Flex justify="center" align="center" height="100%" minH="200px">
-          <Spinner />
-          <Text ml={3}>Initializing Editor...</Text>
-        </Flex>
-      )}
+    <Box className="bn-container" data-color-mode="light" w="100%" h="100%">
+      <BlockNoteView editor={editor} editable={editable} />
     </Box>
   );
 }

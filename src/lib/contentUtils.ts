@@ -116,8 +116,8 @@ export const mapContentBlocksToPartialBlocks = (
         partialBlock = {
           type: 'paragraph',
           content: [
-            { type: 'text', text: `[Unsupported Block Type: ${(block as any).type || 'unknown'}] `, styles: { italic: true } },
-            { type: 'text', text: String((block as any).content || ''), styles: {} },
+            { type: 'text', text: `[Unsupported Block Type: ${block.type || 'unknown'}] `, styles: { italic: true } },
+            { type: 'text', text: String(block.content || ''), styles: {} },
           ],
         };
     }

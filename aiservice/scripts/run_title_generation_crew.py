@@ -2,6 +2,7 @@ import uuid
 import os
 import sys
 from typing import List
+import asyncio
 
 # Add project root to sys.path to allow direct script execution
 # This assumes the script is in aiservice/scripts and project root is aiservice's parent
@@ -9,8 +10,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from aiservice.app.models.orchestration_models import ContentBlock # Actual model
-from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew # The crew to test
+from aiservice.app.models.orchestration_models import ContentBlock
+from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew
 
 # Helper to create ContentBlock instances for the run script
 def create_sample_content_blocks() -> List[ContentBlock]:

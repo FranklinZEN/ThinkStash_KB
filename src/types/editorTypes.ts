@@ -1,4 +1,11 @@
-import { Block, DefaultBlockSchema } from '@blocknote/core';
+import {
+  // type BlockNoteEditor, // Removed
+  type Block,
+  // type PartialBlock, // Assuming this might not be needed here based on current usage
+  // type InlineContent,
+  // type StyleSchema,
+  // type DefaultBlockSchema // No longer needed if Block is not generic here
+} from "@blocknote/core";
 
 // 1. MyAppImageBlockProps: Defines the minimal shape of props we want to persist for image blocks.
 export interface MyAppImageBlockProps {
@@ -6,8 +13,8 @@ export interface MyAppImageBlockProps {
   caption?: string;
 }
 
-// 2. Use BlockNote's DefaultBlockSchema for general document/block typing internally.
-export type StandardBlock = Block<DefaultBlockSchema>;
+// If Block is now globally augmented to be AppBlock, then StandardBlock is simply Block.
+export type StandardBlock = Block;
 export type StandardDocument = StandardBlock[];
 
 // MyAppTransformedImageBlock: Represents an image block after server-side transformation.

@@ -210,7 +210,6 @@ export default function NewCardPage() {
         clearStagingData();
     }
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [_editor, stagedTitle, stagedContentBlocks, stagedKeywords, stagingError, clearStagingData, toast]);
 
   const handleEditorInstanceReady = useCallback(

@@ -6,18 +6,23 @@ agents to generate a title for a given list of content blocks.
 Aligns with V2.6 Development Plan - Iteration 1.2.
 """
 
-from crewai import Crew, Process, Task
+from crewai import Agent, Task, Crew, Process
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import json
 
+from crewai.tasks.task_output import TaskOutput
+from aiservice.app.config.logging_config import get_logger
 from aiservice.app.agents.title_generation_agents import TitleGenerationAgents
 from aiservice.app.models.orchestration_models import ContentBlock
 from crewai.crews.crew_output import CrewOutput # Import CrewOutput
 from aiservice.app.models.insight_generation_models import TitleGenerationRequest
 from aiservice.app.models.task_output_models import TitleGenerationOutput
-from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool # Added for direct use
-from aiservice.app.config.settings import Settings # Corrected class name
+from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool # Corrected import
+from aiservice.app.config.settings import Settings # Corrected class name & import
+from crewai.tools import BaseTool # Corrected import
+
+logger = get_logger(__name__)
 
 class TitleOutput(BaseModel):
     """Pydantic model for the expected output of the title generation task."""

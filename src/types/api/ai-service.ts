@@ -11,7 +11,7 @@ export interface ContentBlock {
   bbox?: number[] | null;
   level?: number | null; // For 'heading'
   language?: string | null; // For 'code_snippet'
-  items?: (string | Record<string, any>)[] | null; // For 'list'
+  items?: (string | ContentBlock)[] | null; // For 'list' - Changed Record<string, any> to ContentBlock
   ordered?: boolean | null; // For 'list'
   list_start_number?: number | null; // For 'list'
   image_id_ref?: string | null; // For 'image'

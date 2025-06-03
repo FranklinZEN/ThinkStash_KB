@@ -19,9 +19,13 @@ import io # For image bytes stream
 import logging # Added logging
 import tempfile # Added for temporary file handling for GCS downloads
 from google.cloud import storage # Added for GCS interaction
+import chardet # For robust encoding detection
 
+# Local application imports
 from aiservice.app.services.base import BaseService, ServiceResult
-from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput # Import new models
+from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
+from aiservice.app.config.settings import Settings
+from aiservice.app.config.logging_config import get_logger
 
 # --- Pydantic Models for FileAcquisitionService ---
 

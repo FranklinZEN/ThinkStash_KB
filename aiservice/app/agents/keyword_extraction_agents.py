@@ -10,6 +10,8 @@ from crewai import Agent
 from langchain_openai import ChatOpenAI # Or your preferred LLM provider
 from aiservice.app.tools.formatting_tools import KeywordToTagFormatterTool
 # from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool # Corrected import path
+from aiservice.app.config.settings import Settings # Corrected import
+# from ..config.llm_config import get_configured_llm # Use settings to get LLM
 
 # Unused tool initializations - remove if not needed globally for other purposes in this file
 # full_text_extractor = FullTextContentExtractorTool()

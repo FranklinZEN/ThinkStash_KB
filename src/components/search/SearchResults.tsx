@@ -9,14 +9,16 @@ import {
   SimpleGrid,
 } from '@chakra-ui/react';
 import CardListItem from '@/components/cards/CardListItem';
-import { KnowledgeCard, Folder } from '@prisma/client';
+import { KnowledgeCard as PrismaKnowledgeCard, Folder } from '@prisma/client';
+import type { AppPartialBlock } from '@/lib/blocknote/appSchema';
 
-// Updated interface to expect full card data
-type SearchResultCard = KnowledgeCard & {
+// Define SearchResultCard with content as AppPartialBlock[]
+export interface SearchResultCard extends Omit<PrismaKnowledgeCard, 'content'> {
+  content: AppPartialBlock[] | string | null;
   folder: Pick<Folder, 'id' | 'name'> | null;
-  _count?: { cards?: number };
+  _count?: { cards?: number }; // This seems to be from an old query, might not be used by CardListItem
   headline?: string; // Headline might still be present but not used by CardListItem
-};
+}
 
 interface SearchResultsProps {
   results: SearchResultCard[];

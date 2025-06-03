@@ -27,35 +27,25 @@ import {
   FormControl,
   FormLabel,
   HStack,
-  Tag,
+  Tag as ChakraTag,
   TagLabel,
   TagCloseButton,
   VStack,
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
 
-import {
-  BlockNoteEditor as BlockNoteEditorType,
-  type PartialBlock,
-  type BlockNoteSchema,
-  type DefaultBlockSchema,
-  type DefaultInlineContentSchema,
-  type DefaultStyleSchema,
-} from '@blocknote/core';
 import '@blocknote/mantine/style.css';
-import type { BlockNoteDocument } from '@/types/blocknote';
-
-// Added: Import for AIServiceContentBlock and uuid
+import {
+  type AppEditor,
+  type AppPartialBlock,
+  type AppInlineContent as _AppInlineContent,
+  type AppInlineContentArray,
+} from '@/lib/blocknote/appSchema';
 import { type ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
 import { v4 as uuidv4 } from 'uuid';
 
-// ADDED: Define concrete types for BlockNote based on default schema
-type AppBlockNoteSchema = BlockNoteSchema<DefaultBlockSchema, DefaultInlineContentSchema, DefaultStyleSchema>;
-type AppPartialBlock = PartialBlock<AppBlockNoteSchema>;
-type AppInlineContent = DefaultInlineContentSchema;
-
 // Helper function to check if editor content is effectively empty
-const isEditorEmpty = (blocks: PartialBlock[] | undefined | null): boolean => {
+const isEditorEmpty = (blocks: AppPartialBlock[] | undefined | null): boolean => {
   if (!blocks || blocks.length === 0) return true;
   if (blocks.length === 1) {
     const block = blocks[0];
@@ -166,7 +156,7 @@ interface Tag {
 interface KnowledgeCard {
   id: string;
   title: string;
-  content: BlockNoteDocument | string | null; // Updated type for BlockNote JSON structure
+  content: AppPartialBlock[] | string | null; // Updated type for BlockNote JSON structure
   tags: Tag[]; // Corrected: expects an array of Tag objects
   userId: string;
   folderId: string | null;
@@ -176,25 +166,27 @@ interface KnowledgeCard {
 
 interface CardUpdatePayload {
   title?: string;
-  content?: BlockNoteDocument | string | null;
+  content?: AppPartialBlock[] | string | null;
   tags?: string[]; // This should be string[] as expected by the API endpoint body
 }
 
 // ADDED: Helper function to extract plain text from BlockNote InlineContent[]
-const extractTextFromInlineContent = (inlineContent: AppInlineContent[] | string | undefined): string => {
+const extractTextFromInlineContent = (inlineContent: AppInlineContentArray | string | undefined): string => {
   if (!inlineContent) return '';
   if (typeof inlineContent === 'string') return inlineContent;
   return inlineContent.map(item => {
     if (item.type === 'text') return item.text;
-    if (item.type === 'link') return extractTextFromInlineContent(item.content as AppInlineContent[]);
+    if (item.type === 'link' && item.content) {
+      return extractTextFromInlineContent(item.content);
+    }
     // Add other inline types if necessary, for now, just text and link content
     return '';
   }).join('');
 };
 
-// ADDED: Function to map BlockNote PartialBlock[] to AIServiceContentBlock[]
+// Function to map BlockNote PartialBlock[] to AIServiceContentBlock[]
 export const mapPartialBlocksToAIServiceContentBlocks = (
-  partialBlocks: AppPartialBlock[],
+  partialBlocks: AppPartialBlock[], // Input is AppPartialBlock[]
   userId: string,
   documentId: string
 ): AIServiceContentBlock[] => {
@@ -205,124 +197,93 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
   let i = 0;
 
   while (i < partialBlocks.length) {
-    const block = partialBlocks[i];
-    if (!block || !block.type) { 
+    const block = partialBlocks[i]; // block is AppPartialBlock
+    if (!block || !block.type) {
       i++;
       continue;
     }
-    const blockId = uuidv4();
+    // Use existing block.id if available, else generate a new one
+    const block_id = block.id || uuidv4(); 
+    const tmp_id = block_id; 
 
     if (block.type === 'bulletListItem' || block.type === 'numberedListItem') {
       const listItemsContent: string[] = [];
       const isOrdered = block.type === 'numberedListItem';
       const listBlockType = block.type;
-      
-      const listBlockStartIndex = currentOrderIndex;
+      // Use ID of the first item as the list's representative ID for the AI service block
+      const listBlockId = block_id; 
+
+      let listStartNumber: number | null = null;
+      if (isOrdered && block.props?.start) {
+        const startNum = parseInt(String(block.props.start), 10);
+        if (!isNaN(startNum)) {
+            listStartNumber = startNum;
+        }
+      }
 
       while (
         i < partialBlocks.length &&
-        partialBlocks[i]?.type === listBlockType 
+        partialBlocks[i]?.type === listBlockType
       ) {
-        const listItem = partialBlocks[i];
-        // Ensure listItem.content is treated as AppInlineContent[] for extraction
-        listItemsContent.push(extractTextFromInlineContent(listItem.content as AppInlineContent[]));
-        i++;
+        const listItem = partialBlocks[i]; 
+        if (listItem.content && Array.isArray(listItem.content)) {
+            listItemsContent.push(extractTextFromInlineContent(listItem.content as AppInlineContentArray));
+        }
+        i++; 
       }
 
       if (listItemsContent.length > 0) {
         aiServiceBlocks.push({
-          block_id: blockId,
-          tmp_id: blockId,
+          block_id: listBlockId,
+          tmp_id: listBlockId,
           user_id: userId,
           document_id: documentId,
-          type: 'list',
-          order_index: listBlockStartIndex,
+          type: 'list', 
+          order_index: currentOrderIndex,
           items: listItemsContent,
           ordered: isOrdered,
+          list_start_number: listStartNumber,
           content: null, 
         });
         currentOrderIndex++;
       }
       continue; 
-    }
-
-    let commonContent: string | null = null;
-    if (block.content) {
-      if (typeof block.content === 'string') {
-        commonContent = block.content;
-      } else { 
-        // Ensure block.content is treated as AppInlineContent[] for extraction
-        commonContent = extractTextFromInlineContent(block.content as AppInlineContent[]);
+    } else if (block.type === 'paragraph' || block.type === 'heading') {
+      const textContent = extractTextFromInlineContent(block.content as AppInlineContentArray);
+      if (textContent.trim() !== '' || block.type === 'paragraph') { // Keep empty paragraphs if that's desired, or add specific logic
+        aiServiceBlocks.push({
+          block_id,
+          tmp_id,
+          user_id: userId,
+          document_id: documentId,
+          type: block.type === 'heading' ? 'heading' : 'text', // Map 'paragraph' to 'text' for AI service
+          order_index: currentOrderIndex,
+          content: textContent,
+          level: block.type === 'heading' ? block.props?.level : undefined,
+          // Reset other fields not relevant for text/heading
+          items: null,
+          ordered: null,
+          list_start_number: null,
+        });
+        currentOrderIndex++;
       }
+      i++;
+    } else {
+      // Handle or skip other block types as needed
+      // For now, we'll skip unknown block types to avoid errors
+      // console.warn("Unsupported block type for AI service conversion:", block.type);
+      i++;
     }
-    
-    let captionText: string | null = null;
-    if (block.type === 'image' && block.children) {
-      // Ensure block.children is treated as AppInlineContent[] for extraction
-      captionText = extractTextFromInlineContent(block.children as AppInlineContent[]);
-    }
-
-
-    const baseAIServiceBlock: Omit<AIServiceContentBlock, 'type' | 'content' | 'level' | 'language' | 'items' | 'ordered' | 'gcs_url' | 'alt_text' | 'caption' | 'width' | 'height' | 'image_id_ref' | 'llm_description' | 'list_start_number' > = {
-      block_id: blockId,
-      tmp_id: blockId,
-      user_id: userId,
-      document_id: documentId,
-      order_index: currentOrderIndex,
-    };
-
-    switch (block.type) {
-      case 'paragraph':
-        aiServiceBlocks.push({
-          ...baseAIServiceBlock,
-          type: 'text',
-          content: commonContent,
-        });
-        break;
-      case 'heading':
-        aiServiceBlocks.push({
-          ...baseAIServiceBlock,
-          type: 'heading',
-          content: commonContent,
-          level: block.props?.level ? parseInt(String(block.props.level), 10) : 1,
-        });
-        break;
-      case 'image':
-        const imageProps = block.props as { src?: string; altText?: string; width?: string | number; height?: string | number; defaultCaption?: string }; // Adjusted props
-        aiServiceBlocks.push({
-          ...baseAIServiceBlock,
-          type: 'image',
-          gcs_url: imageProps?.src || null, // Use src for BlockNote default image
-          alt_text: imageProps?.altText || null, 
-          caption: captionText || imageProps?.defaultCaption || null, 
-          width: imageProps?.width ? Number(imageProps.width) : null, 
-          height: imageProps?.height ? Number(imageProps.height) : null, 
-          content: null, 
-        });
-        break;
-      case 'codeBlock':
-         aiServiceBlocks.push({
-          ...baseAIServiceBlock,
-          type: 'code_snippet',
-          content: commonContent, 
-          language: block.props?.language || null,
-        });
-        break;
-      default:
-        console.warn(`Unhandled BlockNote block type during mapping: ${block.type}`);
-        break;
-    }
-    currentOrderIndex++;
-    i++;
   }
   return aiServiceBlocks;
 };
 
 export default function CardDetailPage() {
-  const { status, data: session } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const params = useParams();
   const cardId = params?.cardId as string;
+  console.log('[CardDetailPage] Initial cardId from params:', cardId);
   const toast = useToast();
   const {
     isOpen: isAlertOpen,
@@ -340,7 +301,7 @@ export default function CardDetailPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editor, setEditor] = useState<BlockNoteEditorType<AppBlockNoteSchema> | null>(null);
+  const [editor, setEditor] = useState<AppEditor | null>(null);
   const [editorContent, setEditorContent] = useState<
     AppPartialBlock[] | undefined
   >(undefined); // For content tracking
@@ -363,20 +324,31 @@ export default function CardDetailPage() {
       let newInitialContent: AppPartialBlock[] | undefined;
       if (typeof card.content === 'string') {
         const trimmedContent = card.content.trim();
-        if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{ ')) {
+        // Try to parse as JSON array of AppPartialBlock first
+        let parsedSuccessfully = false;
+        if (trimmedContent.startsWith('[') && trimmedContent.endsWith(']')) {
           try {
-            newInitialContent = JSON.parse(trimmedContent) as AppPartialBlock[];
-          } catch (e) {
+            const parsed = JSON.parse(trimmedContent);
+            if (Array.isArray(parsed)) { // Basic check
+              newInitialContent = parsed as AppPartialBlock[]; // Assume structure is correct if it parses to an array
+              parsedSuccessfully = true;
+            }
+          } catch (_e) {
             console.warn(
-              '[CardDetail Page] Failed to parse string content as JSON, using as plain text.',
-              e,
+              '[CardDetail Page] Failed to parse string content as JSON array, treating as plain text paragraph.',
+              _e
             );
-            newInitialContent = [
-              { type: 'paragraph', content: trimmedContent as any },
-            ];
           }
-        } else {
-          newInitialContent = [{ type: 'paragraph', content: card.content as any }];
+        }
+        
+        if (!parsedSuccessfully) {
+          // If not a JSON array or parsing failed, treat as plain text in a paragraph
+          newInitialContent = [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: trimmedContent, styles: {} }] // Correctly typed content
+            }
+          ];
         }
       } else if (Array.isArray(card.content)) {
         newInitialContent = card.content as AppPartialBlock[];
@@ -394,7 +366,7 @@ export default function CardDetailPage() {
   }, [card]);
 
   const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditorType<AppBlockNoteSchema> | null) => {
+    (editorInstance: AppEditor | null) => {
       setEditor(editorInstance);
     },
     [], // No dependencies needed if it just sets the editor instance
@@ -407,6 +379,7 @@ export default function CardDetailPage() {
 
   // --- Data Fetching ---
   const fetchCard = useCallback(async () => {
+    console.log('[CardDetailPage] fetchCard called with cardId:', cardId);
     if (!cardId || status !== 'authenticated') return;
     setIsLoading(true);
     setError(null);
@@ -451,6 +424,7 @@ export default function CardDetailPage() {
   }, [cardId, status, toast]);
 
   useEffect(() => {
+    console.log('[CardDetailPage] useEffect for fetchCard triggered. cardId:', cardId, 'status:', status);
     if (status === 'authenticated' && cardId) {
       fetchCard();
     } else if (status === 'unauthenticated') {
@@ -497,14 +471,9 @@ export default function CardDetailPage() {
         // Fallback to card.content if not editing or editorContent is empty
         if (card?.content) {
             if (typeof card.content === 'string') {
-                try {
-                    const parsedContent = JSON.parse(card.content) as AppPartialBlock[];
-                    contentToProcess = parsedContent;
-                } catch (e) {
-                    // If string is not JSON, treat as a single paragraph block
-                    contentToProcess = [{ type: 'paragraph', content: card.content as any }];
-                }
-            } else { // It's already BlockNoteDocument (PartialBlock[])
+                // Correctly type the string content as a paragraph with text inline content
+                contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+            } else { // It's already AppPartialBlock[]
                 contentToProcess = card.content as AppPartialBlock[];
             }
         }
@@ -561,11 +530,8 @@ export default function CardDetailPage() {
      if (!isEditing || !editorContent || editorContent.length === 0) {
         if (card?.content) {
             if (typeof card.content === 'string') {
-                try {
-                    contentToProcess = JSON.parse(card.content) as AppPartialBlock[];
-                } catch (e) {
-                    contentToProcess = [{ type: 'paragraph', content: card.content as any }];
-                }
+                // Correctly type the string content as a paragraph with text inline content
+                contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
             } else {
                 contentToProcess = card.content as AppPartialBlock[];
             }
@@ -613,31 +579,39 @@ export default function CardDetailPage() {
 
     // Use editorContent which is updated by onContentUpdate callback for the most current state.
     // Fallback to editor.document if editorContent is somehow not set, though it should be.
-    const currentContentToValidate = editorContent || (editor as BlockNoteEditorType<AppBlockNoteSchema>)?.document;
+    const currentContentToValidate = editorContent || (editor as AppEditor)?.document;
 
     const originalContent = card.content;
 
     // Basic check for changes (more robust checks might compare JSON deeply)
     const hasTitleChanged = title.trim() !== card.title;
     // Normalize original content for comparison
-    let originalContentForComparison: BlockNoteDocument | undefined;
+    let originalContentForComparison: AppPartialBlock[] | undefined;
     if (originalContent) {
       if (typeof originalContent === 'string') {
-        // Should ideally not happen
-        const trimmedContent = originalContent.trim();
-        if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-          originalContentForComparison = JSON.parse(trimmedContent) as AppPartialBlock[];
-        } else {
+        // Attempt to parse, then fallback to paragraph wrapping
+        let parsedSuccessfully = false;
+        if (originalContent.trim().startsWith('[') && originalContent.trim().endsWith(']')) {
+          try {
+            const parsed = JSON.parse(originalContent);
+            if (Array.isArray(parsed)) {
+              originalContentForComparison = parsed as AppPartialBlock[];
+              parsedSuccessfully = true;
+            }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (_e) { /* ignore, fallback */ }
+        }
+        if (!parsedSuccessfully) {
           originalContentForComparison = [
             {
-              id: `block-orig-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`,
+              // id: `block-orig-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`, // id is optional for PartialBlock
               type: 'paragraph',
               props: {
                 textColor: 'default',
                 backgroundColor: 'default',
                 textAlignment: 'left',
               },
-              content: [{ type: 'text', text: originalContent, styles: {} }] as any,
+              content: [{ type: 'text', text: originalContent, styles: {} }],
               children: [],
             },
           ];
@@ -686,7 +660,7 @@ export default function CardDetailPage() {
 
     // Use currentContentToValidate for the payload if content has changed
     if (hasContentChanged && currentContentToValidate) {
-      updatePayload.content = currentContentToValidate as BlockNoteDocument;
+      updatePayload.content = currentContentToValidate as AppPartialBlock[];
     }
 
     if (hasKeywordsChanged) updatePayload.tags = keywords;
@@ -829,23 +803,33 @@ export default function CardDetailPage() {
 
   // Determine if content has changed (simple check for enabling save button)
   // Normalize original content for comparison
-  let originalContentForComparisonCanSave: BlockNoteDocument | undefined;
+  let originalContentForComparisonCanSave: AppPartialBlock[] | undefined;
   if (card.content) {
     if (typeof card.content === 'string') {
       const trimmedContent = card.content.trim();
-      if (trimmedContent.startsWith('[') || trimmedContent.startsWith('{')) {
-        originalContentForComparisonCanSave = JSON.parse(trimmedContent) as AppPartialBlock[];
-      } else {
+      // Attempt to parse, then fallback to paragraph wrapping
+      let parsedSuccessfully = false;
+      if (trimmedContent.startsWith('[') && trimmedContent.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(trimmedContent);
+          if (Array.isArray(parsed)) {
+            originalContentForComparisonCanSave = parsed as AppPartialBlock[];
+            parsedSuccessfully = true;
+          }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_e) { /* ignore, fallback */ }
+      }
+      if (!parsedSuccessfully) {
         originalContentForComparisonCanSave = [
           {
-            id: `block-cansave-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`,
+            // id: `block-cansave-${Date.now().toString()}-${Math.random().toString(36).substring(2, 7)}`, // id is optional
             type: 'paragraph',
             props: {
               textColor: 'default',
               backgroundColor: 'default',
               textAlignment: 'left',
             },
-            content: [{ type: 'text', text: card.content, styles: {} }] as any,
+            content: [{ type: 'text', text: trimmedContent, styles: {} }],
             children: [],
           },
         ];
@@ -855,7 +839,7 @@ export default function CardDetailPage() {
     }
   }
   const contentChanged = editor
-    ? JSON.stringify((editor as BlockNoteEditorType<AppBlockNoteSchema>).document) !==
+    ? JSON.stringify((editor as AppEditor)?.document) !==
       JSON.stringify(originalContentForComparisonCanSave || [])
     : false;
   const titleChanged = title.trim() !== (card.title || '');
@@ -929,8 +913,8 @@ export default function CardDetailPage() {
       {isEditing ? (
         <Box
           as="form"
-          onSubmit={(e) => {
-            e.preventDefault();
+          onSubmit={(_e) => {
+            _e.preventDefault();
             handleSaveChanges();
           }}
         >
@@ -992,9 +976,9 @@ export default function CardDetailPage() {
               />
               <HStack spacing={2} mt={3} flexWrap="wrap">
                 {keywords.map((keyword) => (
-                  <Tag
-                    size="lg"
+                  <ChakraTag
                     key={keyword}
+                    size="lg"
                     borderRadius="md"
                     variant="solid"
                     colorScheme="blue"
@@ -1010,7 +994,7 @@ export default function CardDetailPage() {
                       onClick={() => removeKeyword(keyword)}
                       isDisabled={!isEditing || isSaving}
                     />
-                  </Tag>
+                  </ChakraTag>
                 ))}
               </HStack>
               {/* ADDED: Suggest Keywords Button and Display */}
@@ -1030,9 +1014,9 @@ export default function CardDetailPage() {
                       <Text fontSize="sm" mb={1}>Suggestions:</Text>
                       <HStack spacing={2} wrap="wrap" mb={2}>
                         {suggestedKeywords.map((kw) => (
-                          <Tag key={kw} borderRadius="full" variant="outline" colorScheme="blue">
+                          <ChakraTag key={kw} borderRadius="full" variant="outline" colorScheme="blue">
                             <TagLabel>{kw}</TagLabel>
-                          </Tag>
+                          </ChakraTag>
                         ))}
                       </HStack>
                       <Button 
@@ -1129,15 +1113,15 @@ export default function CardDetailPage() {
               </Heading>
               <HStack spacing={2} flexWrap="wrap">
                 {card.tags.map((tag) => (
-                  <Tag
-                    size="lg"
+                  <ChakraTag
                     key={tag.id}
+                    size="lg"
                     borderRadius="md"
                     variant="solid"
                     colorScheme="teal"
                   >
                     <TagLabel>{tag.name}</TagLabel>
-                  </Tag>
+                  </ChakraTag>
                 ))}
               </HStack>
             </Box>
@@ -1168,7 +1152,7 @@ export default function CardDetailPage() {
         onClose={onAlertClose}
       >
         <AlertDialogOverlay>
-          <AlertDialogContent>
+          <AlertDialogContent as="form" onSubmit={(_e) => { _e.preventDefault(); handleDelete(); }}>
             <AlertDialogHeader fontSize="lg" fontWeight="bold">
               Delete Knowledge Card
             </AlertDialogHeader>
@@ -1190,6 +1174,7 @@ export default function CardDetailPage() {
                 onClick={handleDelete}
                 ml={3}
                 isLoading={isDeleting}
+                type="button"
               >
                 Delete
               </Button>

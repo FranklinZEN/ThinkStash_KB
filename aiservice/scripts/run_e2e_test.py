@@ -13,6 +13,9 @@ import time
 import os # For potential path manipulation if needed for test files
 
 # Import the actual settings
+from dotenv import load_dotenv
+from datetime import datetime
+
 from aiservice.app.config.settings import settings
 
 # Orchestrator and its input

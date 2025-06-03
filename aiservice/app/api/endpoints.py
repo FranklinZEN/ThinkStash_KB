@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Body, Depends
 from fastapi.concurrency import run_in_threadpool # Added for non-blocking execution
 from typing import List, Optional
+import logging # For general logging
+import uuid # For generating unique IDs if needed for some operations
 
 # Pydantic Models for request/response bodies
 from aiservice.app.models.insight_generation_models import (
@@ -9,6 +11,7 @@ from aiservice.app.models.insight_generation_models import (
     KeywordExtractionRequest, KeywordExtractionResponse
 )
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationInput, OrchestrationOutput # Added OrchestrationInput, OrchestrationOutput
+from aiservice.app.models.pipeline_models import DocumentMetadata, RawImageInput # Added DocumentMetadata, RawImageInput
 
 # LLM Configuration - This might be handled within the crew/agents now
 # from aiservice.app.config.llm_config import get_configured_llm # Commented out as manager should handle LLM
@@ -27,6 +30,7 @@ from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService
 from aiservice.app.services.acquisition.file_service import FileAcquisitionService
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
+from aiservice.app.config.logging_config import get_logger # Corrected local import
 # TODO: Check if any of the above services require additional tool imports for their instantiation if not using DI
 
 router = APIRouter()

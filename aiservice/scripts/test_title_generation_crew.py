@@ -3,10 +3,12 @@ from unittest.mock import patch, MagicMock
 import uuid
 import json
 import os
+import logging
+import sys
 
 from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew, TitleOutput
 from aiservice.app.models.orchestration_models import ContentBlock
-from aiservice.app.agents.title_generation_agents import TitleGenerationAgents 
+from aiservice.app.agents.title_generation_agents import TitleGenerationAgents
 from crewai import Agent
 
 # Helper to create ContentBlock instances

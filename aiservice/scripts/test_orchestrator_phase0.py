@@ -9,6 +9,7 @@ if project_root not in sys.path:
 # aiservice/tests/services/test_orchestrator.py
 import pytest
 from unittest.mock import AsyncMock, MagicMock, ANY # ANY can be used for job_id
+from typing import List, Dict, Any, Optional, Tuple
 
 from aiservice.app.services.orchestrator import ParallelOrchestrator
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock

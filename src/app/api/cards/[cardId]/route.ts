@@ -59,15 +59,17 @@ export async function GET(
   context: { params: Promise<{ cardId: string }> },
 ) {
   try {
+    const routeParams = await context.params;
+
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user.id;
 
-    const resolvedParams = await context.params; // Await the params
-    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
+    const paramsValidation = CardIdParamsSchema.safeParse(routeParams);
     if (!paramsValidation.success) {
+      // console.error("API GET /api/cards/[cardId] - Zod schema validation failed:", JSON.stringify(paramsValidation.error.flatten(), null, 2)); // Keep this if desired, or remove
       return NextResponse.json(
         {
           error: 'Invalid card ID format',
@@ -112,14 +114,15 @@ export async function PUT(
   context: { params: Promise<{ cardId: string }> },
 ) {
   try {
+    const routeParams = await context.params; // Await here
+
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user.id;
 
-    const resolvedParams = await context.params; // Await the params
-    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
+    const paramsValidation = CardIdParamsSchema.safeParse(routeParams); // Validate awaited params
     if (!paramsValidation.success) {
       return NextResponse.json(
         {
@@ -190,14 +193,15 @@ export async function DELETE(
   context: { params: Promise<{ cardId: string }> },
 ) {
   try {
+    const routeParams = await context.params; // Await here
+
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user.id;
 
-    const resolvedParams = await context.params; // Await the params
-    const paramsValidation = CardIdParamsSchema.safeParse(resolvedParams); // Validate resolvedParams
+    const paramsValidation = CardIdParamsSchema.safeParse(routeParams); // Validate awaited params
     if (!paramsValidation.success) {
       return NextResponse.json(
         {

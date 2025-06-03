@@ -58,9 +58,18 @@ describe('/api/ai/generate-keywords POST', () => {
   let originalProcessEnv: NodeJS.ProcessEnv;
 
   const mockUserId = 'test-user-keyword-gen';
-  const sampleContentBlocks: ContentBlock[] = [
-    { block_id: 'cb1', type: 'text', text_content: 'This is a sample text about AI and machine learning.' },
-    { block_id: 'cb2', type: 'text', text_content: 'It explores various concepts and applications.' },
+  const mockContentBlocks: ContentBlock[] = [
+    { block_id: 'cb1', user_id: 'user1', document_id: 'doc1', type: 'text', content: 'This is a sample text about AI and machine learning.' },
+    { block_id: 'cb2', user_id: 'user1', document_id: 'doc1', type: 'text', content: 'It explores various concepts and applications.' },
+  ];
+
+  const mockMalformedContentBlocks_MissingBlockId: any[] = [
+    { type: 'text', content: 'This block is missing a block_id.' },
+  ];
+
+  const mockContentBlocks_NoContent: ContentBlock[] = [
+    { block_id: 'cb1', user_id: 'user1', document_id: 'doc1', type: 'text', content: null }, // Or undefined, depending on how your types enforce this
+    { block_id: 'cb2', user_id: 'user1', document_id: 'doc1', type: 'text', content: '' },
   ];
 
   beforeEach(() => {
@@ -104,7 +113,7 @@ describe('/api/ai/generate-keywords POST', () => {
       status: 200,
     } as Response);
 
-    const requestBody: GenerateKeywordsRequest = { content_blocks: sampleContentBlocks };
+    const requestBody: GenerateKeywordsRequest = { content_blocks: mockContentBlocks };
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
       body: JSON.stringify(requestBody),
@@ -126,7 +135,7 @@ describe('/api/ai/generate-keywords POST', () => {
     );
     const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
     const fetchBody = JSON.parse(fetchCallArgs[1].body as string);
-    expect(fetchBody).toEqual({ content_blocks: sampleContentBlocks }); // user_id is not sent
+    expect(fetchBody).toEqual({ content_blocks: mockContentBlocks }); // user_id is not sent
 
     expect(responseBody.suggested_keywords).toEqual(mockSuggestedKeywords);
     expect(responseBody.error_message).toBeUndefined();
@@ -139,7 +148,7 @@ describe('/api/ai/generate-keywords POST', () => {
     } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -156,7 +165,7 @@ describe('/api/ai/generate-keywords POST', () => {
     } as Response);
      const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -173,7 +182,7 @@ describe('/api/ai/generate-keywords POST', () => {
     } as Response);
      const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -187,7 +196,7 @@ describe('/api/ai/generate-keywords POST', () => {
     mockGetServerSession.mockResolvedValue(null);
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -226,7 +235,7 @@ describe('/api/ai/generate-keywords POST', () => {
     (global.fetch as Mock).mockResolvedValueOnce({ ok: true, json: async () => ({ suggested_keywords: ['fallback'] }) } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     await POST(req);
@@ -238,7 +247,7 @@ describe('/api/ai/generate-keywords POST', () => {
     (global.fetch as Mock).mockResolvedValueOnce({ ok: false, status: 500, json: async () => pythonError } as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -257,7 +266,7 @@ describe('/api/ai/generate-keywords POST', () => {
     } as unknown as Response);
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);
@@ -271,7 +280,7 @@ describe('/api/ai/generate-keywords POST', () => {
     (global.fetch as Mock).mockRejectedValueOnce(new TypeError('fetch failed for keywords')); // Message includes 'fetch failed'
     const req = new NextRequest('http://localhost/api/ai/generate-keywords', {
       method: 'POST',
-      body: JSON.stringify({ content_blocks: sampleContentBlocks }),
+      body: JSON.stringify({ content_blocks: mockContentBlocks }),
       headers: { 'Content-Type': 'application/json' },
     });
     const response = await POST(req);

@@ -45,15 +45,15 @@ import {
   KnowledgeCard as PrismaKnowledgeCard,
   Folder as PrismaFolder,
 } from '@prisma/client';
-import type { BlockNoteDocument } from '@/types/blocknote';
 import { SearchIcon } from '@chakra-ui/icons';
 
 import { useStagingCardStore } from '@/stores/stagingCardStore';
 import { mapContentBlocksToPartialBlocks } from '@/lib/contentUtils';
-import type { OrchestrationOutput, ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
+import type { OrchestrationOutput } from '@/types/api/ai-service';
+import type { AppPartialBlock } from '@/lib/blocknote/appSchema';
 
 interface SearchResultCard extends Omit<PrismaKnowledgeCard, 'content'> {
-  content: BlockNoteDocument | string | null;
+  content: AppPartialBlock[] | string | null;
   folder: Pick<PrismaFolder, 'id' | 'name'> | null;
   headline?: string;
 }
@@ -126,6 +126,20 @@ export default function Home() {
     [status, fetchCards],
   );
 
+  const normalizeUrlInput = (url: string): string => {
+    let normalized = url.trim();
+
+    // Remove chrome-extension://<any_id>/ prefix
+    const chromeExtensionPattern = /^chrome-extension:\/\/[^/]+\//;
+    normalized = normalized.replace(chromeExtensionPattern, '');
+
+    // Ensure it has a scheme, default to https://
+    if (!normalized.match(/^[^:/\/?#]+:\/\//)) {
+      normalized = `https://${normalized}`;
+    }
+    return normalized;
+  };
+
   const handleReconstructFromUrl = async () => {
     if (!reconstructUrl.trim()) {
       toast({ title: 'URL is required', status: 'error', duration: 3000, isClosable: true });
@@ -133,10 +147,13 @@ export default function Home() {
     }
     startLoading();
     try {
+      const normalizedUrl = normalizeUrlInput(reconstructUrl.trim());
+      console.log("Normalized URL for reconstruction:", normalizedUrl); // Added for debugging
+
       const response = await fetch('/api/ai/reconstruct-and-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_url: reconstructUrl.trim() }),
+        body: JSON.stringify({ source_url: normalizedUrl }),
       });
       const data: OrchestrationOutput = await response.json();
 

@@ -1,10 +1,10 @@
 import asyncio
-import fitz # PyMuPDF
+import fitz  # PyMuPDF
 import os
 import uuid
 import time
 import re
-from typing import Optional, Any, List, Dict, Tuple
+from typing import Optional, Any, List, Dict, Tuple, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 import functools # Added for functools.partial
@@ -12,9 +12,12 @@ import logging # Added logging
 import tempfile # Added for temporary file handling for GCS downloads
 from google.cloud import storage # Added for GCS interaction
 from urllib.parse import urlparse # Added for parsing GCS paths
+from PIL import Image as PillowImage # Added alias for clarity
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
+from aiservice.app.config.settings import Settings # For global settings access
+from aiservice.app.config.logging_config import get_logger # Assuming standard logging
 
 # --- Pydantic Models for PDFAcquisitionService ---
 

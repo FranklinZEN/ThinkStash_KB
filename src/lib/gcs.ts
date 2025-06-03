@@ -77,6 +77,7 @@ export async function uploadFile(
       contentType,
     },
   });
+  console.log(`[gcs] File successfully uploaded. Bucket: ${bucket.name}, Path: ${gcsFilename}, ContentType: ${contentType}, Size: ${file.length} bytes`);
 
   const signedUrl = await getSignedUrl(gcsFilename, 15 * 60);
 

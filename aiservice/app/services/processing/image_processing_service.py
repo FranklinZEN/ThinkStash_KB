@@ -5,21 +5,20 @@ import uuid
 import time
 import re
 import functools
-from typing import Optional, Any, List, Dict, Set
+from typing import Optional, Any, List, Dict, Set, Union
 import hashlib
-import logging # Added logging
+import logging
 
 import aiohttp
 from PIL import Image # Pillow
 from google.cloud import storage # For GCS
 from cachetools import LRUCache # Import LRUCache
 
-from aiservice.app.config.settings import Settings # For typed settings
+from aiservice.app.config.settings import Settings
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.tools.llm_tools import ImageAnalysisLLMTool, ImageAnalysisInput, ImageAnalysisOutput
-
-# Import the new standard models
-from aiservice.app.models.pipeline_models import RawImageInput, EnrichedImageMetadata # Added EnrichedImageMetadata
+from aiservice.app.config.logging_config import get_logger
+from aiservice.app.models.pipeline_models import RawImageInput, EnrichedImageMetadata
 from aiservice.app.models.image_processing_models import ImageProcessingServiceInput
 
 # --- Input Model for ImageProcessingService --- 
@@ -43,7 +42,7 @@ class ImageProcessingService(BaseService):
         super().__init__(settings)
         self.image_analysis_tool = image_analysis_tool
         self.settings = settings # Store typed settings
-        self.logger = logging.getLogger(__name__) # Initialize logger
+        self.logger = get_logger(__name__) # Initialize logger
         
         # Default semaphore limit, to be overridden by settings if available
         gcs_semaphore_limit = 5 

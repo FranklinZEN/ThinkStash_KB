@@ -5,6 +5,7 @@ langchain
 langchain_core
 langchain_community
 langchain_openai # For OpenAI models, or Gemini via OpenAI compatibility layer
+langchain-anthropic
 
 # FastAPI and Pydantic
 fastapi
@@ -43,7 +44,7 @@ google-auth
 # Utilities
 python-dotenv>=1.0.0 # For .env file support
 cachetools # For caching
-python-magic==0.4.27 # For identifying file types
+python-magic-bin # For identifying file types (Windows friendly)
 ftfy==6.3.1 # Optional, for text fixing
 
 # Testing
@@ -68,7 +69,7 @@ trafilatura==2.0.0
 python-docx==1.1.2
 PyMuPDF==1.26.0 # Fitz
 mistune==3.1.3
-python-magic==0.4.27
+python-magic-bin
 pdf2image==1.17.0
 Pillow==11.2.1
 pdfminer.six # Was 20250327, likely a date-based versioning, let pip pick latest if possible
@@ -175,3 +176,15 @@ ruff # Linter and formatter
 
 # Added Playwright for advanced web interaction
 playwright 
+
+# Added by AI Assistant - 2024-05-30
+chardet
+langchain-text-splitters
+unstructured[local-inference]
+opencv-python # For image processing, often a dependency of unstructured[local-inference]
+paddleocr # For OCR, another potential dependency of unstructured
+pyclipper # Often a dependency for paddleocr or other geometry libraries
+layoutparser # For layout analysis, used by unstructured
+pytesseract # For OCR, often used with layoutparser or unstructured 
+markdownify
+url-normalize

@@ -8,9 +8,11 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ imageRecordId: string }> },
 ) {
-  const resolvedParams = await context.params;
-  const imageRecordId = resolvedParams.imageRecordId;
+  let imageRecordId: string | undefined = undefined;
   try {
+    const routeParams = await context.params;
+    imageRecordId = routeParams.imageRecordId;
+
     console.log(`API /images/serve/${imageRecordId} (GET) called`);
 
     const session = await getServerSession(authOptions);
@@ -90,7 +92,7 @@ export async function GET(
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error(`Error in /images/serve/${imageRecordId} (GET):`, error);
+    console.error(`Error in /images/serve/${imageRecordId || 'unknown_id'} (GET):`, error);
     const errorMessage =
       error instanceof Error ? error.message : 'An unknown error occurred';
     return NextResponse.json(

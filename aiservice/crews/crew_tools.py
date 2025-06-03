@@ -4,23 +4,23 @@ from pydantic import BaseModel, Field, PrivateAttr
 import json
 
 # Import Pydantic models for input/output typing if they are complex
-from app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, ProcessedImageData
+from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, ProcessedImageData
 
 # Import our agent logic classes to call their methods
-from app.agents.orchestration_agent import OrchestrationAgent
-from app.agents.pdf_acquisition_agent import PDFAcquisitionAgent
-from app.models.pdf_acquisition_models import PDFAcquisitionInput, PDFAcquisitionOutput
-from app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent
-from app.models.file_acquisition_models import FileAcquisitionInput, FileAcquisitionOutput
-from app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent
-from app.models.web_acquisition_models import WebAcquisitionInput, WebAcquisitionOutput
-from app.models.image_processing_models import ImageProcessingInput, ImageProcessingOutput
-from app.agents.image_processing_agent import ImageProcessingPersistenceAgent
-from app.models.content_structuring_models import ContentStructuringInput, ContentStructuringOutput
-from app.agents.content_structuring_agent import ContentConsolidationStructuringAgent
+from aiservice.app.agents.orchestration_agent import OrchestrationAgent
+from aiservice.app.agents.pdf_acquisition_agent import PDFAcquisitionAgent
+from aiservice.app.models.pdf_acquisition_models import PDFAcquisitionInput, PDFAcquisitionOutput
+from aiservice.app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent
+from aiservice.app.models.file_acquisition_models import FileAcquisitionInput, FileAcquisitionOutput
+from aiservice.app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent
+from aiservice.app.models.web_acquisition_models import WebAcquisitionInput, WebAcquisitionOutput
+from aiservice.app.models.image_processing_models import ImageProcessingInput, ImageProcessingOutput
+from aiservice.app.agents.image_processing_agent import ImageProcessingPersistenceAgent
+from aiservice.app.models.content_structuring_models import ContentStructuringInput, ContentStructuringOutput
+from aiservice.app.agents.content_structuring_agent import ContentConsolidationStructuringAgent
 
 # Corrected import for DataStoreAccessTool
-from app.tools.utility_tools import DataStoreAccessTool
+from aiservice.app.tools.utility_tools import DataStoreAccessTool
 # ... import other agent logic classes as needed for other tools ...
 
 # --- Tool for OrchestrationAgent.execute_initial_triage ---

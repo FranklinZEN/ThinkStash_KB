@@ -7,13 +7,14 @@ from openai import OpenAI as OpenAIClient # Alias to avoid conflict if google.ge
 # import google.genai as genai # REMOVED Gemini import
 # from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerationConfig, Part # REMOVED
 from typing import Type, Dict, Optional, Any, List, Literal # Removed Annotated for now
-from langchain_core.tools import BaseTool as LangchainCoreBaseTool, InjectedToolArg
+from langchain_core.tools import BaseTool as LangchainCoreBaseTool, InjectedToolArg, tool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel as PydanticV2BaseModel, Field as PydanticV2Field # Keep this aliased import for clarity
 from PIL import Image # To determine MIME type for base64 encoding
 # Remove: from langchain_core.pydantic_v1 import BaseModel, Field, validator # This was for Pydantic v1
 
-from aiservice.app.config.settings import settings, Settings as AppSettings # Import global settings and Settings class as AppSettings
+from aiservice.app.config.settings import settings, Settings as AppSettings # Corrected import
+from aiservice.app.config.logging_config import get_logger # Corrected import
 
 # Placeholder for actual LLM client interaction (e.g., OpenAI, VertexAI)
 # from app.core.llm_clients import get_llm_client

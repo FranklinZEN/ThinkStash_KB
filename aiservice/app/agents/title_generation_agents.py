@@ -6,14 +6,16 @@ Following V2.6 Development Plan - Iteration 1.2.
 """
 
 from crewai import Agent
-from langchain_openai import ChatOpenAI # TODO: Replace with Gemini
+from langchain_openai import ChatOpenAI # For typing and direct use if needed
 from textwrap import dedent
-from typing import Optional
+from typing import List, Optional, Any # Added Any
+from crewai.tools import BaseTool, tool # Corrected import
 
-# Import tools
+# Corrected local imports assuming standard structure relative to 'app'
 from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool
 from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool
 from aiservice.app.config.settings import Settings
+# from ..config.llm_config import get_configured_llm # Use settings to get LLM
 
 class TitleGenerationAgents:
     """Factory class to create agents for title generation."""

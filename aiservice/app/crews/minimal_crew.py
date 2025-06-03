@@ -5,15 +5,16 @@ import json
 import os # Added for os.getenv as a fallback if settings doesn't have key directly
 import ast # For ast.literal_eval
 
-from aiservice.app.config.settings import settings # Import global settings
+from aiservice.app.config.settings import settings # Corrected import
 from aiservice.app.tools.llm_tools import (
     ContentStructuringLLMHelper, # Changed from Tool to Helper
     block_item_schema_for_llm_tool, # The schema for function calling
     ContentStructuringOutput, 
     StructuredContentBlock 
 )
-from aiservice.app.models.orchestration_models import ContentBlock # Final desired output block structure
+from aiservice.app.models.orchestration_models import ContentBlock # Corrected import
 from crewai.tools import BaseTool as CrewAIBaseTool_ForCheck # For isinstance check
+from crewai.tools import BaseTool # Corrected import if it were used, but seems it is not directly
 
 # Global LLM for the Agent itself
 agent_llm_instance = None # Renamed for clarity from just agent_llm to avoid confusion with tool's llm

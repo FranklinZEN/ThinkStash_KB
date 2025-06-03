@@ -32,14 +32,15 @@ import {
   RepeatIcon,
 } from '@chakra-ui/icons';
 import { useRouter } from 'next/navigation';
-import { KnowledgeCard } from '@prisma/client';
-import { Block } from '@/types/blocknote';
+import { KnowledgeCard as PrismaKnowledgeCard } from '@prisma/client';
+import type { AppPartialBlock } from '@/lib/blocknote/appSchema';
 import { extractSnippetFromContent } from '@/lib/cardUtils';
 import ChangeFolderModal from '@/components/folders/ChangeFolderModal';
 import '@/styles/cardStyles.css';
 
 interface CardListItemProps {
-  card: KnowledgeCard & {
+  card: Omit<PrismaKnowledgeCard, 'content'> & {
+    content: AppPartialBlock[] | string | null;
     folder?: { id: string; name: string } | null;
     tags?: { name: string }[];
     isStarred: boolean;
@@ -189,17 +190,14 @@ export default function CardListItem({ card, mutate }: CardListItemProps) {
   }, [card.updatedAt, card.createdAt]);
 
   // Parse content if it's a JSON string, otherwise assume it's already parsed
-  let parsedContent: Block[] | null = null;
+  let parsedContent: AppPartialBlock[] | null = null;
   try {
     if (typeof card.content === 'string') {
-      parsedContent = JSON.parse(card.content);
+      parsedContent = JSON.parse(card.content) as AppPartialBlock[];
     } else if (Array.isArray(card.content)) {
-      // Assume it's already the correct array structure if not a string
-      // Add more robust type checking if needed
-      parsedContent = card.content as Block[]; // Still needs a cast potentially
+      parsedContent = card.content as AppPartialBlock[];
     }
   } catch {
-    // Handle cases where content might be invalid JSON or unexpected type
     parsedContent = null;
   }
 

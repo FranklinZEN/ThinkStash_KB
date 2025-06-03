@@ -1,0 +1,14 @@
+{
+  "status_code": "failure_acquisition",
+  "user_id": "default_e2e_user",
+  "document_id": "f1869ca5-43f1-5dc7-ae67-fc4181411de7",
+  "source_identifier": "https://dl.acm.org/doi/pdf/10.1145/3597503.3639187",
+  "source_type": "url",
+  "processing_level_used": "full_content",
+  "extracted_title": "https://dl.acm.org/doi/pdf/10.1145/3597503.3639187",
+  "is_long_article": false,
+  "original_content_blocks": [],
+  "processed_images_data": {},
+  "document_metadata": null,
+  "error_message": "WebAcquisitionService failed: Failed to process URL https://dl.acm.org/doi/pdf/10.1145/3597503.3639187: Client error '403 Forbidden' for url 'https://dl.acm.org/doi/pdf/10.1145/3597503.3639187'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403"
+}

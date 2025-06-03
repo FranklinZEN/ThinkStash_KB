@@ -10,22 +10,22 @@ sys.path.insert(0, str(project_root))
 from crewai import Agent, Task, Crew, Process
 
 # --- Model Imports ---
-from app.models.orchestration_models import OrchestrationInput, OrchestrationOutput
-from app.models.file_acquisition_models import FileAcquisitionInput
-from app.models.web_acquisition_models import WebAcquisitionInput
-from app.models.pdf_acquisition_models import PDFAcquisitionInput
-from app.models.image_processing_models import ImageProcessingInput
-from app.models.content_structuring_models import ContentStructuringInput
+from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput
+from aiservice.app.models.file_acquisition_models import FileAcquisitionInput
+from aiservice.app.models.web_acquisition_models import WebAcquisitionInput
+from aiservice.app.models.pdf_acquisition_models import PDFAcquisitionInput
+from aiservice.app.models.image_processing_models import ImageProcessingInput
+from aiservice.app.models.content_structuring_models import ContentStructuringInput
 
 # --- Tool Imports ---
-from app.tools.utility_tools import ContentTypeDetectionTool, DataStoreAccessTool
-from app.tools.data_extraction_tools import (
+from aiservice.app.tools.utility_tools import ContentTypeDetectionTool, DataStoreAccessTool
+from aiservice.app.tools.data_extraction_tools import (
     DocxParserTool, TxtParserTool, MarkdownParserTool,
     PyMuPDFParserTool, NougatPDFParserTool, PDFToImageTool, PDFMinerSixParserTool
 )
-from app.tools.web_tools import WebContentFetcherTool
-from app.tools.content_processing_tools import ImageDownloaderTool, GCSUploadTool, ImageMetadataTool
-from app.tools.llm_interaction_tools import MultimodalLLMImageMarkerTool, AdvancedLLMStructuringTool
+from aiservice.app.tools.web_tools import WebContentFetcherTool
+from aiservice.app.tools.content_processing_tools import ImageDownloaderTool, GCSUploadTool, ImageMetadataTool
+from aiservice.app.tools.llm_interaction_tools import MultimodalLLMImageMarkerTool, AdvancedLLMStructuringTool
 
 # --- Custom Crew Tools ---
 from crews.crew_tools import (
@@ -36,12 +36,12 @@ from crews.crew_tools import (
 )
 
 # --- Agent Imports ---
-from app.agents.orchestration_agent import OrchestrationAgent as OrchestrationAgentClass
-from app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent as GenericFileAgentClass
-from app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent as WebAgentClass
-from app.agents.pdf_acquisition_agent import PDFAcquisitionAgent as PDFAgentClass
-from app.agents.image_processing_agent import ImageProcessingPersistenceAgent as ImageAgentClass
-from app.agents.content_structuring_agent import ContentConsolidationStructuringAgent as StructuringAgentClass
+from aiservice.app.agents.orchestration_agent import OrchestrationAgent as OrchestrationAgentClass
+from aiservice.app.agents.generic_file_acquisition_agent import GenericFileContentAcquisitionAgent as GenericFileAgentClass
+from aiservice.app.agents.web_url_acquisition_agent import WebURLContentAcquisitionAgent as WebAgentClass
+from aiservice.app.agents.pdf_acquisition_agent import PDFAcquisitionAgent as PDFAgentClass
+from aiservice.app.agents.image_processing_agent import ImageProcessingPersistenceAgent as ImageAgentClass
+from aiservice.app.agents.content_structuring_agent import ContentConsolidationStructuringAgent as StructuringAgentClass
 
 # --- Initialize Shared Tools ---
 print("Initializing shared tools for the Crew...")

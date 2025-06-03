@@ -8,10 +8,11 @@ from datetime import datetime # Ensure datetime is imported for the serializer
 import argparse # Import argparse
 import logging # Add logging import
 
-# Add project root to sys.path
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
-sys.path.insert(0, PROJECT_ROOT)
+# Ensure 'aiservice' directory (which contains 'app') is in sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # Path to .../aiservice/scripts
+AISERVICE_DIR = os.path.dirname(SCRIPT_DIR)             # Path to .../aiservice
+if AISERVICE_DIR not in sys.path:
+    sys.path.insert(0, AISERVICE_DIR)
 
 from aiservice.app.config.settings import Settings
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput

@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from crewai import Agent
+import os
 
 from aiservice.app.agents.title_generation_agents import TitleGenerationAgents
 from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool

@@ -2,6 +2,7 @@ import time
 from typing import Optional, List, Dict, Union, Any
 import logging
 import uuid # Added for generating new block_ids
+import json # Added for robust JSON handling
 
 from pydantic import BaseModel, Field
 
@@ -9,7 +10,7 @@ from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.orchestration_models import ContentBlock
 from aiservice.app.models.content_structuring_models import ContentStructuringServiceInput
 from aiservice.app.models.pipeline_models import PreliminaryBlock, EnrichedImageMetadata, DocumentMetadata
-
+# from ..tools.content_processing_tools import TextToBlocksTool # Assuming this will be correctly structured
 from aiservice.app.config.settings import Settings
 
 class ContentStructuringService(BaseService):

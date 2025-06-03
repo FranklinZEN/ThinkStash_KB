@@ -1,6 +1,6 @@
 from typing import Any, Dict, Literal
 from aiservice.app.services.base import BaseService, ServiceResult
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os
 from urllib.parse import urlparse
 

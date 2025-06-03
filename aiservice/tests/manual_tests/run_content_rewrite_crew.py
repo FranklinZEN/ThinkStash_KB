@@ -20,6 +20,8 @@ import datetime
 import uuid # Added for generating document_id
 import json # Added for loading test data from JSON
 import argparse # ADDED for command-line arguments
+import asyncio
+import logging
 
 # Ensure the aiservice module can be found
 # This adjusts the path to include the parent directory of 'aiservice' if the script is run directly.
@@ -36,9 +38,9 @@ from aiservice.app.models.orchestration_models import ContentBlock
 from aiservice.app.models.pipeline_models import DocumentMetadata
 from aiservice.app.config.settings import settings # To verify settings load
 from crewai import Task, Crew
-from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents # To get the agent
-from aiservice.app.config.llm_config import get_configured_llm, reset_llm_client # For direct LLM if needed for agent
-from aiservice.app.models.task_output_models import SummarizerTaskOutput # ADDED import
+from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
+from aiservice.app.config.llm_config import get_configured_llm, reset_llm_client
+from aiservice.app.models.task_output_models import SummarizerTaskOutput
 
 JSON_INPUT_FILE_PATH = os.path.join(PROJECT_ROOT, "aiservice", "scripts", "e2e_test_output_https___www_uber_com_blog_deepeta_how_uber_predict.json")
 
@@ -58,9 +60,8 @@ def main():
     print("--- Initializing Manual Test for ContentRewriteCrew ---")
     # Load settings and display current LLM (already in your script)
     try:
-        from aiservice.app.config.settings import settings
         # Reset and get a fresh LLM instance, which should now be Gemini
-        reset_llm_client() 
+        reset_llm_client()
         llm = get_configured_llm()
         print(f"LLM for test: {type(llm)}, Model: {llm.model_name if hasattr(llm, 'model_name') else (llm.model if hasattr(llm, 'model') else 'N/A')}")
         
@@ -79,7 +80,7 @@ def main():
             print("Warning: No primary API key (GEMINI_API_KEY or OPENAI_API_KEY) seems to be configured in settings.")
 
     except ImportError:
-        print("Could not import settings. Ensure aiservice.app.config.settings is valid.")
+        print("Could not import settings. Ensure app.config.settings is valid.")
         return
     except Exception as e:
         print(f"Error loading LLM or settings: {e}")

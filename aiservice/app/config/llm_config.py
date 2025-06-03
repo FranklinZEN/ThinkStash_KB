@@ -2,9 +2,12 @@
 # coding: utf-8
 """Configuration and utility functions for initializing LLMs for CrewAI, using OpenAI library for Gemini."""
 
-from typing import Any, Optional
-from aiservice.app.config.settings import settings # Import the application settings object
-from langchain_openai import ChatOpenAI
+from typing import Any, Optional, Union, Dict, Literal
+from aiservice.app.config.settings import settings # Corrected import
+from langchain_openai import ChatOpenAI, AzureChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from pydantic import BaseModel, Field, validator
 
 # Attempt to import the LangChain OpenAI LLM wrapper
 # This requires `langchain-openai` to be installed.

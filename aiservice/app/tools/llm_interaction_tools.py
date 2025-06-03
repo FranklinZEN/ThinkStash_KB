@@ -3,10 +3,11 @@ import base64
 import requests # For illustration if calling a separate LLM service, or use OpenAI client
 import os
 import json # For constructing and parsing LLM I/O
-from aiservice.app.config.settings import settings # New import for V2.5 settings
+from aiservice.app.config.settings import settings # Corrected import
 from typing import Any, Optional, List, Dict, Type # Added Optional, List, Dict, Type
 from openai import OpenAI # Keep the import for type hinting and potential direct use
 from pydantic import BaseModel, Field
+from langchain_core.tools import tool
 
 # Global client is removed from here.
 # It will be initialized in CrewFactory and passed to tools.

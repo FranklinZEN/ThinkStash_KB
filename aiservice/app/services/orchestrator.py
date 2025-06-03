@@ -1,27 +1,32 @@
 import asyncio
 import time
 import uuid
-from typing import Optional, Any, Dict, List, Union, Tuple
+from typing import Optional, Any, Dict, List, Union, Tuple, Type
 import sys
+import logging
 
 from aiservice.app.config.settings import Settings # Import the specific Settings class
-from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, EnrichedImageMetadata
+from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, OrchestrationStatusCodeEnum # Import OrchestrationStatusCodeEnum
 # Remove the old WebAcquisitionInput import from models
 # from aiservice.app.models.web_acquisition_models import WebAcquisitionInput 
 from aiservice.app.models.pipeline_models import EnrichedImageMetadata, DocumentMetadata, PreliminaryBlock, RawImageInput
 from aiservice.app.services.base import BaseService, ServiceResult
-from aiservice.app.services.routing_service import RoutingService, RoutingInput
+from aiservice.app.services.routing_service import RoutingService, RoutingInput, RoutingService # Added RoutingService for static method access
 # Import the correct WebAcquisitionServiceInput from the service file
 from aiservice.app.services.acquisition.web_service import WebAcquisitionService, WebAcquisitionServiceInput
 from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput
 from aiservice.app.services.acquisition.file_service import FileAcquisitionService, FileAcquisitionServiceInput
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService, ImageProcessingServiceInput
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService, ContentStructuringServiceInput
+from aiservice.app.utils.url_utils import custom_normalize_url # Import the new utility
 
 # Placeholder for actual settings, data_store, and monitor when implemented
 # from aiservice.app.config.settings import Settings # When available
 # from aiservice.app.core.data_store import get_data_store # When available
 # from aiservice.app.core.monitoring import PerformanceMonitor # When available
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class ParallelOrchestrator(BaseService):
     """
@@ -53,8 +58,9 @@ class ParallelOrchestrator(BaseService):
         """
         Main processing method for the orchestrator.
         """
+        job_id = orchestrator_input.job_id or str(uuid.uuid4())
+        logger.info(f"Orchestrator: Starting job {job_id} for source: {orchestrator_input.source_identifier} (Type hint: {orchestrator_input.source_type})")
         start_time = time.time()
-        job_id = orchestrator_input.job_id or f"job_{uuid.uuid4().hex[:8]}"
 
         # Variables to hold data through the pipeline
         preliminary_blocks: List[PreliminaryBlock] = []
@@ -78,26 +84,77 @@ class ParallelOrchestrator(BaseService):
         final_url: Optional[str] = orchestrator_input.source_identifier
         determined_final_source_type: Optional[str] = orchestrator_input.source_type
 
+        # --- URL Normalization --- #
+        # Determine if the source_identifier is a URL and normalize it.
+        # We use RoutingService.is_url for the check.
+        # The orchestrator_input.source_type can be a hint (e.g., 'url', 'pdf', 'docx').
+        # If source_type is explicitly 'url', or if it's None/empty and RoutingService.is_url is true, then normalize.
+        
+        processed_source_identifier = orchestrator_input.source_identifier
+        # Use a temporary variable for the source type that RoutingService will use
+        initial_source_type_for_routing = orchestrator_input.source_type
+
+        if orchestrator_input.source_type == 'url' or \
+           ((orchestrator_input.source_type is None or orchestrator_input.source_type == '') and \
+            RoutingService.is_url(orchestrator_input.source_identifier)):
+            
+            if not RoutingService.is_url(processed_source_identifier): # Double check after potential previous logic
+                 logger.info(f"Job {job_id}: Initial source_identifier '{processed_source_identifier}' considered for normalization, but RoutingService.is_url returned false. Normalizing anyway as source_type hints URL.")
+
+            try:
+                normalized_url = custom_normalize_url(orchestrator_input.source_identifier)
+                if normalized_url != orchestrator_input.source_identifier:
+                    logger.info(f"Job {job_id}: URL normalized from '{orchestrator_input.source_identifier}' to '{normalized_url}'")
+                    processed_source_identifier = normalized_url
+                initial_source_type_for_routing = 'url' # Ensure routing service knows it's a URL post-normalization
+            except Exception as e_norm:
+                logger.error(f"Job {job_id}: Error during URL normalization for '{orchestrator_input.source_identifier}': {e_norm}. Proceeding with original.")
+                # processed_source_identifier remains orchestrator_input.source_identifier
+        
+        # Update orchestrator_input to carry the processed_source_identifier for the rest of the process
+        # This is a bit tricky as Pydantic models are often immutable or encourage creating new instances.
+        # For simplicity, we'll pass `processed_source_identifier` to services that need it.
+        # And the final OrchestrationOutput should reflect the potentially normalized URL.
+
         # 1. Routing
-        initial_source_type_for_routing = orchestrator_input.source_type or RoutingService.get_source_type(orchestrator_input.source_identifier)
-        if not determined_final_source_type: # If not provided in input, use routed one initially
-            determined_final_source_type = initial_source_type_for_routing
+        logger.info(f"Job {job_id}: Routing for identifier: {processed_source_identifier}, type hint: {initial_source_type_for_routing}")
+        
+        # Determine initial source type for routing more explicitly
+        # If orchestrator_input.source_type is provided, use it as a strong hint.
+        # Otherwise, let RoutingService.get_source_type determine it solely from the identifier.
+        if not initial_source_type_for_routing: # If it wasn't set to 'url' by normalization logic and was initially None/empty
+            initial_source_type_for_routing = RoutingService.get_source_type(processed_source_identifier)
+            logger.info(f"Job {job_id}: RoutingService.get_source_type determined initial type as: {initial_source_type_for_routing}")
         
         routing_input_obj = RoutingInput(
-            source_identifier=orchestrator_input.source_identifier,
-            source_type=initial_source_type_for_routing
+            source_identifier=processed_source_identifier, # Use the potentially normalized identifier
+            source_type=initial_source_type_for_routing 
         )
         routing_result = await self.routing_service.execute(routing_input_obj)
 
         if not routing_result.is_success() or not routing_result.data:
             error_message = f"Routing failed: {routing_result.error_message}"
-            final_status_code = "failure_routing"
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj, False)
+            logger.error(f"Job {job_id}: {error_message}")
+            final_status_code = OrchestrationStatusCodeEnum.FAILURE_ROUTING # Use Enum
+            output_obj = self._prepare_final_output(
+                orchestrator_input, # Pass original input for context
+                processed_source_identifier, # Pass the identifier actually used
+                final_status_code, 
+                page_title, 
+                final_content_blocks, 
+                processed_images_data_dict, 
+                error_message, 
+                final_url or processed_source_identifier, # Use processed if final_url not set
+                determined_final_source_type or initial_source_type_for_routing, # Best guess for source type
+                document_metadata_obj, 
+                False
+            )
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
 
         determined_service_name = routing_result.data.determined_service
-        # Use the specific source type determined by the router for acquisition services
         actual_determined_source_type_from_router = routing_result.data.determined_source_type
+        logger.info(f"Job {job_id}: Routing determined service: {determined_service_name}, type: {actual_determined_source_type_from_router}")
+        determined_final_source_type = actual_determined_source_type_from_router # Update with router's more specific type
 
         # 2. Acquisition
         # All acquisition services now return ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]
@@ -105,7 +162,7 @@ class ParallelOrchestrator(BaseService):
 
         if determined_service_name == "WebAcquisitionService":
             web_acq_input = WebAcquisitionServiceInput(
-                url=orchestrator_input.source_identifier,
+                url=processed_source_identifier, # Use potentially normalized URL
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id,
                 user_id=orchestrator_input.user_id
@@ -113,8 +170,7 @@ class ParallelOrchestrator(BaseService):
             acq_result = await self.web_acquisition_service.execute(web_acq_input)
         elif determined_service_name == "PDFAcquisitionService":
             pdf_acq_input = PDFAcquisitionServiceInput(
-                file_path=orchestrator_input.source_identifier, # Can be path or URL if service handles downloads
-                # PDFAcquisitionService doesn't take source_content_type, it knows it's PDF.
+                file_path=processed_source_identifier, # Use potentially normalized identifier
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id,
                 user_id=orchestrator_input.user_id
@@ -122,8 +178,8 @@ class ParallelOrchestrator(BaseService):
             acq_result = await self.pdf_acquisition_service.execute(pdf_acq_input)
         elif determined_service_name == "FileAcquisitionService":
             file_acq_input = FileAcquisitionServiceInput(
-                file_path=orchestrator_input.source_identifier,
-                source_content_type=actual_determined_source_type_from_router, # Use router's determined type
+                file_path=processed_source_identifier, # Use potentially normalized identifier
+                source_content_type=actual_determined_source_type_from_router, 
                 processing_level=orchestrator_input.processing_level,
                 job_id=job_id,
                 user_id=orchestrator_input.user_id
@@ -147,7 +203,19 @@ class ParallelOrchestrator(BaseService):
                     final_url = document_metadata_obj.final_url or final_url
                     determined_final_source_type = document_metadata_obj.source_type or determined_final_source_type
                     
-            output_obj = self._prepare_final_output(orchestrator_input, final_status_code, page_title, final_content_blocks, processed_images_data_dict, error_message, final_url, determined_final_source_type, document_metadata_obj, False)
+            output_obj = self._prepare_final_output(
+                orchestrator_input, # Pass original input for context
+                processed_source_identifier, # Pass the identifier actually used
+                final_status_code, 
+                page_title, 
+                final_content_blocks, 
+                processed_images_data_dict, 
+                error_message, 
+                final_url or processed_source_identifier, # Use processed if final_url not set
+                determined_final_source_type or initial_source_type_for_routing, # Best guess for source type
+                document_metadata_obj, 
+                False
+            )
             return ServiceResult.failure(error_message=error_message, error_details=output_obj.model_dump())
         
         # Successfully got data from acquisition service
@@ -177,7 +245,18 @@ class ParallelOrchestrator(BaseService):
         if not self.content_structuring_service:
             # This case should ideally not happen if DI is correct and service is mandatory.
             print("ERROR Orchestrator: self.content_structuring_service IS NONE.", file=sys.stderr) # Keep this critical error log
-            output_obj = self._prepare_final_output(orchestrator_input, "failure_system_configuration", page_title, final_content_blocks, processed_images_data_dict, "ContentStructuringService not available", final_url, determined_final_source_type, document_metadata_obj, False)
+            output_obj = self._prepare_final_output(
+                orchestrator_input, # Pass original input for context
+                processed_source_identifier, # Pass the identifier actually used
+                "failure_system_configuration", 
+                final_content_blocks, 
+                processed_images_data_dict, 
+                "ContentStructuringService not available", 
+                final_url or processed_source_identifier, # Use processed if final_url not set
+                determined_final_source_type or initial_source_type_for_routing, # Best guess for source type
+                document_metadata_obj, 
+                False
+            )
             return ServiceResult.failure(error_message="ContentStructuringService not available", error_details=output_obj.model_dump())
 
         structuring_input = ContentStructuringServiceInput(
@@ -228,14 +307,15 @@ class ParallelOrchestrator(BaseService):
 
 
         output_obj = self._prepare_final_output(
-            orchestrator_input, 
+            orchestrator_input, # Pass original input for context
+            processed_source_identifier, # Pass the identifier actually used
             final_status_code, 
             page_title, 
             final_content_blocks, 
             processed_images_data_dict, 
             error_message, 
-            final_url, 
-            determined_final_source_type,
+            final_url or processed_source_identifier, # Use processed if final_url not set
+            determined_final_source_type or initial_source_type_for_routing, # Best guess for source type
             document_metadata_obj, # Pass the complete DocumentMetadata object
             is_long_article_calculated # Pass the calculated value
         )
@@ -247,53 +327,60 @@ class ParallelOrchestrator(BaseService):
             # The output_obj contains all data gathered up to the point of failure.
             return ServiceResult.failure(error_message=error_message or "Orchestration failed with no specific message.", error_details=output_obj.model_dump())
     
-    def _prepare_final_output(self, 
-                              inp: OrchestrationInput, 
-                              status: str, 
-                              title: Optional[str],
-                              blocks: List[ContentBlock],
-                              images_data: Dict[str, EnrichedImageMetadata],
-                              err_msg: Optional[str],
-                              final_url_val: Optional[str],
-                              actual_source_type: Optional[str],
-                              doc_meta: Optional[DocumentMetadata], # Ensure this is DocumentMetadata
-                              is_long_article_calculated: bool
-                              ) -> OrchestrationOutput:
+    def _prepare_final_output(
+        self,
+        original_input: OrchestrationInput, 
+        used_source_identifier: str,      
+        status_code: Union[OrchestrationStatusCodeEnum, str],
+        extracted_title: Optional[str],
+        content_blocks: List[ContentBlock],
+        processed_images_data: Dict[str, EnrichedImageMetadata],
+        error_message: Optional[str],
+        final_url: Optional[str],         
+        final_source_type: Optional[str], 
+        document_metadata: Optional[DocumentMetadata],
+        is_long_article: bool = False
+    ) -> OrchestrationOutput:
         
-        # Ensure doc_meta is used if available, otherwise construct a minimal one
-        # This part might need refinement if doc_meta from acquisition is guaranteed on success
-        # and a placeholder is needed on acquisition failure.
+        final_status = status_code.value if isinstance(status_code, OrchestrationStatusCodeEnum) else status_code
         
-        # If doc_meta is provided (i.e., acquisition was at least partially successful to yield it), use it.
-        # Otherwise, the OrchestrationOutput.document_metadata will be None or a minimal default.
-        # The current structure passes document_metadata_obj which could be None if acquisition fully failed early.
+        # Determine the best source_identifier and source_type for the output
+        
+        # Initialize with values known to the orchestrator or from the original input
+        output_source_identifier = final_url or used_source_identifier 
+        output_source_type = final_source_type or original_input.source_type or "unknown"
 
-        output_user_id = None
-        output_document_id = None
-        is_long_article_val = is_long_article_calculated # Use the passed value
+        current_user_id = original_input.user_id
+        current_document_id = original_input.job_id # job_id is used as the document_id for the run
 
-        if doc_meta:
-            output_user_id = doc_meta.user_id
-            output_document_id = doc_meta.document_id
-        elif inp: # Fallback to input if doc_meta is not available
-            output_user_id = inp.user_id
-            # document_id might be inp.job_id if doc_meta is not there
-            output_document_id = inp.job_id 
+        if document_metadata:
+            # If DocumentMetadata is available, its fields are usually more authoritative
+            # for the content that was actually processed.
+            if document_metadata.final_url:
+                output_source_identifier = document_metadata.final_url
+            elif document_metadata.source_identifier: # Fallback to the source_identifier from metadata
+                output_source_identifier = document_metadata.source_identifier
+            
+            if document_metadata.source_type and document_metadata.source_type != "unknown":
+                output_source_type = document_metadata.source_type
+
+            # Prefer user_id and document_id from metadata if set and valid
+            current_user_id = document_metadata.user_id or original_input.user_id 
+            current_document_id = document_metadata.document_id or original_input.job_id
 
         return OrchestrationOutput(
-            status_code=status,
-            source_identifier=inp.source_identifier,
-            # Use actual_source_type if available, otherwise fallback or keep as is from input
-            source_type=actual_source_type or inp.source_type or "unknown", 
-            user_id=output_user_id, # Populate top-level user_id
-            document_id=output_document_id, # Populate top-level document_id
-            processing_level_used=inp.processing_level,
-            extracted_title=title,
-            is_long_article=is_long_article_val, # Use the passed or default value
-            original_content_blocks=blocks,
-            processed_images_data=images_data,
-            document_metadata=doc_meta, # Pass the full DocumentMetadata object
-            error_message=err_msg
+            status_code=final_status,
+            user_id=current_user_id, 
+            document_id=current_document_id,
+            source_identifier=output_source_identifier,
+            source_type=output_source_type,
+            processing_level_used=original_input.processing_level,
+            extracted_title=extracted_title,
+            is_long_article=is_long_article,
+            original_content_blocks=content_blocks,
+            processed_images_data=processed_images_data,
+            document_metadata=document_metadata,
+            error_message=error_message
         )
 
     async def execute(self, *args: Any, **kwargs: Any) -> ServiceResult[Any]:

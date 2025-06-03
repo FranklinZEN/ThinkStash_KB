@@ -6,6 +6,7 @@ Unit tests for KeywordIdentificationAgent.
 
 import pytest
 from unittest.mock import MagicMock, patch
+from typing import List
 
 from aiservice.app.models.orchestration_models import ContentBlock
 from aiservice.app.agents.keyword_extraction_agents import KeywordIdentificationAgent

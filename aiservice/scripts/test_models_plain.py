@@ -1,14 +1,16 @@
 # aiservice/tests/scripts/test_models_plain.py
 import sys
 import os
+import pytest
+from typing import List, Optional, Union, Dict, Any
+from pydantic import ValidationError
+from datetime import datetime, timezone
 
 # Add the project root directory (E:\ThinkStash) to sys.path
 # This allows Python to find the 'aiservice' package when the script is run from within aiservice/scripts
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-
-from datetime import datetime
 
 # Adjust relative imports based on where you run this script from.
 # If running from 'aiservice/tests/scripts/', and your app code is in 'aiservice/app/'

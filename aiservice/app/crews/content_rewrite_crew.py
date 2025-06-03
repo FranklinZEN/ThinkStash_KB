@@ -15,14 +15,18 @@ import ast
 from textwrap import dedent
 from pydantic import BaseModel, Field
 
-# Agent definitions
-from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
+from crewai.process import Process
+from crewai.tasks.task_output import TaskOutput
 
-# Model imports
+from aiservice.app.config.logging_config import get_logger
+from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
+from aiservice.app.config.settings import Settings
+
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
 from aiservice.app.models.task_output_models import SummarizerTaskOutput
 
+logger = get_logger(__name__)
 
 class ContentRewriteCrewManager:
     """Manages the creation and execution of the Content Rewrite Crew."""

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sys
 import uuid
@@ -10,9 +11,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR)) 
 sys.path.insert(0, PROJECT_ROOT)
 
-from aiservice.app.services.acquisition.web_service import WebAcquisitionService, WebAcquisitionServiceInput
-from aiservice.app.services.base import ServiceResult
-from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
+from app.services.acquisition.web_service import WebAcquisitionService, WebAcquisitionServiceInput
+from app.services.base import ServiceResult
+from app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
 
 async def run_web_acquisition_test(url: str, job_id: str, processing_level: str ="full_content"):
     print(f"\n--- Testing WebAcquisitionService with URL: {url} ---")

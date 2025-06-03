@@ -15,6 +15,8 @@ if PROJECT_ROOT not in sys.path:
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage
 from aiservice.app.config.settings import settings
 
 # Load environment variables from .env file in the aiservice directory

@@ -1,11 +1,14 @@
 import pytest
 import uuid
 from typing import List
+import logging
+import sys
+import os
 
 # Adjust the import path based on your project structure and how you run pytest.
 # This assumes 'aiservice' is on the PYTHONPATH or pytest is run from a level where it can find 'app'.
-from aiservice.app.models.orchestration_models import ContentBlock
-from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool
+from app.models.orchestration_models import ContentBlock
+from app.tools.content_processing_tools import FullTextContentExtractorTool
 
 # Helper function to create ContentBlock instances for tests
 def create_content_block(block_type: str, content: str = None, items: List = None, user_id: str = "test_user", document_id: str = "doc_test") -> ContentBlock:

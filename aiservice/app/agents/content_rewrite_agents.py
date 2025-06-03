@@ -14,13 +14,21 @@ from textwrap import dedent # Added missing import
 import uuid
 
 # Import tools. Adjust path if necessary.
-from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool, FastContentBlockProcessorTool
+from langchain_community.tools.tavily_search import TavilySearchResults
+# from langchain_openai import ChatOpenAI # For direct use if needed, but crew uses its own LLM instance
 
-# LLM Configuration (using the shared configuration)
-from aiservice.app.config.llm_config import get_configured_llm
+# Local application imports
+from aiservice.app.tools.insight_generation_tools import OptimizedLLMInteractionTool, FastContentBlockProcessorTool # Corrected import
+from aiservice.app.config.settings import Settings # Corrected import
+# from ..config.llm_config import get_configured_llm # Use settings to get LLM
+from aiservice.app.config.llm_config import get_configured_llm # Corrected import
+from aiservice.app.config.logging_config import get_logger # Added missing import
 
-# Actual ContentBlock import
-from aiservice.app.models.orchestration_models import ContentBlock
+# Models - If agents directly interact with Pydantic models for type hinting or data shaping
+from aiservice.app.models.orchestration_models import ContentBlock # Corrected import
+
+# Get a logger instance
+logger = get_logger(__name__)
 
 class ContentRewriteAgents:
     """Factory class or container for creating and configuring content rewrite agents."""

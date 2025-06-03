@@ -72,40 +72,57 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as ReconstructAndAnalyzeRequest;
-    const { source_url, file_id } = body;
+    const { source_url, file_id, text_content, config } = body;
 
-    if (!source_url && !file_id) {
+    // Validate that at least one and only one source is provided
+    const sourcesProvided = [source_url, file_id, text_content].filter(Boolean).length;
+
+    if (sourcesProvided === 0) {
       return NextResponse.json(
-        { error: 'Invalid request body: source_url or file_id is required.' },
+        { error: 'Invalid request body: source_url, file_id, or text_content is required.' },
         { status: 400 },
       );
     }
-    if (source_url && file_id) {
+
+    if (sourcesProvided > 1) {
       return NextResponse.json(
         {
           error:
-            'Invalid request body: provide either source_url or file_id, not both.',
+            'Invalid request body: provide only one of source_url, file_id, or text_content.',
         },
         { status: 400 },
       );
     }
 
-    const source_identifier = source_url || file_id!;
-    // Determine source_type based on input. More sophisticated logic might be needed for file_id.
-    const source_type = source_url ? 'url' : 'file'; // This is a simplification
+    let source_identifier: string;
+    let source_type: 'url' | 'file' | 'text';
+
+    if (source_url) {
+      source_identifier = source_url;
+      source_type = 'url';
+    } else if (file_id) {
+      source_identifier = file_id;
+      source_type = 'file';
+    } else if (text_content) {
+      source_identifier = text_content; // Or a hash/snippet if preferred for long text
+      source_type = 'text';
+    } else {
+      // This case should ideally be caught by sourcesProvided === 0, but as a safeguard:
+      return NextResponse.json({ error: 'Internal server error: No source identified despite checks.' }, { status: 500 });
+    }
+    
     const job_id = uuidv4(); // Generate a unique job ID for this reconstruction task
 
     console.log(
-      `API /ai/reconstruct-and-analyze: Calling Python aiservice for source: ${source_identifier}, job_id: ${job_id}`,
+      `API /ai/reconstruct-and-analyze: Calling Python aiservice for source type: ${source_type}, job_id: ${job_id}`,
     );
 
-    const pythonServicePayload = {
-      source_identifier,
-      source_type,
-      user_id: userId, // Use actual userId from session
+    const pythonServicePayload: any = {
+      user_id: userId,
       job_id,
-      // processing_level: "full_content", // Default in Python OrchestrationInput
-      // output_format_options: {}, // Default in Python OrchestrationInput
+      source_identifier: source_identifier,
+      source_type: source_type,
+      config: config,
     };
 
     const response = await fetch(`${AISERVICE_URL}/api/v1/ai/reconstruct-and-analyze`, {
@@ -222,7 +239,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   console.log('!!! /api/ai/reconstruct-and-analyze GET endpoint WAS HIT !!!');
   return NextResponse.json({ message: "Hello from GET /api/ai/reconstruct-and-analyze!" });
 }

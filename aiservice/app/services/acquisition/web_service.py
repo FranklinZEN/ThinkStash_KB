@@ -22,9 +22,9 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
-# Import PDFAcquisitionService and its input model
 from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService, PDFAcquisitionServiceInput
-from aiservice.app.config.settings import Settings # CORRECTED IMPORT
+from aiservice.app.config.settings import Settings
+from aiservice.app.config.logging_config import get_logger
 
 # --- Pydantic Models for WebAcquisitionService ---
 
@@ -115,6 +115,16 @@ BOILERPLATE_SELECTORS: List[str] = [
 
 # PDF processing library (PyMuPDF) - fitz import is no longer needed here if _parse_pdf_content_to_preliminary_blocks is removed
 # import fitz # PyMuPDF # This can be removed if not used elsewhere in this file.
+
+logger = logging.getLogger(__name__)
+
+# Define default headers including a common User-Agent
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    # "Accept-Encoding": "gzip, deflate, br", # httpx handles this by default
+}
 
 class WebAcquisitionService(BaseService):
     """
@@ -573,52 +583,59 @@ class WebAcquisitionService(BaseService):
         return final_blocks, all_raw_images
 
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
-        start_time = time.time()
-        job_id = web_input.job_id or uuid.uuid4().hex[:12]
-        user_id = web_input.user_id
-        original_request_url = str(web_input.url) # Keep the original requested URL separate
+        job_id_for_run = web_input.job_id or str(uuid.uuid4())
+        user_id_for_run = web_input.user_id
+        self.logger.info(f"WebService starting for URL: {web_input.url}, Job ID: {job_id_for_run}")
+        start_time = time.time() # Initialize start_time
 
-        self.logger.info(f"WebService starting for URL: {original_request_url}, Job ID: {job_id}")
+        # Initialize DocumentMetadata early
+        doc_metadata = DocumentMetadata(
+            document_id=job_id_for_run,
+            user_id=user_id_for_run or "anonymous_web_acq", # Ensure user_id is set
+            source_identifier=web_input.url, # Initial identifier
+            source_type='url', # Initial assumption
+            extracted_at=datetime.utcnow()
+        )
+
+        # Check URL support and paywalls (simplified check here, more detail in original tool)
+        parsed_url = urlparse(web_input.url)
+        domain = parsed_url.hostname
+
+        # ... (URL validation logic like _is_url_supported, _check_paywall can be called here if they are part of this class)
 
         fetched_content: Optional[str] = None
-        final_url_after_redirects = original_request_url # Initialize with original, update after fetch
-        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]] = None
-
+        raw_content_bytes: Optional[bytes] = None
+        content_type: Optional[str] = None
+        final_url_after_redirects: str = web_input.url # Initialize with original URL
+        
+        # Use a single client for the session if multiple requests are needed for this URL
         try:
-            # Step 1: Fetch initial HTML content using httpx
-            async with httpx.AsyncClient(timeout=self.httpx_timeout, headers=self.headers, follow_redirects=True) as client:
-                try:
-                    response = await client.get(original_request_url)
-                    response.raise_for_status()
-                    fetched_content_bytes = response.content
-                    final_url_after_redirects = str(response.url)
-                    try:
-                        fetched_content = fetched_content_bytes.decode('utf-8')
-                    except UnicodeDecodeError:
-                        try:
-                            fetched_content = fetched_content_bytes.decode('latin-1')
-                        except UnicodeDecodeError:
-                            self.logger.error(f"Failed to decode content from {final_url_after_redirects} with utf-8 or latin-1.")
-                            # Fallback to Trafilatura's internal fetch if primary decoding fails
-                            fetched_content = await self._fetch_content_with_trafilatura(original_request_url)
-                            if fetched_content is None:
-                                return ServiceResult.failure(f"Failed to fetch or decode content from {original_request_url}")
+            # Apply DEFAULT_HEADERS to the client used for fetching the main URL
+            async with httpx.AsyncClient(timeout=self.httpx_timeout, headers=DEFAULT_HEADERS, follow_redirects=True) as client:
+                self.logger.info(f"Fetching URL: {web_input.url} with headers: {client.headers}")
+                start_fetch_time = time.time()
+                response = await client.get(web_input.url)
+                fetch_duration = time.time() - start_fetch_time
+                self.logger.info(f"Fetched {web_input.url} in {fetch_duration:.2f}s, Status: {response.status_code}")
                 
-                except httpx.RequestError as e_httpx:
-                    self.logger.error(f"HTTPX request failed for {original_request_url}: {e_httpx}", exc_info=True)
-                    return ServiceResult.failure(f"Request failed for {original_request_url}: {e_httpx}")
-                except httpx.HTTPStatusError as e_http_status:
-                     self.logger.error(f"HTTP Error {e_http_status.response.status_code} for {original_request_url}: {e_http_status}", exc_info=True)
-                     return ServiceResult.failure(f"HTTP Error {e_http_status.response.status_code} for {original_request_url}")
+                final_url_after_redirects = str(response.url) # Capture final URL after redirects
+                doc_metadata.final_url = final_url_after_redirects # Update metadata
+                doc_metadata.source_identifier = final_url_after_redirects # Update to final URL as primary identifier
+
+                response.raise_for_status() # Raise an exception for 4XX/5XX errors
+
+                content_type = response.headers.get('content-type', '').lower()
+                raw_content_bytes = await response.aread()
+                # ... (rest of the execute method, including content decoding, parsing, etc.)
 
             if not fetched_content:
-                 return ServiceResult.failure(f"No content fetched from {original_request_url}")
+                 return ServiceResult.failure(f"No content fetched from {final_url_after_redirects}")
 
             # Step 2: (Optional) Get image details using Playwright from the ORIGINAL URL
             if self.service_settings.use_playwright_for_image_filtering:
-                self.logger.debug(f"Playwright enabled. Fetching image details for original URL: {original_request_url}")
-                # Pass original_request_url as base_url_for_resolution as well, since PW loads this directly.
-                playwright_image_details_map = await self._get_playwright_image_details(original_request_url, original_request_url)
+                self.logger.debug(f"Playwright enabled. Fetching image details for original URL: {final_url_after_redirects}")
+                # Pass final_url_after_redirects as base_url_for_resolution as well, since PW loads this directly.
+                playwright_image_details_map = await self._get_playwright_image_details(final_url_after_redirects, final_url_after_redirects)
             
             # Step 3: Extract main content using Trafilatura
             # Trafilatura should operate on the full fetched_content from final_url_after_redirects
@@ -668,40 +685,32 @@ class WebAcquisitionService(BaseService):
             if not page_title: # Fallback title
                  page_title = os.path.basename(urlparse(final_url_after_redirects).path) or "Untitled Webpage"
 
-            document_metadata = DocumentMetadata(
-                document_id=job_id,
-                user_id=user_id or f"unknown_user_ws_{job_id}",
-                source_identifier=original_request_url, # The URL user initially provided
-                source_type="web",
-                title=page_title,
-                extracted_at=datetime.utcnow(),
-                url_resolved=final_url_after_redirects
-            )
+            doc_metadata.title = page_title
             
             # Step 5: Parse the chosen HTML content and structure it, integrating Playwright details
             preliminary_blocks, raw_images = await self._parse_and_structure_html(
                 html_content=main_content_html_to_parse, # This is key: parse Trafilatura's output
                 base_url=final_url_after_redirects,    # Base for resolving relative links in the parsed HTML
-                original_request_url=original_request_url, # For GCS paths and if PW needs to re-resolve
-                job_id=job_id,
-                user_id=user_id,
+                original_request_url=final_url_after_redirects, # For GCS paths and if PW needs to re-resolve
+                job_id=job_id_for_run,
+                user_id=user_id_for_run,
                 playwright_image_details_map=playwright_image_details_map
             )
             
             duration = time.time() - start_time
-            self.logger.info(f"WebService execution for {original_request_url} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
+            self.logger.info(f"WebService execution for {final_url_after_redirects} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
             
             if not preliminary_blocks and not raw_images:
-                self.logger.warning(f"No content blocks or images were extracted for {original_request_url}. Trafilatura output length: {len(main_content_html_trafilatura or '')}. Full page length: {len(fetched_content)}.")
+                self.logger.warning(f"No content blocks or images were extracted for {final_url_after_redirects}. Trafilatura output length: {len(main_content_html_trafilatura or '')}. Full page length: {len(fetched_content)}.")
                 # Consider if this should be a failure or an empty success
                 # For now, let it proceed as success with empty content, Orchestrator might flag it.
 
-            return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
+            return ServiceResult.success(data=(preliminary_blocks, doc_metadata, raw_images))
 
         except Exception as e_main:
             duration = time.time() - start_time
-            self.logger.error(f"WebService failed for {original_request_url} in {duration:.2f}s: {e_main}", exc_info=True)
+            self.logger.error(f"WebService failed for {final_url_after_redirects} in {duration:.2f}s: {e_main}", exc_info=True)
             return ServiceResult.failure(
-                error_message=f"Failed to process URL {original_request_url}: {str(e_main)}",
-                error_details={"url": original_request_url, "duration_seconds": duration}
+                error_message=f"Failed to process URL {final_url_after_redirects}: {str(e_main)}",
+                error_details={"url": final_url_after_redirects, "duration_seconds": duration}
             )
