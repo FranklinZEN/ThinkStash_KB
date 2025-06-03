@@ -13,6 +13,8 @@ import tempfile # Added for temporary file handling for GCS downloads
 from google.cloud import storage # Added for GCS interaction
 from urllib.parse import urlparse # Added for parsing GCS paths
 from PIL import Image as PillowImage # Added alias for clarity
+import httpx
+from aiservice.app.services.routing_service import RoutingService # For is_url check
 
 from aiservice.app.services.base import BaseService, ServiceResult
 from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, RawImageInput
@@ -91,7 +93,9 @@ class PDFAcquisitionService(BaseService):
         original_file_path = pdf_input.file_path
         processing_file_path = original_file_path
         is_gcs_source = original_file_path.startswith(self.GCS_PREFIX)
+        is_http_url = RoutingService.is_url(original_file_path) # Add this check
         temp_gcs_file_path: Optional[str] = None
+        temp_http_file_path: Optional[str] = None # For downloaded HTTP file
 
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images: List[RawImageInput] = []
@@ -108,8 +112,38 @@ class PDFAcquisitionService(BaseService):
                 if download_error or not temp_gcs_file_path:
                     return ServiceResult.failure(error_message=f"Failed to download GCS file {original_file_path}: {download_error}")
                 processing_file_path = temp_gcs_file_path
+            elif is_http_url: # New block for handling HTTP(S) URLs
+                self.logger.info(f"Processing PDF from URL: {original_file_path}")
+                try:
+                    async with httpx.AsyncClient(timeout=self.settings.default_request_timeout_seconds if self.settings else 30) as client:
+                        response = await client.get(original_file_path, follow_redirects=True)
+                        response.raise_for_status() # Raise an exception for bad status codes
+                        
+                        # Create a temporary file to download to
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                            temp_http_file_path = temp_file.name
+                            # Write content to the temporary file
+                            for chunk in response.iter_bytes():
+                                temp_file.write(chunk)
+                        
+                        processing_file_path = temp_http_file_path
+                        self.logger.info(f"Successfully downloaded {original_file_path} to {processing_file_path}")
+                except httpx.RequestError as e_http:
+                    error_msg = f"HTTP error downloading PDF from {original_file_path}: {e_http}"
+                    self.logger.error(error_msg)
+                    return ServiceResult.failure(error_message=error_msg)
+                except Exception as e_download:
+                    error_msg = f"Failed to download or save PDF from URL {original_file_path}: {e_download}"
+                    self.logger.error(error_msg)
+                    # Clean up temp file if created before error
+                    if temp_http_file_path and os.path.exists(temp_http_file_path):
+                        try:
+                            os.unlink(temp_http_file_path)
+                        except Exception as e_unlink:
+                            self.logger.error(f"Failed to cleanup temp file {temp_http_file_path} after URL download error: {e_unlink}")
+                    return ServiceResult.failure(error_message=error_msg)
             
-            pdf_filename = os.path.basename(original_file_path) # Use original path for filename
+            pdf_filename = os.path.basename(urlparse(original_file_path).path) if is_http_url else os.path.basename(original_file_path)
 
             if not os.path.exists(processing_file_path):
                 return ServiceResult.failure(
@@ -377,14 +411,21 @@ class PDFAcquisitionService(BaseService):
                 try:
                     await loop.run_in_executor(None, doc.close)
                 except Exception as e_close:
-                    self.logger.error(f"Error closing PDF document {processing_file_path}: {e_close}")
+                    self.logger.warning(f"Error closing PDF document ({original_file_path}): {e_close}")
+            # Cleanup temporary file if it was created for GCS download
             if temp_gcs_file_path and os.path.exists(temp_gcs_file_path):
                 try:
-                    # Run os.unlink in an executor if it might block, or keep it sync if it's quick
-                    await loop.run_in_executor(None, os.unlink, temp_gcs_file_path)
-                    self.logger.info(f"Successfully deleted temporary GCS file: {temp_gcs_file_path}")
-                except Exception as e_unlink:
-                    self.logger.error(f"Failed to delete temporary GCS file {temp_gcs_file_path}: {e_unlink}")
+                    os.unlink(temp_gcs_file_path)
+                    self.logger.info(f"Successfully cleaned up temporary GCS file: {temp_gcs_file_path}")
+                except Exception as e_unlink_gcs:
+                    self.logger.error(f"Failed to cleanup temporary GCS file {temp_gcs_file_path}: {e_unlink_gcs}")
+            # Cleanup temporary file if it was created for HTTP download
+            if temp_http_file_path and os.path.exists(temp_http_file_path):
+                try:
+                    os.unlink(temp_http_file_path)
+                    self.logger.info(f"Successfully cleaned up temporary HTTP file: {temp_http_file_path}")
+                except Exception as e_unlink_http:
+                    self.logger.error(f"Failed to cleanup temporary HTTP file {temp_http_file_path}: {e_unlink_http}")
 
 # --- Example Usage / Testing ---
 async def main_test_pdf_service():

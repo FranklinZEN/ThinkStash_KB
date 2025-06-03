@@ -58,4 +58,6 @@ class DocumentMetadata(BaseModel):
     extracted_at: datetime = Field(default_factory=datetime.utcnow)
     total_pages: Optional[int] = Field(None)
     language_detected: Optional[str] = Field(None, description="Detected language of the content.")
-    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict) 
+    custom_fields: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    is_paywalled: Optional[bool] = Field(None, description="Indicates if the content was identified as being behind a paywall.")
+    content_summary: Optional[str] = Field(None, description="A brief summary or status of the content, e.g., if paywalled or if extraction failed.") 

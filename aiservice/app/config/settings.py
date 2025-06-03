@@ -26,6 +26,7 @@ class WebServiceSpecificSettings(BaseSettings):
     min_image_area: int = Field(default=22500, env="WEB_MIN_IMAGE_AREA", description="Minimum rendered area (width*height) for an image to be included (if Playwright is enabled).")
     playwright_page_load_timeout_ms: int = Field(default=30000, env="WEB_PLAYWRIGHT_PAGE_LOAD_TIMEOUT_MS", description="Timeout for Playwright page.goto() in milliseconds.")
     playwright_network_idle_timeout_ms: int = Field(default=10000, env="WEB_PLAYWRIGHT_NETWORK_IDLE_TIMEOUT_MS", description="Timeout for Playwright page.wait_for_load_state('networkidle') in milliseconds.")
+    minimal_content_length_threshold: int = Field(default=500, env="WEB_MINIMAL_CONTENT_LENGTH_THRESHOLD", description="Minimum length of extracted content to be considered non-minimal for paywall detection.")
 
     stop_processing_heading_texts: Set[str] = Field(
         default_factory=lambda: {

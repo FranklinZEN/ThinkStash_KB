@@ -4,6 +4,7 @@ import uuid
 from typing import Optional, Any, Dict, List, Union, Tuple, Type
 import sys
 import logging
+import httpx
 
 from aiservice.app.config.settings import Settings # Import the specific Settings class
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock, OrchestrationStatusCodeEnum # Import OrchestrationStatusCodeEnum
@@ -85,47 +86,45 @@ class ParallelOrchestrator(BaseService):
         determined_final_source_type: Optional[str] = orchestrator_input.source_type
 
         # --- URL Normalization --- #
-        # Determine if the source_identifier is a URL and normalize it.
-        # We use RoutingService.is_url for the check.
-        # The orchestrator_input.source_type can be a hint (e.g., 'url', 'pdf', 'docx').
-        # If source_type is explicitly 'url', or if it's None/empty and RoutingService.is_url is true, then normalize.
-        
+        # Attempt to normalize the source_identifier first, especially for complex URLs like chrome-extension.
         processed_source_identifier = orchestrator_input.source_identifier
-        # Use a temporary variable for the source type that RoutingService will use
-        initial_source_type_for_routing = orchestrator_input.source_type
+        initial_source_type_for_routing = orchestrator_input.source_type # Preserve original hint
 
-        if orchestrator_input.source_type == 'url' or \
-           ((orchestrator_input.source_type is None or orchestrator_input.source_type == '') and \
-            RoutingService.is_url(orchestrator_input.source_identifier)):
-            
-            if not RoutingService.is_url(processed_source_identifier): # Double check after potential previous logic
-                 logger.info(f"Job {job_id}: Initial source_identifier '{processed_source_identifier}' considered for normalization, but RoutingService.is_url returned false. Normalizing anyway as source_type hints URL.")
-
-            try:
-                normalized_url = custom_normalize_url(orchestrator_input.source_identifier)
-                if normalized_url != orchestrator_input.source_identifier:
-                    logger.info(f"Job {job_id}: URL normalized from '{orchestrator_input.source_identifier}' to '{normalized_url}'")
-                    processed_source_identifier = normalized_url
-                initial_source_type_for_routing = 'url' # Ensure routing service knows it's a URL post-normalization
-            except Exception as e_norm:
-                logger.error(f"Job {job_id}: Error during URL normalization for '{orchestrator_input.source_identifier}': {e_norm}. Proceeding with original.")
-                # processed_source_identifier remains orchestrator_input.source_identifier
-        
-        # Update orchestrator_input to carry the processed_source_identifier for the rest of the process
-        # This is a bit tricky as Pydantic models are often immutable or encourage creating new instances.
-        # For simplicity, we'll pass `processed_source_identifier` to services that need it.
-        # And the final OrchestrationOutput should reflect the potentially normalized URL.
+        try:
+            normalized_attempt = custom_normalize_url(orchestrator_input.source_identifier)
+            if normalized_attempt != orchestrator_input.source_identifier:
+                logger.info(f"Job {job_id}: URL normalized from '{orchestrator_input.source_identifier}' to '{normalized_attempt}' by custom_normalize_url.")
+                processed_source_identifier = normalized_attempt
+                # If normalization changed it and the result is a standard URL, ensure routing treats it as such.
+                if RoutingService.is_url(processed_source_identifier) and initial_source_type_for_routing != 'url':
+                    logger.info(f"Job {job_id}: Post-normalization, identifier '{processed_source_identifier}' is a standard URL. Setting type hint for routing to 'url'.")
+                    initial_source_type_for_routing = 'url'
+            elif orchestrator_input.source_type == 'url' and not RoutingService.is_url(processed_source_identifier):
+                 # This case covers if source_type was 'url' but custom_normalize_url didn't change it AND it's still not a standard http/s/ftp.
+                 # This might happen if custom_normalize_url passed through an unhandled 'url' scheme.
+                 logger.warning(f"Job {job_id}: Source type hint was 'url' for '{processed_source_identifier}', but it's not recognized as a standard http/s/ftp URL by RoutingService.is_url. Proceeding with original type hint.")
+        except Exception as e_norm:
+            logger.error(f"Job {job_id}: Error during URL normalization for '{orchestrator_input.source_identifier}': {e_norm}. Proceeding with original identifier and type hint.")
+            # processed_source_identifier remains orchestrator_input.source_identifier
+            # initial_source_type_for_routing remains orchestrator_input.source_type
 
         # 1. Routing
         logger.info(f"Job {job_id}: Routing for identifier: {processed_source_identifier}, type hint: {initial_source_type_for_routing}")
         
-        # Determine initial source type for routing more explicitly
-        # If orchestrator_input.source_type is provided, use it as a strong hint.
-        # Otherwise, let RoutingService.get_source_type determine it solely from the identifier.
-        if not initial_source_type_for_routing: # If it wasn't set to 'url' by normalization logic and was initially None/empty
+        # Determine initial source type for routing more explicitly if not already set by normalization or input
+        if not initial_source_type_for_routing: 
+            # Pass the *processed_source_identifier* to get_source_type
+            determined_type_from_get_source_type = RoutingService.get_source_type(processed_source_identifier)
+            logger.info(f"Job {job_id}: RoutingService.get_source_type determined initial type as: {determined_type_from_get_source_type} for identifier '{processed_source_identifier}'")
+            initial_source_type_for_routing = determined_type_from_get_source_type
+        elif initial_source_type_for_routing == 'url' and not RoutingService.is_url(processed_source_identifier):
+            # If after normalization, it was hinted as 'url' but is_url still says no (e.g. "file:///" was normalized to itself)
+            # then we should trust get_source_type for a more accurate classification than just 'url'.
+            logger.info(f"Job {job_id}: Identifier '{processed_source_identifier}' was hinted as 'url' but is_url is false. Re-evaluating type with get_source_type.")
             initial_source_type_for_routing = RoutingService.get_source_type(processed_source_identifier)
-            logger.info(f"Job {job_id}: RoutingService.get_source_type determined initial type as: {initial_source_type_for_routing}")
-        
+            logger.info(f"Job {job_id}: Re-evaluated type for routing: {initial_source_type_for_routing}")
+
+
         routing_input_obj = RoutingInput(
             source_identifier=processed_source_identifier, # Use the potentially normalized identifier
             source_type=initial_source_type_for_routing 
@@ -153,8 +152,27 @@ class ParallelOrchestrator(BaseService):
 
         determined_service_name = routing_result.data.determined_service
         actual_determined_source_type_from_router = routing_result.data.determined_source_type
-        logger.info(f"Job {job_id}: Routing determined service: {determined_service_name}, type: {actual_determined_source_type_from_router}")
-        determined_final_source_type = actual_determined_source_type_from_router # Update with router's more specific type
+
+        # If router suggests WebAcquisitionService for a URL, perform a HEAD request to check for PDF content-type
+        if determined_service_name == "WebAcquisitionService" and \
+           RoutingService.is_url(processed_source_identifier): # Ensure it's a URL
+            try:
+                async with httpx.AsyncClient(timeout=self.settings.default_request_timeout_seconds) as client:
+                    head_response = await client.head(processed_source_identifier, follow_redirects=True)
+                    content_type = head_response.headers.get('content-type', '').lower()
+                    if 'application/pdf' in content_type:
+                        logger.info(f"Job {job_id}: HEAD request for {processed_source_identifier} indicates PDF content-type ('{content_type}'). Overriding service to PDFAcquisitionService.")
+                        determined_service_name = "PDFAcquisitionService"
+                        actual_determined_source_type_from_router = "pdf" # Update the determined type as well
+                    else:
+                        logger.info(f"Job {job_id}: HEAD request for {processed_source_identifier} content-type ('{content_type}') is not PDF. Proceeding with {determined_service_name}.")
+            except httpx.RequestError as e_http:
+                logger.warning(f"Job {job_id}: HTTP error during HEAD request for {processed_source_identifier}: {e_http}. Proceeding with router's decision ({determined_service_name}).")
+            except Exception as e_head:
+                logger.warning(f"Job {job_id}: Unexpected error during HEAD request or content-type check for {processed_source_identifier}: {e_head}. Proceeding with router's decision ({determined_service_name}).")
+
+        logger.info(f"Job {job_id}: Final determined service: {determined_service_name}, type: {actual_determined_source_type_from_router}")
+        determined_final_source_type = actual_determined_source_type_from_router # Update with router's or HEAD request's more specific type
 
         # 2. Acquisition
         # All acquisition services now return ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]

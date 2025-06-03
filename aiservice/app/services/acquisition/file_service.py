@@ -102,13 +102,15 @@ class FileAcquisitionService(BaseService):
                     self.logger.error(f"FileAcquisitionService: Failed to cleanup temp file {temp_file_path} after GCS download error: {e_unlink}")
             return None, str(e)
 
-    async def _process_docx(self, 
-                            file_path: str, 
-                            job_id: str, 
+    async def _process_docx(self,
+                            file_path: str,
+                            job_id: str,
                             processing_level: str,
                             source_identifier_for_gcs_imgs: str, # Original GCS path or local file path for image metadata
-                            base_document_metadata: DocumentMetadata, 
-                            preliminary_blocks: List[PreliminaryBlock], 
+                            source_content_type_for_gcs_imgs: str, # Added: e.g., "docx", "gcs_docx"
+                            user_id_for_gcs_imgs: Optional[str], # Added: user_id
+                            base_document_metadata: DocumentMetadata,
+                            preliminary_blocks: List[PreliminaryBlock],
                             raw_images: List[RawImageInput]
                             ) -> Optional[str]: # Return an error message string if fails, else None
         loop = asyncio.get_event_loop()
@@ -214,11 +216,14 @@ class FileAcquisitionService(BaseService):
                                         raw_images.append(RawImageInput(
                                             image_id=raw_image_id, image_bytes=image_bytes,
                                             original_filename=original_filename, mime_type=image_part.content_type,
-                                            source_document_id=job_id,
-                                            user_id=base_document_metadata.user_id, # Pass user_id
-                                            job_id=job_id, # Pass job_id
-                                            document_id=base_document_metadata.document_id, # Pass document_id from metadata
-                                            source_identifier_of_document=source_identifier_for_gcs_imgs # Original GCS or local path
+                                            source_document_id=job_id, # Retained for now, though job_id_for_gcs_path might be primary
+                                            user_id=user_id_for_gcs_imgs, # Use passed user_id
+                                            job_id=job_id, # Retained for now
+                                            document_id=base_document_metadata.document_id,
+                                            # GCS Path related fields:
+                                            original_source_identifier_for_gcs_path=source_identifier_for_gcs_imgs,
+                                            source_type_for_gcs_path=source_content_type_for_gcs_imgs,
+                                            job_id_for_gcs_path=job_id
                                         ))
                                         preliminary_blocks.append(PreliminaryBlock(
                                             block_id=f"{job_id}_docx_p{para_g_idx}_draw_img{current_img_idx}", type="image_placeholder",
@@ -251,9 +256,13 @@ class FileAcquisitionService(BaseService):
                                         raw_images.append(RawImageInput(
                                             image_id=raw_image_id, image_bytes=image_bytes,
                                             original_filename=original_filename, mime_type=image_part.content_type,
-                                            source_document_id=job_id,
-                                            original_source_identifier_for_gcs_path=file_path,
-                                            source_type_for_gcs_path=source_type_for_gcs,
+                                            source_document_id=job_id, # Retained for now
+                                            user_id=user_id_for_gcs_imgs, # Use passed user_id
+                                            job_id=job_id, # Retained for now
+                                            document_id=base_document_metadata.document_id,
+                                            # GCS Path related fields:
+                                            original_source_identifier_for_gcs_path=source_identifier_for_gcs_imgs,
+                                            source_type_for_gcs_path=source_content_type_for_gcs_imgs,
                                             job_id_for_gcs_path=job_id
                                         ))
                                         preliminary_blocks.append(PreliminaryBlock(
@@ -272,13 +281,15 @@ class FileAcquisitionService(BaseService):
             self.logger.error(f"DOCX Processing Error: {error_msg}", exc_info=True)
             return error_msg
 
-    async def _process_markdown(self, 
-                                file_path: str, 
-                                job_id: str, 
+    async def _process_markdown(self,
+                                file_path: str,
+                                job_id: str,
                                 processing_level: str,
-                                source_identifier_for_gcs_imgs: str, 
-                                base_document_metadata: DocumentMetadata, 
-                                preliminary_blocks: List[PreliminaryBlock], 
+                                source_identifier_for_gcs_imgs: str, # Original GCS path or local file path
+                                source_content_type_for_gcs_imgs: str, # Added
+                                user_id_for_gcs_imgs: Optional[str], # Added: user_id
+                                base_document_metadata: DocumentMetadata,
+                                preliminary_blocks: List[PreliminaryBlock],
                                 raw_images: List[RawImageInput]
                                 ) -> Optional[str]:
         loop = asyncio.get_event_loop()
@@ -461,10 +472,11 @@ class FileAcquisitionService(BaseService):
                                         "page_number": None, 
                                         "bbox": None, 
                                         "original_source_identifier_for_gcs_path": source_identifier_for_gcs_imgs,
-                                        "source_type_for_gcs_path": base_document_metadata.source_type,
+                                        "source_type_for_gcs_path": source_content_type_for_gcs_imgs,
                                         "job_id_for_gcs_path": job_id,
-                                        "user_id": base_document_metadata.user_id, # from base_document_metadata
-                                        "document_id": base_document_metadata.document_id # ensure document_id is passed, also from base
+                                        "user_id": user_id_for_gcs_imgs,
+                                        "document_id": base_document_metadata.document_id,
+                                        "alt_text": alt_text if alt_text != "image" else None
                                     }
                                     if not image_input_data["source_url"] and not img_src.startswith('data:'):
                                         resolved_path = img_src
@@ -563,91 +575,88 @@ class FileAcquisitionService(BaseService):
             return error_msg
 
     async def execute(self, file_input: FileAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
+        self.logger.info(f"FileAcquisitionService: Starting processing for {file_input.file_path} (Type: {file_input.source_content_type}, Job: {file_input.job_id})")
         start_time = time.time()
-        job_id = file_input.job_id or uuid.uuid4().hex[:8]
-        
-        original_file_path = file_input.file_path
-        processing_file_path = original_file_path # Will be updated if GCS
-        is_gcs_source = original_file_path.startswith(self.GCS_PREFIX)
-        temp_gcs_file_path: Optional[str] = None
-        loop = asyncio.get_event_loop()
-
-        effective_content_type = file_input.source_content_type
-        if effective_content_type.startswith("gcs_file_ext_"):
-            # e.g., gcs_file_ext_banana -> banana
-            effective_content_type = effective_content_type[len("gcs_file_ext_"):]
-        elif effective_content_type.startswith("gcs_"):
-            # e.g., gcs_docx -> docx
-            effective_content_type = effective_content_type[len("gcs_"):]
-        # Now effective_content_type is the actual file type like 'docx', 'md', 'txt', or 'banana'
 
         preliminary_blocks: List[PreliminaryBlock] = []
         raw_images: List[RawImageInput] = []
-        file_basename = os.path.basename(original_file_path)
+        
+        effective_job_id = file_input.job_id if file_input.job_id else str(uuid.uuid4())
+        effective_user_id = file_input.user_id if file_input.user_id else "unknown_user" # Ensure user_id is not None
 
         document_metadata = DocumentMetadata(
-            document_id=job_id,
-            user_id=file_input.user_id or f"unknown_user_file_service_{job_id}",
-            source_identifier=original_file_path, # Use original path for identification
-            source_type=effective_content_type, 
-            title=file_basename, # Default title, can be overridden by specific processors
-            extracted_at=datetime.utcnow()
-            # Other fields like author, creation_date will be populated by specific processors
+            document_id=effective_job_id, # Using job_id as document_id for this run
+            user_id=effective_user_id, 
+            source_identifier=file_input.file_path, # Original identifier
+            source_type=file_input.source_content_type, # Original type
+            title=os.path.basename(file_input.file_path) # Default title to filename
         )
-        
-        error_message: Optional[str] = None
+
+        processing_error: Optional[str] = None
+        actual_file_path_to_process = file_input.file_path # This might change if downloaded from GCS
+        temp_gcs_file_path: Optional[str] = None
+
+        is_gcs_source = file_input.file_path.startswith(self.GCS_PREFIX)
+
+        if is_gcs_source:
+            self.logger.info(f"FileAcquisitionService: Identified GCS source: {file_input.file_path}")
+            # Use original file_path as original_filename_for_suffix to preserve original extension
+            temp_gcs_file_path, download_error = await self._download_gcs_file(file_input.file_path, file_input.file_path) 
+            if download_error or not temp_gcs_file_path:
+                error_msg = f"Failed to download GCS file {file_input.file_path}: {download_error}"
+                self.logger.error(f"FileAcquisitionService: {error_msg}")
+                return ServiceResult.failure(
+                    error_message=error_msg, 
+                    data=(preliminary_blocks, document_metadata, raw_images) # Return whatever was processed
+                )
+            actual_file_path_to_process = temp_gcs_file_path
+            # Update document_metadata.source_identifier to reflect the original GCS path,
+            # and title if it was using the GCS path.
+            document_metadata.source_identifier = file_input.file_path 
+            document_metadata.title = os.path.basename(file_input.file_path)
+
+
+        # Determine the base file type (docx, md, txt) from source_content_type
+        base_file_type = file_input.source_content_type.replace("gcs_", "") # Remove 'gcs_' prefix if present
 
         try:
-            if is_gcs_source:
-                if not self.gcs_storage_client:
-                    self.logger.error("FileAcquisitionService: GCS client not initialized. Cannot process GCS path.")
-                    return ServiceResult.failure(error_message="GCS client not initialized for FileAcquisitionService.")
-                
-                self.logger.info(f"FileAcquisitionService: Processing GCS file: {original_file_path} with type {file_input.source_content_type}")
-                temp_gcs_file_path, download_error = await self._download_gcs_file(original_file_path, file_basename)
-                if download_error or not temp_gcs_file_path:
-                    self.logger.error(f"FileAcquisitionService: Failed to download GCS file {original_file_path}: {download_error}")
-                    return ServiceResult.failure(error_message=f"Failed to download GCS file {original_file_path}: {download_error}")
-                processing_file_path = temp_gcs_file_path
-            
-            # Critical: Check existence of the file path that will be processed
-            if not os.path.exists(processing_file_path):
-                self.logger.error(f"FileAcquisitionService: File not found at processing path: {processing_file_path} (original: {original_file_path})")
-                return ServiceResult.failure(error_message=f"File not found: {processing_file_path}")
-
-            if effective_content_type == "docx":
-                error_message = await self._process_docx(
-                    processing_file_path, 
-                    job_id, 
+            if base_file_type == "docx":
+                processing_error = await self._process_docx(
+                    actual_file_path_to_process, 
+                    effective_job_id, 
                     file_input.processing_level,
-                    original_file_path, # Pass original GCS path for image linking
+                    document_metadata.source_identifier, # Original source identifier (local path or GCS URI)
+                    document_metadata.source_type,       # Original source type (e.g. "docx", "gcs_docx")
+                    document_metadata.user_id,           # User ID
                     document_metadata, 
                     preliminary_blocks, 
                     raw_images
                 )
-            elif effective_content_type == "md":
-                error_message = await self._process_markdown(
-                    processing_file_path, 
-                    job_id, 
+            elif base_file_type == "md":
+                processing_error = await self._process_markdown(
+                    actual_file_path_to_process, 
+                    effective_job_id, 
                     file_input.processing_level,
-                    original_file_path, # Pass original GCS path for image linking
+                    document_metadata.source_identifier, # Original source identifier
+                    document_metadata.source_type,       # Original source type
+                    document_metadata.user_id,           # User ID
                     document_metadata, 
                     preliminary_blocks, 
                     raw_images
                 )
-            elif effective_content_type == "txt":
-                error_message = await self._process_txt(
-                    processing_file_path, 
-                    job_id, 
+            elif base_file_type == "txt":
+                processing_error = await self._process_txt(
+                    actual_file_path_to_process, 
+                    effective_job_id, 
                     document_metadata, 
                     preliminary_blocks
                 )
             else:
-                error_message = f"Unsupported effective_content_type: {effective_content_type} (from original: {file_input.source_content_type})"
-                self.logger.error(error_message)
+                processing_error = f"Unsupported effective_content_type: {base_file_type} (from original: {file_input.source_content_type})"
+                self.logger.error(processing_error)
             
-            if error_message:
-                return ServiceResult.failure(error_message=f"FileAcquisitionService failed: {error_message}")
+            if processing_error:
+                return ServiceResult.failure(error_message=f"FileAcquisitionService failed: {processing_error}")
 
             # Final sorting of blocks by their 'order' attribute if set, or keep as is
             # The individual _process_* methods are responsible for setting order within their context.
@@ -682,14 +691,14 @@ class FileAcquisitionService(BaseService):
 
 
             duration_ms = (time.time() - start_time) * 1000
-            self.logger.info(f"FileAcquisitionService for '{original_file_path}' (type: {effective_content_type}) completed in {duration_ms:.2f} ms. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
+            self.logger.info(f"FileAcquisitionService for '{actual_file_path_to_process}' (type: {base_file_type}) completed in {duration_ms:.2f} ms. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
             return ServiceResult.success(data=(preliminary_blocks, document_metadata, raw_images))
 
         except FileNotFoundError as e_fnf: # Should be caught by os.path.exists, but as a safeguard
-            self.logger.error(f"FileAcquisitionService FileNotFoundError for {original_file_path}: {e_fnf}", exc_info=True)
-            return ServiceResult.failure(error_message=f"File not found: {original_file_path}")
+            self.logger.error(f"FileAcquisitionService FileNotFoundError for {actual_file_path_to_process}: {e_fnf}", exc_info=True)
+            return ServiceResult.failure(error_message=f"File not found: {actual_file_path_to_process}")
         except Exception as e:
-            self.logger.error(f"FileAcquisitionService unexpected error for {original_file_path} (type: {file_input.source_content_type}): {e}", exc_info=True)
+            self.logger.error(f"FileAcquisitionService unexpected error for {actual_file_path_to_process} (type: {file_input.source_content_type}): {e}", exc_info=True)
             return ServiceResult.failure(error_message=f"FileAcquisitionService failed: {str(e)}")
         finally:
             if temp_gcs_file_path and os.path.exists(temp_gcs_file_path):

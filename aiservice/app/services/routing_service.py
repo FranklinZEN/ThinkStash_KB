@@ -81,6 +81,17 @@ class RoutingService(BaseService):
             # Further checks for URL pointing to a specific file type (e.g. PDF)
             # will be handled by WebAcquisitionService or Orchestrator.
             # For now, RoutingService identifies it as a generic URL.
+            # MODIFIED: Check for .pdf extension in URL path
+            try:
+                parsed_url = urlparse(identifier_lower)
+                url_path = parsed_url.path
+                _, ext = os.path.splitext(url_path.lower()) # Get extension from the path part
+                if ext in RoutingService.KNOWN_FILE_EXTENSIONS and ext == '.pdf': # Specifically check for PDF
+                    # If it's a URL pointing to a PDF file
+                    return RoutingService.KNOWN_FILE_EXTENSIONS[ext] # Should return 'pdf'
+            except Exception:
+                # Problem parsing URL or extracting extension, fall through to generic URL
+                pass # Ensure this doesn't accidentally suppress other logic
             return RoutingService.URL_TYPE
 
         # If not a GCS path or URL, assume it's a local file path

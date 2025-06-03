@@ -120,9 +120,17 @@ logger = logging.getLogger(__name__)
 
 # Define default headers including a common User-Agent
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1"
     # "Accept-Encoding": "gzip, deflate, br", # httpx handles this by default
 }
 
@@ -224,54 +232,60 @@ class WebAcquisitionService(BaseService):
         image_details_map: Dict[str, Dict[str, Any]] = {}
         self.logger.debug(f"Playwright: Starting to fetch image details for URL: {url}")
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch()
-                page = await browser.new_page()
-                
-                try:
-                    await page.goto(url, timeout=self.service_settings.playwright_page_load_timeout_ms)
-                    await page.wait_for_load_state('networkidle', timeout=self.service_settings.playwright_network_idle_timeout_ms)
-                    self.logger.debug(f"Playwright: Page loaded for {url}")
-                except Exception as e_nav:
-                    self.logger.warning(f"Playwright: Navigation or load state wait failed for {url} (timeouts: load={self.service_settings.playwright_page_load_timeout_ms}ms, idle={self.service_settings.playwright_network_idle_timeout_ms}ms): {e_nav}. Attempting to extract images anyway.")
-                
-                images_on_page = await page.query_selector_all('img')
-                self.logger.debug(f"Playwright: Found {len(images_on_page)} <img> tags on {url}")
-                
-                for img_element in images_on_page:
+            # This outer try-except is to catch potential startup issues with Playwright itself (e.g., NotImplementedError on Windows)
+            try:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    page = await browser.new_page()
+                    
                     try:
-                        src = await img_element.get_attribute('src')
-                        if not src or src.startswith("data:image"): 
-                            continue
+                        await page.goto(url, timeout=self.service_settings.playwright_page_load_timeout_ms)
+                        await page.wait_for_load_state('networkidle', timeout=self.service_settings.playwright_network_idle_timeout_ms)
+                        self.logger.debug(f"Playwright: Page loaded for {url}")
+                    except Exception as e_nav:
+                        self.logger.warning(f"Playwright: Navigation or load state wait failed for {url} (timeouts: load={self.service_settings.playwright_page_load_timeout_ms}ms, idle={self.service_settings.playwright_network_idle_timeout_ms}ms): {e_nav}. Attempting to extract images anyway.")
+                    
+                    images_on_page = await page.query_selector_all('img')
+                    self.logger.debug(f"Playwright: Found {len(images_on_page)} <img> tags on {url}")
+                    
+                    for img_element in images_on_page:
+                        try:
+                            src = await img_element.get_attribute('src')
+                            if not src: continue
 
-                        abs_src = urljoin(base_url_for_resolution, src.strip())
-                        
-                        bounding_box = await img_element.bounding_box()
-                        width = int(bounding_box['width']) if bounding_box else 0
-                        height = int(bounding_box['height']) if bounding_box else 0
-                        
-                        is_visible = await img_element.is_visible()
-                        alt_text_pw = await img_element.get_attribute('alt') or ""
-                        
-                        if abs_src not in image_details_map:
+                            abs_src = urljoin(base_url_for_resolution, src.strip()) # Resolve against the page's base URL
+                            if not abs_src: continue
+
+                            # Get rendered dimensions and visibility
+                            bounding_box = await img_element.bounding_box()
+                            width = int(bounding_box['width']) if bounding_box else 0
+                            height = int(bounding_box['height']) if bounding_box else 0
+                            is_visible = await img_element.is_visible()
+                            alt = await img_element.get_attribute('alt') or ""
+
                             image_details_map[abs_src] = {
-                                "rendered_width": width,
-                                "rendered_height": height,
-                                "alt_text": alt_text_pw.strip(),
-                                "is_visible": is_visible,
-                                "from_playwright": True
+                                'width': width,
+                                'height': height,
+                                'visible': is_visible,
+                                'alt': alt,
+                                'source_method': 'playwright'
                             }
-                            self.logger.debug(f"Playwright: Got details for {abs_src} - W:{width}, H:{height}, Vis:{is_visible}, Alt:'{alt_text_pw[:30]}...'")
-                    except Exception as e_img_detail:
-                        self.logger.debug(f"Playwright: Error processing an image element on {url}: {e_img_detail}")
-                await browser.close()
-        except Exception as e_pw_general:
-            # Catching playwright.helper.Error if playwright install hasn't been run.
-            if "playwright install" in str(e_pw_general).lower():
-                 self.logger.error(f"Playwright: Browsers not installed. Please run 'playwright install' or 'playwright install chromium'. Error: {e_pw_general}")
-            else:
-                self.logger.error(f"Playwright: General error during Playwright execution for {url}: {e_pw_general}", exc_info=True)
-        
+                            self.logger.debug(f"Playwright: Got details for {abs_src}: w={width}, h={height}, vis={is_visible}, alt='{alt[:30]}'")
+                        except Exception as e_img_detail:
+                            self.logger.warning(f"Playwright: Error getting details for an image on {url}: {e_img_detail}")
+                    
+                    await browser.close()
+            except NotImplementedError as e_ni:
+                self.logger.warning(f"Playwright: Could not initialize due to NotImplementedError (often on Windows without appropriate asyncio policy): {e_ni}. Proceeding without Playwright image details.")
+                # image_details_map will remain empty, which is the desired fallback.
+            except Exception as e_pw_general: # Catch other general Playwright startup/operational errors
+                self.logger.error(f"Playwright: General error during Playwright execution for {url}:\n{e_pw_general}", exc_info=True)
+                # image_details_map will remain empty, which is the desired fallback.
+        except Exception as e_outer_unexpected: # Catch any truly unexpected error in this function's setup
+            self.logger.error(f"Playwright: Unexpected outer error in _get_playwright_image_details for {url}:\n{e_outer_unexpected}", exc_info=True)
+            # Ensure image_details_map is empty on any such failure
+            image_details_map = {} # Explicitly ensure it's empty
+
         self.logger.debug(f"Playwright: Finished fetching image details for {url}. Found details for {len(image_details_map)} images.")
         return image_details_map
 
@@ -343,6 +357,11 @@ class WebAcquisitionService(BaseService):
         tag_name = element.name.lower() if element.name else ""
         self.logger.debug(f"WebService _process_html_element: Handling tag: <{tag_name}>")
 
+        # ADDED: Explicitly skip script and style tags and their contents
+        if tag_name in ['script', 'style']:
+            self.logger.debug(f"Skipping <{tag_name}> tag and its contents.")
+            return False # Continue processing siblings, but skip this tag and its children entirely
+
         # Tag processing starts here
         if tag_name in self.HEADING_TAGS or \
            (tag_name == "head" and element.attrs.get("rend", "").lower().startswith("h")):
@@ -408,11 +427,36 @@ class WebAcquisitionService(BaseService):
 
         elif tag_name == "img" or tag_name == "graphic":
             img_src = element.attrs.get("src")
+            # MODIFIED: Check for other src attributes like data-src or srcset if primary src is missing/problematic
+            if not img_src or img_src.startswith("data:image") or not img_src.strip():
+                self.logger.debug(f"Primary 'src' attribute is missing, data URI, or empty for <{tag_name}>. Checking srcset, data-src, data-original.")
+                srcset = element.attrs.get("srcset")
+                data_src = element.attrs.get("data-src")
+                data_original = element.attrs.get("data-original")
+
+                if srcset: # Simplistic srcset handling: take the first URL
+                    img_src = srcset.strip().split(',')[0].strip().split(' ')[0]
+                    self.logger.debug(f"Using first URL from srcset for <{tag_name}>: '{img_src}'")
+                elif data_src:
+                    img_src = data_src
+                    self.logger.debug(f"Using data-src for <{tag_name}>: '{img_src}'")
+                elif data_original:
+                    img_src = data_original
+                    self.logger.debug(f"Using data-original for <{tag_name}>: '{img_src}'")
+                else:
+                    # Try to get from <picture> parent if available
+                    parent_picture = element.find_parent('picture')
+                    if parent_picture:
+                        source_tag = parent_picture.find('source', srcset=True)
+                        if source_tag and source_tag.attrs.get("srcset"):
+                            img_src = source_tag.attrs["srcset"].strip().split(',')[0].strip().split(' ')[0]
+                            self.logger.debug(f"Using first URL from <picture><source srcset> for <{tag_name}>: '{img_src}'")
+            
             alt_text = element.attrs.get("alt", "")
 
-            if not img_src or img_src.startswith("data:image"):
-                self.logger.debug(f"<{tag_name}> has no valid src or is data URI: '{img_src}'. Skipping direct processing.")
-                # Fall through to child recursion for tags like <picture>
+            if not img_src or img_src.startswith("data:image") or not img_src.strip():
+                self.logger.debug(f"<{tag_name}> has no valid src, data URI, or empty src even after fallbacks: '{img_src}'. Skipping direct processing.")
+                # Fall through to child recursion for tags like <picture> that might contain a valid <img> deeper
             else:
                 img_abs_url = urljoin(base_url, img_src.strip())
 
@@ -432,24 +476,25 @@ class WebAcquisitionService(BaseService):
                     return False
 
                 final_alt_text = alt_text
-                pw_rendered_width, pw_rendered_height = None, None
+                pw_rendered_width, pw_rendered_height = None, None # Initialize to None
 
-                if self.service_settings.use_playwright_for_image_filtering and playwright_image_details_map:
+                # Conditional Playwright-based filtering
+                perform_playwright_filtering = self.service_settings.use_playwright_for_image_filtering and playwright_image_details_map is not None and bool(playwright_image_details_map)
+
+                if perform_playwright_filtering:
                     if img_abs_url in playwright_image_details_map:
                         details = playwright_image_details_map[img_abs_url]
-                        pw_rendered_width = details.get("rendered_width", 0)
-                        pw_rendered_height = details.get("rendered_height", 0)
-                        is_visible = details.get("is_visible", False)
-                        pw_alt = details.get("alt_text", "")
+                        pw_rendered_width = details.get("width", 0) # Ensure key matches what _get_playwright_image_details produces
+                        pw_rendered_height = details.get("height", 0) # Ensure key matches
+                        is_visible = details.get("visible", False)      # Ensure key matches
+                        pw_alt = details.get("alt", "")                # Ensure key matches
                         if pw_alt: final_alt_text = pw_alt
 
-                        # ADDED: Detailed pre-filter logging for Playwright
                         self.logger.info(f"PLAYWRIGHT_PRE_FILTER_DETAILS for <{tag_name}> {img_abs_url}: "
                                          f"Reported Vis:{is_visible}, "
                                          f"Reported W:{pw_rendered_width}, H:{pw_rendered_height}. "
                                          f"Effective Alt:'{final_alt_text}'.")
 
-                        self.logger.debug(f"Playwright details for <{tag_name}> {img_abs_url}: Vis:{is_visible}, W:{pw_rendered_width}, H:{pw_rendered_height}, Alt:'{final_alt_text}'") # Original debug log
                         if not is_visible: 
                             self.logger.info(f"FILTERED (Playwright <{tag_name}> Invisible): {img_abs_url}"); return False
                         if pw_rendered_width < self.service_settings.min_image_width: 
@@ -459,8 +504,11 @@ class WebAcquisitionService(BaseService):
                         if (pw_rendered_width * pw_rendered_height) < self.service_settings.min_image_area: 
                             self.logger.info(f"FILTERED (Playwright <{tag_name}> Area {pw_rendered_width*pw_rendered_height} < {self.service_settings.min_image_area}): {img_abs_url}"); return False
                     else:
-                        self.logger.warning(f"Playwright enabled but no details found for <{tag_name}>: {img_abs_url}. Skipping this image.")
+                        # Playwright was used, data was expected, but this specific image URL was not found in its results.
+                        self.logger.warning(f"Playwright run, but no details found for <{tag_name}>: {img_abs_url}. Skipping this image as Playwright data is authoritative when present.")
                         return False 
+                # else: (Playwright not used or failed to produce a map) - proceed without Playwright filtering for this image.
+                # No specific filtering here means it passes this stage; other filters (keyword, duplicate) still apply.
                 
                 img_id_ref = f"web_{job_id}_img{img_idx_counter[0]}"
                 img_idx_counter[0] += 1
@@ -469,12 +517,15 @@ class WebAcquisitionService(BaseService):
                     figcaption_tag = element.parent.find('figcaption')
                     if figcaption_tag: caption_text = figcaption_tag.get_text(separator=" ", strip=True)
                 
-                all_raw_images.append(RawImageInput(
+                current_raw_image_input = RawImageInput(
                     image_id=img_id_ref, source_url=img_abs_url, alt_text=final_alt_text, caption=caption_text,
                     source_document_id=job_id, original_source_identifier_for_gcs_path=original_request_url,
                     source_type_for_gcs_path="web", job_id_for_gcs_path=job_id,
                     width=pw_rendered_width, height=pw_rendered_height
-                ))
+                )
+                all_raw_images.append(current_raw_image_input)
+                # ADDED: Log the mapping between img_id_ref and img_abs_url
+                self.logger.critical(f"RAW_IMG_CREATED: ID '{img_id_ref}' for URL '{img_abs_url}'")
                 self.processed_image_urls.add(img_abs_url)
                 self.logger.info(f"CREATED RawImageInput ID: {img_id_ref} for <{tag_name}> URL: {img_abs_url}")
                 
@@ -582,6 +633,50 @@ class WebAcquisitionService(BaseService):
         self.logger.info(f"WebService _parse_and_structure_html: Blocks: {len(final_blocks)}, Final Raw Images: {len(all_raw_images)}")
         return final_blocks, all_raw_images
 
+    async def _is_content_behind_paywall(self, extracted_html_content: Optional[str], domain: Optional[str]) -> bool:
+        """Checks if the extracted content is likely behind a paywall."""
+        if not extracted_html_content:
+            # If Trafilatura returned nothing, it could be a sign of a hard paywall or empty page.
+            # For very strict domains, this might be enough to classify as paywalled.
+            if self._check_domain_in_set(domain, VERY_STRICT_PAYWALL_DOMAINS):
+                self.logger.info(f"PAYWALL_CHECK: Empty content from Trafilatura for very strict domain '{domain}'. Flagging as paywalled.")
+                return True
+            return False # For other domains, empty content isn't definitively a paywall by itself.
+
+        extracted_html_lower = extracted_html_content.lower()
+        
+        # Ensure PAYWALL_KEYWORDS are lowercase for matching
+        # Assuming PAYWALL_KEYWORDS is a set of strings defined at the module/class level
+        # For safety, ensure it's available and lowercase it if not already.
+        # paywall_keywords_lower = {k.lower() for k in PAYWALL_KEYWORDS} 
+        # PAYWALL_KEYWORDS should already be lowercase based on its definition style
+
+        keywords_found = any(keyword in extracted_html_lower for keyword in PAYWALL_KEYWORDS)
+        
+        content_length = len(extracted_html_content)
+        is_minimal_content = content_length < self.service_settings.minimal_content_length_threshold
+
+        is_very_strict_domain = self._check_domain_in_set(domain, VERY_STRICT_PAYWALL_DOMAINS)
+
+        log_msg_parts = [
+            f"PAYWALL_CHECK for domain '{domain}':",
+            f"StrictDomain={is_very_strict_domain}",
+            f"MinimalContent={is_minimal_content} (len:{content_length} < thr:{self.service_settings.minimal_content_length_threshold})",
+            f"KeywordsFound={keywords_found}"
+        ]
+
+        if is_very_strict_domain:
+            if is_minimal_content or keywords_found:
+                self.logger.info(f"{', '.join(log_msg_parts)}. DECISION: Paywalled (Strict domain rules).")
+                return True
+        else:
+            if is_minimal_content and keywords_found:
+                self.logger.info(f"{', '.join(log_msg_parts)}. DECISION: Paywalled (Minimal content with keywords).")
+                return True
+        
+        self.logger.info(f"{', '.join(log_msg_parts)}. DECISION: Not paywalled.")
+        return False
+
     async def execute(self, web_input: WebAcquisitionServiceInput) -> ServiceResult[Tuple[List[PreliminaryBlock], DocumentMetadata, List[RawImageInput]]]:
         job_id_for_run = web_input.job_id or str(uuid.uuid4())
         user_id_for_run = web_input.user_id
@@ -628,8 +723,29 @@ class WebAcquisitionService(BaseService):
                 raw_content_bytes = await response.aread()
                 # ... (rest of the execute method, including content decoding, parsing, etc.)
 
+            # Try to decode content, falling back if needed
+            try:
+                fetched_content = raw_content_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    # Attempt with a more lenient encoding, common for web content
+                    fetched_content = raw_content_bytes.decode('latin-1')
+                    self.logger.warning(f"Decoded with latin-1 for {final_url_after_redirects} after UTF-8 failed.")
+                except UnicodeDecodeError as e_decode:
+                    self.logger.error(f"Failed to decode content for {final_url_after_redirects} with UTF-8 and latin-1: {e_decode}")
+                    doc_metadata.content_summary = f"Failed to decode content: {e_decode}"
+                    # Include doc_metadata in the failure result if it has been partially populated.
+                    return ServiceResult.failure(
+                        error_message=f"Failed to decode content from {final_url_after_redirects}",
+                        error_details={"original_data": ([], doc_metadata, [])} 
+                    )
+
             if not fetched_content:
-                 return ServiceResult.failure(f"No content fetched from {final_url_after_redirects}")
+                 doc_metadata.content_summary = "No content fetched."
+                 return ServiceResult.failure(
+                    error_message=f"No content fetched from {final_url_after_redirects}",
+                    error_details={"original_data": ([], doc_metadata, [])}
+                )
 
             # Step 2: (Optional) Get image details using Playwright from the ORIGINAL URL
             if self.service_settings.use_playwright_for_image_filtering:
@@ -652,9 +768,21 @@ class WebAcquisitionService(BaseService):
                 config=self.trafilatura_config
             )
 
+            # Update domain based on final URL for paywall check
+            final_domain = self._get_domain(final_url_after_redirects)
+
+            # NEW Paywall Check Logic (after Trafilatura extraction)
+            if await self._is_content_behind_paywall(main_content_html_trafilatura, final_domain):
+                self.logger.info(f"Content from {final_url_after_redirects} (domain: {final_domain}) identified as paywalled after Trafilatura extraction.")
+                doc_metadata.is_paywalled = True
+                doc_metadata.content_summary = "Content identified as likely behind a paywall after extraction."
+                # Return success, but with empty blocks and metadata indicating paywall
+                return ServiceResult.success(data=([], doc_metadata, []))
+
             if main_content_html_trafilatura:
                 self.logger.debug(f"WebService execute: Trafilatura output type: {type(main_content_html_trafilatura)}, Length: {len(main_content_html_trafilatura)}")
-                self.logger.debug(f"WebService execute: Trafilatura output snippet (first 500 chars):\\n{main_content_html_trafilatura[:500]}")
+                # ADDED: Log snippet of Trafilatura's output for debugging image issues
+                self.logger.warning(f"TRAFILATURA_OUTPUT_SNIPPET (first 2000 chars) for {final_url_after_redirects}:\n{main_content_html_trafilatura[:2000]}")
             else:
                 self.logger.debug("WebService execute: Trafilatura output is None or empty.")
 
@@ -688,14 +816,46 @@ class WebAcquisitionService(BaseService):
             doc_metadata.title = page_title
             
             # Step 5: Parse the chosen HTML content and structure it, integrating Playwright details
-            preliminary_blocks, raw_images = await self._parse_and_structure_html(
-                html_content=main_content_html_to_parse, # This is key: parse Trafilatura's output
-                base_url=final_url_after_redirects,    # Base for resolving relative links in the parsed HTML
-                original_request_url=final_url_after_redirects, # For GCS paths and if PW needs to re-resolve
+            # First pass: Parse Trafilatura's output (if any)
+            parsed_blocks_pass1, raw_images_pass1 = await self._parse_and_structure_html(
+                html_content=main_content_html_to_parse, 
+                base_url=final_url_after_redirects,    
+                original_request_url=final_url_after_redirects, 
                 job_id=job_id_for_run,
                 user_id=user_id_for_run,
                 playwright_image_details_map=playwright_image_details_map
             )
+
+            preliminary_blocks = parsed_blocks_pass1
+            raw_images = raw_images_pass1
+
+            # Fallback: If Trafilatura gave content but we found no images from its output,
+            # try parsing the full original HTML to recover images.
+            if main_content_html_trafilatura and not raw_images:
+                self.logger.warning(f"No images found after parsing Trafilatura output for {final_url_after_redirects}. Attempting fallback to parse full HTML for images.")
+                # ADDED: Log the full HTML content being used for fallback
+                self.logger.debug(f"FALLBACK_HTML_CONTENT for {final_url_after_redirects} (first 5000 chars):\n{fetched_content[:5000]}")
+                
+                # Clear previous results (or decide if you want to merge, for now, let's re-process full)
+                # To avoid duplicate text blocks if Trafilatura already got good text, a more sophisticated merge would be needed.
+                # For simplicity now: if Trafilatura missed images, we re-process the whole original page.
+                # This might degrade text quality if the full page is noisy compared to Trafilatura's output.
+                preliminary_blocks_fallback, raw_images_fallback = await self._parse_and_structure_html(
+                    html_content=fetched_content, # Parse the original full HTML
+                    base_url=final_url_after_redirects,    
+                    original_request_url=final_url_after_redirects, 
+                    job_id=job_id_for_run,
+                    user_id=user_id_for_run,
+                    playwright_image_details_map=playwright_image_details_map # Pass PW details again
+                )
+                # Decide how to combine. For now, if fallback yields images, prioritize its output.
+                # A more nuanced approach might merge text from pass1 and images from fallback.
+                if raw_images_fallback:
+                    self.logger.info(f"Fallback to full HTML parsing for {final_url_after_redirects} yielded {len(raw_images_fallback)} images. Using fallback results.")
+                    preliminary_blocks = preliminary_blocks_fallback
+                    raw_images = raw_images_fallback
+                else:
+                    self.logger.warning(f"Fallback to full HTML parsing for {final_url_after_redirects} also yielded no images.")
             
             duration = time.time() - start_time
             self.logger.info(f"WebService execution for {final_url_after_redirects} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")

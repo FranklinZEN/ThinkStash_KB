@@ -134,7 +134,7 @@ class ContentStructuringService(BaseService):
                                 **common_args
                             ))
                         else:
-                            final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='text', content=f"[Image Placeholder: ID {p_block.image_id_ref} not found in enriched_images]", **common_args))
+                            self.logger.warning(f"CSS: Skipping image_placeholder for ID '{p_block.image_id_ref}' as it was not found in enriched_images_map (likely filtered or failed processing).")
                     elif p_block.type == 'table_placeholder':
                         table_html = p_block.custom_attributes.get('html_content') if p_block.custom_attributes else None
                         final_content_blocks.append(ContentBlock(block_id=str(uuid.uuid4()), type='table', content=table_html, **common_args))
