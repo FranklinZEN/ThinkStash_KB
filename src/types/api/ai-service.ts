@@ -35,9 +35,11 @@ export interface DocumentMetadata {
 
 // Request to the Python AI service's /reconstruct_and_analyze endpoint
 export interface AIServiceReconstructAndAnalyzeRequest {
-  source_url?: string;
-  file_id?: string; // e.g., GCS file ID
-  text_content?: string; // Direct text input
+  // MODIFIED: Replace source_url, file_id, text_content with source_identifier
+  // source_url?: string;
+  // file_id?: string; // e.g., GCS file ID
+  // text_content?: string; // Direct text input
+  source_identifier: string; // Consolidated field
   source_type: 'url' | 'file' | 'text';
   user_id: string;
   job_id: string; // Added job_id

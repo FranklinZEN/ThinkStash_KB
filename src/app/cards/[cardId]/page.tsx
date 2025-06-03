@@ -38,14 +38,19 @@ import '@blocknote/mantine/style.css';
 import {
   type AppEditor,
   type AppPartialBlock,
-  type AppInlineContent as _AppInlineContent,
-  type AppInlineContentArray,
+  // type AppInlineContent as _AppInlineContent, // Removed as unused
+  // type AppInlineContentArray, // Removed as unused
 } from '@/lib/blocknote/appSchema';
-import { type ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
-import { v4 as uuidv4 } from 'uuid';
+// import { type ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service'; // Removed as unused
+import {
+  // extractTextFromInlineContent, // Removed as unused
+  mapPartialBlocksToAIServiceContentBlocks,
+} from '../../../lib/contentUtils';
 
 // Helper function to check if editor content is effectively empty
-const isEditorEmpty = (blocks: AppPartialBlock[] | undefined | null): boolean => {
+const isEditorEmpty = (
+  blocks: AppPartialBlock[] | undefined | null,
+): boolean => {
   if (!blocks || blocks.length === 0) return true;
   if (blocks.length === 1) {
     const block = blocks[0];
@@ -170,114 +175,6 @@ interface CardUpdatePayload {
   tags?: string[]; // This should be string[] as expected by the API endpoint body
 }
 
-// ADDED: Helper function to extract plain text from BlockNote InlineContent[]
-const extractTextFromInlineContent = (inlineContent: AppInlineContentArray | string | undefined): string => {
-  if (!inlineContent) return '';
-  if (typeof inlineContent === 'string') return inlineContent;
-  return inlineContent.map(item => {
-    if (item.type === 'text') return item.text;
-    if (item.type === 'link' && item.content) {
-      return extractTextFromInlineContent(item.content);
-    }
-    // Add other inline types if necessary, for now, just text and link content
-    return '';
-  }).join('');
-};
-
-// Function to map BlockNote PartialBlock[] to AIServiceContentBlock[]
-export const mapPartialBlocksToAIServiceContentBlocks = (
-  partialBlocks: AppPartialBlock[], // Input is AppPartialBlock[]
-  userId: string,
-  documentId: string
-): AIServiceContentBlock[] => {
-  const aiServiceBlocks: AIServiceContentBlock[] = [];
-  if (!partialBlocks || partialBlocks.length === 0) return aiServiceBlocks;
-
-  let currentOrderIndex = 0;
-  let i = 0;
-
-  while (i < partialBlocks.length) {
-    const block = partialBlocks[i]; // block is AppPartialBlock
-    if (!block || !block.type) {
-      i++;
-      continue;
-    }
-    // Use existing block.id if available, else generate a new one
-    const block_id = block.id || uuidv4(); 
-    const tmp_id = block_id; 
-
-    if (block.type === 'bulletListItem' || block.type === 'numberedListItem') {
-      const listItemsContent: string[] = [];
-      const isOrdered = block.type === 'numberedListItem';
-      const listBlockType = block.type;
-      // Use ID of the first item as the list's representative ID for the AI service block
-      const listBlockId = block_id; 
-
-      let listStartNumber: number | null = null;
-      if (isOrdered && block.props?.start) {
-        const startNum = parseInt(String(block.props.start), 10);
-        if (!isNaN(startNum)) {
-            listStartNumber = startNum;
-        }
-      }
-
-      while (
-        i < partialBlocks.length &&
-        partialBlocks[i]?.type === listBlockType
-      ) {
-        const listItem = partialBlocks[i]; 
-        if (listItem.content && Array.isArray(listItem.content)) {
-            listItemsContent.push(extractTextFromInlineContent(listItem.content as AppInlineContentArray));
-        }
-        i++; 
-      }
-
-      if (listItemsContent.length > 0) {
-        aiServiceBlocks.push({
-          block_id: listBlockId,
-          tmp_id: listBlockId,
-          user_id: userId,
-          document_id: documentId,
-          type: 'list', 
-          order_index: currentOrderIndex,
-          items: listItemsContent,
-          ordered: isOrdered,
-          list_start_number: listStartNumber,
-          content: null, 
-        });
-        currentOrderIndex++;
-      }
-      continue; 
-    } else if (block.type === 'paragraph' || block.type === 'heading') {
-      const textContent = extractTextFromInlineContent(block.content as AppInlineContentArray);
-      if (textContent.trim() !== '' || block.type === 'paragraph') { // Keep empty paragraphs if that's desired, or add specific logic
-        aiServiceBlocks.push({
-          block_id,
-          tmp_id,
-          user_id: userId,
-          document_id: documentId,
-          type: block.type === 'heading' ? 'heading' : 'text', // Map 'paragraph' to 'text' for AI service
-          order_index: currentOrderIndex,
-          content: textContent,
-          level: block.type === 'heading' ? block.props?.level : undefined,
-          // Reset other fields not relevant for text/heading
-          items: null,
-          ordered: null,
-          list_start_number: null,
-        });
-        currentOrderIndex++;
-      }
-      i++;
-    } else {
-      // Handle or skip other block types as needed
-      // For now, we'll skip unknown block types to avoid errors
-      // console.warn("Unsupported block type for AI service conversion:", block.type);
-      i++;
-    }
-  }
-  return aiServiceBlocks;
-};
-
 export default function CardDetailPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -314,7 +211,9 @@ export default function CardDetailPage() {
   // ADDED: State for AI suggestions
   const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
-  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(null);
+  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(
+    null,
+  );
   const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
 
   // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
@@ -329,25 +228,26 @@ export default function CardDetailPage() {
         if (trimmedContent.startsWith('[') && trimmedContent.endsWith(']')) {
           try {
             const parsed = JSON.parse(trimmedContent);
-            if (Array.isArray(parsed)) { // Basic check
+            if (Array.isArray(parsed)) {
+              // Basic check
               newInitialContent = parsed as AppPartialBlock[]; // Assume structure is correct if it parses to an array
               parsedSuccessfully = true;
             }
           } catch (_e) {
             console.warn(
               '[CardDetail Page] Failed to parse string content as JSON array, treating as plain text paragraph.',
-              _e
+              _e,
             );
           }
         }
-        
+
         if (!parsedSuccessfully) {
           // If not a JSON array or parsing failed, treat as plain text in a paragraph
           newInitialContent = [
             {
               type: 'paragraph',
-              content: [{ type: 'text', text: trimmedContent, styles: {} }] // Correctly typed content
-            }
+              content: [{ type: 'text', text: trimmedContent, styles: {} }], // Correctly typed content
+            },
           ];
         }
       } else if (Array.isArray(card.content)) {
@@ -424,7 +324,12 @@ export default function CardDetailPage() {
   }, [cardId, status, toast]);
 
   useEffect(() => {
-    console.log('[CardDetailPage] useEffect for fetchCard triggered. cardId:', cardId, 'status:', status);
+    console.log(
+      '[CardDetailPage] useEffect for fetchCard triggered. cardId:',
+      cardId,
+      'status:',
+      status,
+    );
     if (status === 'authenticated' && cardId) {
       fetchCard();
     } else if (status === 'unauthenticated') {
@@ -458,37 +363,62 @@ export default function CardDetailPage() {
   // ADDED: Handler for "Suggest Title"
   const handleSuggestTitle = async () => {
     if (!editor && !card?.content) {
-      toast({ title: 'No content available for title suggestion.', status: 'warning', duration: 3000 });
+      toast({
+        title: 'No content available for title suggestion.',
+        status: 'warning',
+        duration: 3000,
+      });
       return;
     }
     if (!card || !card.userId || !cardId) {
-      toast({ title: 'Card data not loaded.', status: 'error', duration: 3000 });
+      toast({
+        title: 'Card data not loaded.',
+        status: 'error',
+        duration: 3000,
+      });
       return;
     }
 
     let contentToProcess: AppPartialBlock[] | undefined = editorContent;
     if (!isEditing || !editorContent || editorContent.length === 0) {
-        // Fallback to card.content if not editing or editorContent is empty
-        if (card?.content) {
-            if (typeof card.content === 'string') {
-                // Correctly type the string content as a paragraph with text inline content
-                contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
-            } else { // It's already AppPartialBlock[]
-                contentToProcess = card.content as AppPartialBlock[];
-            }
+      // Fallback to card.content if not editing or editorContent is empty
+      if (card?.content) {
+        if (typeof card.content === 'string') {
+          // Correctly type the string content as a paragraph with text inline content
+          contentToProcess = [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: card.content, styles: {} }],
+            },
+          ];
+        } else {
+          // It's already AppPartialBlock[]
+          contentToProcess = card.content as AppPartialBlock[];
         }
+      }
     }
-
 
     if (!contentToProcess || contentToProcess.length === 0) {
-        toast({ title: 'Content is empty, cannot suggest title.', status: 'info', duration: 3000 });
-        return;
+      toast({
+        title: 'Content is empty, cannot suggest title.',
+        status: 'info',
+        duration: 3000,
+      });
+      return;
     }
-    
-    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(contentToProcess, card.userId, cardId);
+
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      contentToProcess,
+      card.userId,
+      cardId,
+    );
 
     if (aiServiceContentBlocks.length === 0) {
-      toast({ title: 'No processable content found for title suggestion.', status: 'info', duration: 3000 });
+      toast({
+        title: 'No processable content found for title suggestion.',
+        status: 'info',
+        duration: 3000,
+      });
       return;
     }
 
@@ -505,11 +435,21 @@ export default function CardDetailPage() {
         throw new Error(data.error_message || 'Failed to suggest title');
       }
       setSuggestedTitle(data.suggested_title);
-      toast({ title: 'Title suggestion received!', status: 'success', duration: 3000 });
+      toast({
+        title: 'Title suggestion received!',
+        status: 'success',
+        duration: 3000,
+      });
     } catch (err) {
       console.error('Suggest title error:', err);
-      const message = err instanceof Error ? err.message : 'Could not suggest title.';
-      toast({ title: 'Error suggesting title', description: message, status: 'error', duration: 5000 });
+      const message =
+        err instanceof Error ? err.message : 'Could not suggest title.';
+      toast({
+        title: 'Error suggesting title',
+        description: message,
+        status: 'error',
+        duration: 5000,
+      });
     } finally {
       setIsSuggestingTitle(false);
     }
@@ -518,35 +458,60 @@ export default function CardDetailPage() {
   // ADDED: Handler for "Suggest Keywords"
   const handleSuggestKeywords = async () => {
     if (!editor && !card?.content) {
-      toast({ title: 'No content available for keyword suggestion.', status: 'warning', duration: 3000 });
+      toast({
+        title: 'No content available for keyword suggestion.',
+        status: 'warning',
+        duration: 3000,
+      });
       return;
     }
-     if (!card || !card.userId || !cardId) {
-      toast({ title: 'Card data not loaded.', status: 'error', duration: 3000 });
+    if (!card || !card.userId || !cardId) {
+      toast({
+        title: 'Card data not loaded.',
+        status: 'error',
+        duration: 3000,
+      });
       return;
     }
 
     let contentToProcess: AppPartialBlock[] | undefined = editorContent;
-     if (!isEditing || !editorContent || editorContent.length === 0) {
-        if (card?.content) {
-            if (typeof card.content === 'string') {
-                // Correctly type the string content as a paragraph with text inline content
-                contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
-            } else {
-                contentToProcess = card.content as AppPartialBlock[];
-            }
+    if (!isEditing || !editorContent || editorContent.length === 0) {
+      if (card?.content) {
+        if (typeof card.content === 'string') {
+          // Correctly type the string content as a paragraph with text inline content
+          contentToProcess = [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: card.content, styles: {} }],
+            },
+          ];
+        } else {
+          contentToProcess = card.content as AppPartialBlock[];
         }
+      }
     }
 
     if (!contentToProcess || contentToProcess.length === 0) {
-        toast({ title: 'Content is empty, cannot suggest keywords.', status: 'info', duration: 3000 });
-        return;
+      toast({
+        title: 'Content is empty, cannot suggest keywords.',
+        status: 'info',
+        duration: 3000,
+      });
+      return;
     }
 
-    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(contentToProcess, card.userId, cardId);
-    
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      contentToProcess,
+      card.userId,
+      cardId,
+    );
+
     if (aiServiceContentBlocks.length === 0) {
-      toast({ title: 'No processable content found for keyword suggestion.', status: 'info', duration: 3000 });
+      toast({
+        title: 'No processable content found for keyword suggestion.',
+        status: 'info',
+        duration: 3000,
+      });
       return;
     }
 
@@ -563,11 +528,21 @@ export default function CardDetailPage() {
         throw new Error(data.error_message || 'Failed to suggest keywords');
       }
       setSuggestedKeywords(data.suggested_keywords);
-      toast({ title: 'Keyword suggestions received!', status: 'success', duration: 3000 });
+      toast({
+        title: 'Keyword suggestions received!',
+        status: 'success',
+        duration: 3000,
+      });
     } catch (err) {
       console.error('Suggest keywords error:', err);
-      const message = err instanceof Error ? err.message : 'Could not suggest keywords.';
-      toast({ title: 'Error suggesting keywords', description: message, status: 'error', duration: 5000 });
+      const message =
+        err instanceof Error ? err.message : 'Could not suggest keywords.';
+      toast({
+        title: 'Error suggesting keywords',
+        description: message,
+        status: 'error',
+        duration: 5000,
+      });
     } finally {
       setIsSuggestingKeywords(false);
     }
@@ -579,7 +554,8 @@ export default function CardDetailPage() {
 
     // Use editorContent which is updated by onContentUpdate callback for the most current state.
     // Fallback to editor.document if editorContent is somehow not set, though it should be.
-    const currentContentToValidate = editorContent || (editor as AppEditor)?.document;
+    const currentContentToValidate =
+      editorContent || (editor as AppEditor)?.document;
 
     const originalContent = card.content;
 
@@ -591,15 +567,20 @@ export default function CardDetailPage() {
       if (typeof originalContent === 'string') {
         // Attempt to parse, then fallback to paragraph wrapping
         let parsedSuccessfully = false;
-        if (originalContent.trim().startsWith('[') && originalContent.trim().endsWith(']')) {
+        if (
+          originalContent.trim().startsWith('[') &&
+          originalContent.trim().endsWith(']')
+        ) {
           try {
             const parsed = JSON.parse(originalContent);
             if (Array.isArray(parsed)) {
               originalContentForComparison = parsed as AppPartialBlock[];
               parsedSuccessfully = true;
             }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          } catch (_e) { /* ignore, fallback */ }
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (_e) {
+            /* ignore, fallback */
+          }
         }
         if (!parsedSuccessfully) {
           originalContentForComparison = [
@@ -816,8 +797,10 @@ export default function CardDetailPage() {
             originalContentForComparisonCanSave = parsed as AppPartialBlock[];
             parsedSuccessfully = true;
           }
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (_e) { /* ignore, fallback */ }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_e) {
+          /* ignore, fallback */
+        }
       }
       if (!parsedSuccessfully) {
         originalContentForComparisonCanSave = [
@@ -920,7 +903,13 @@ export default function CardDetailPage() {
         >
           <VStack spacing={6} align="stretch">
             <FormControl isRequired>
-              <FormLabel htmlFor="title" fontFamily="'Open Sans', sans-serif" fontSize="20px">Title</FormLabel>
+              <FormLabel
+                htmlFor="title"
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="20px"
+              >
+                Title
+              </FormLabel>
               <Input
                 id="title"
                 type="text"
@@ -945,8 +934,17 @@ export default function CardDetailPage() {
                   </Button>
                   {suggestedTitle && !isSuggestingTitle && (
                     <Flex mt={2} align="center">
-                      <Text mr={2} fontSize="sm">Suggested: &quot;{suggestedTitle}&quot;</Text>
-                      <Button size="xs" colorScheme="teal" onClick={() => { setTitle(suggestedTitle); setSuggestedTitle(null); }}>
+                      <Text mr={2} fontSize="sm">
+                        Suggested: &quot;{suggestedTitle}&quot;
+                      </Text>
+                      <Button
+                        size="xs"
+                        colorScheme="teal"
+                        onClick={() => {
+                          setTitle(suggestedTitle);
+                          setSuggestedTitle(null);
+                        }}
+                      >
                         Use this title
                       </Button>
                     </Flex>
@@ -1009,41 +1007,52 @@ export default function CardDetailPage() {
                   >
                     Suggest Keywords with AI
                   </Button>
-                  {suggestedKeywords && suggestedKeywords.length > 0 && !isSuggestingKeywords && (
-                    <Box mt={2}>
-                      <Text fontSize="sm" mb={1}>Suggestions:</Text>
-                      <HStack spacing={2} wrap="wrap" mb={2}>
-                        {suggestedKeywords.map((kw) => (
-                          <ChakraTag key={kw} borderRadius="full" variant="outline" colorScheme="blue">
-                            <TagLabel>{kw}</TagLabel>
-                          </ChakraTag>
-                        ))}
-                      </HStack>
-                      <Button 
-                        size="xs" 
-                        colorScheme="teal" 
-                        onClick={() => { 
-                          const newKeywords = [...new Set([...keywords, ...suggestedKeywords])];
-                          setKeywords(newKeywords); 
-                          setSuggestedKeywords(null); 
-                        }}
-                      >
-                        Add these keywords
-                      </Button>
-                       <Button 
-                          size="xs" 
+                  {suggestedKeywords &&
+                    suggestedKeywords.length > 0 &&
+                    !isSuggestingKeywords && (
+                      <Box mt={2}>
+                        <Text fontSize="sm" mb={1}>
+                          Suggestions:
+                        </Text>
+                        <HStack spacing={2} wrap="wrap" mb={2}>
+                          {suggestedKeywords.map((kw) => (
+                            <ChakraTag
+                              key={kw}
+                              borderRadius="full"
+                              variant="outline"
+                              colorScheme="blue"
+                            >
+                              <TagLabel>{kw}</TagLabel>
+                            </ChakraTag>
+                          ))}
+                        </HStack>
+                        <Button
+                          size="xs"
+                          colorScheme="teal"
+                          onClick={() => {
+                            const newKeywords = [
+                              ...new Set([...keywords, ...suggestedKeywords]),
+                            ];
+                            setKeywords(newKeywords);
+                            setSuggestedKeywords(null);
+                          }}
+                        >
+                          Add these keywords
+                        </Button>
+                        <Button
+                          size="xs"
                           variant="outline"
                           ml={2}
-                          colorScheme="gray" 
-                          onClick={() => { 
-                            setKeywords(suggestedKeywords); 
-                            setSuggestedKeywords(null); 
+                          colorScheme="gray"
+                          onClick={() => {
+                            setKeywords(suggestedKeywords);
+                            setSuggestedKeywords(null);
                           }}
                         >
                           Replace with these
                         </Button>
-                    </Box>
-                  )}
+                      </Box>
+                    )}
                 </Box>
               )}
             </FormControl>
@@ -1152,7 +1161,13 @@ export default function CardDetailPage() {
         onClose={onAlertClose}
       >
         <AlertDialogOverlay>
-          <AlertDialogContent as="form" onSubmit={(_e) => { _e.preventDefault(); handleDelete(); }}>
+          <AlertDialogContent
+            as="form"
+            onSubmit={(_e) => {
+              _e.preventDefault();
+              handleDelete();
+            }}
+          >
             <AlertDialogHeader fontSize="lg" fontWeight="bold">
               Delete Knowledge Card
             </AlertDialogHeader>

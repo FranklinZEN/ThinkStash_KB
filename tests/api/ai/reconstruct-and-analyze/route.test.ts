@@ -176,7 +176,7 @@ describe('/api/ai/reconstruct-and-analyze POST', () => {
 
     // Assertions for the call to the Python service
     expect(pythonCallArgs[0]).toBe(`${process.env.AISERVICE_URL}/api/v1/ai/reconstruct-and-analyze`);
-    expect(pythonRequestBody.source_url).toBe('https://example.com/article');
+    expect(pythonRequestBody.source_identifier).toBe('https://example.com/article');
     expect(pythonRequestBody.source_type).toBe('url');
     expect(pythonRequestBody.user_id).toBe(sessionUserId);
     expect(pythonRequestBody.job_id).toEqual(expect.any(String));
@@ -244,7 +244,7 @@ describe('/api/ai/reconstruct-and-analyze POST', () => {
     const fetchBody: AIServiceReconstructAndAnalyzeRequest = JSON.parse(fetchCallArgs[1].body as string);
 
     expect(fetchBody).toEqual({
-      source_url: sourceUrl,
+      source_identifier: sourceUrl,
       source_type: 'url',
       user_id: sessionUserId,
       job_id: expect.any(String),
@@ -305,7 +305,7 @@ describe('/api/ai/reconstruct-and-analyze POST', () => {
     const fetchBodyFile: AIServiceReconstructAndAnalyzeRequest = JSON.parse(fetchCallArgsFile[1].body as string);
 
     expect(fetchBodyFile).toEqual({
-      file_id: fileId,
+      source_identifier: fileId,
       source_type: 'file',
       user_id: sessionUserId,
       job_id: expect.any(String),
@@ -523,7 +523,7 @@ describe('/api/ai/reconstruct-and-analyze POST', () => {
       user_id: sessionUserId,
       job_id: expect.any(String),
       source_type: 'text', // Ensure source_type is 'text'
-      text_content: derivedTextContent, // Ensure text_content matches the derived string
+      source_identifier: derivedTextContent, // Ensure source_identifier matches the derived string
     });
 
     expect(responseBody).toEqual({
@@ -590,7 +590,7 @@ describe('/api/ai/reconstruct-and-analyze POST', () => {
       user_id: sessionUserId,
       job_id: expect.any(String),
       source_type: 'text', // Ensure source_type is 'text'
-      text_content: derivedTextContentComplex, // Ensure text_content matches the derived string
+      source_identifier: derivedTextContentComplex, // Ensure source_identifier matches the derived string
     });
 
     expect(responseBody).toEqual({

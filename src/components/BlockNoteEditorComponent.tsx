@@ -4,9 +4,6 @@ import React, { useEffect } from 'react';
 import { Box, Flex, Spinner, Text } from '@chakra-ui/react';
 import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/mantine';
-import {
-  insertOrUpdateBlock,
-} from '@blocknote/core';
 import '@blocknote/mantine/style.css';
 
 // Import the centralized schema and its derived types
@@ -169,7 +166,10 @@ async function processPastedOrDroppedFile(
 }
 
 // ADDED HELPER: Convert data URI to File object
-async function dataUriToImageFile(dataUri: string, filenamePrefix = 'pasted_data_uri'): Promise<File | null> {
+async function dataUriToImageFile(
+  dataUri: string,
+  filenamePrefix = 'pasted_data_uri',
+): Promise<File | null> {
   try {
     const response = await fetch(dataUri);
     const blob = await response.blob();
@@ -177,7 +177,10 @@ async function dataUriToImageFile(dataUri: string, filenamePrefix = 'pasted_data
     const filename = `${filenamePrefix}_${Date.now()}.${extension}`;
     return new File([blob], filename, { type: blob.type });
   } catch (error) {
-    console.error('[BlockNoteEditorComponent] Error converting data URI to File:', error);
+    console.error(
+      '[BlockNoteEditorComponent] Error converting data URI to File:',
+      error,
+    );
     return null;
   }
 }
@@ -236,7 +239,9 @@ export default function BlockNoteEditorComponent({
           }
         }
         if (imageFilePasted) {
-          console.log('[BlockNoteEditorComponent] Direct image file paste initiated.');
+          console.log(
+            '[BlockNoteEditorComponent] Direct image file paste initiated.',
+          );
           return true; // Indicate paste was handled (or initiated)
         }
       }
@@ -245,7 +250,9 @@ export default function BlockNoteEditorComponent({
       const htmlContent = event.clipboardData.getData('text/html');
       let dataUriImagesFoundInHtml = false;
       if (htmlContent) {
-        console.log('[BlockNoteEditorComponent] Checking pasted HTML content for data URI images...');
+        console.log(
+          '[BlockNoteEditorComponent] Checking pasted HTML content for data URI images...',
+        );
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = htmlContent;
         const imagesInHtml = Array.from(tempDiv.querySelectorAll('img'));
@@ -255,8 +262,11 @@ export default function BlockNoteEditorComponent({
           if (originalSrc && originalSrc.startsWith('data:image/')) {
             dataUriImagesFoundInHtml = true;
             event.preventDefault(); // Prevent default paste of original HTML if we process data URIs
-            console.log('[BlockNoteEditorComponent] Found data URI image in HTML. Kicking off async upload...', originalSrc.substring(0,50) + '...');
-            
+            console.log(
+              '[BlockNoteEditorComponent] Found data URI image in HTML. Kicking off async upload...',
+              originalSrc.substring(0, 50) + '...',
+            );
+
             // Async IIFE to handle upload and insertion
             (async () => {
               const imageFile = await dataUriToImageFile(originalSrc);
@@ -264,55 +274,85 @@ export default function BlockNoteEditorComponent({
                 try {
                   const appServedUrl = await handleFileUpload(imageFile);
                   if (appServedUrl) {
-                    console.log('[BlockNoteEditorComponent] Data URI image uploaded. Inserting new image block with URL:', appServedUrl);
-                    currentEditor.insertBlocks([
-                      { type: 'image', props: { url: appServedUrl, caption: imageFile.name } }
-                    ], currentEditor.getTextCursorPosition().block, 'after');
+                    console.log(
+                      '[BlockNoteEditorComponent] Data URI image uploaded. Inserting new image block with URL:',
+                      appServedUrl,
+                    );
+                    currentEditor.insertBlocks(
+                      [
+                        {
+                          type: 'image',
+                          props: { url: appServedUrl, caption: imageFile.name },
+                        },
+                      ],
+                      currentEditor.getTextCursorPosition().block,
+                      'after',
+                    );
                   } else {
-                     console.warn('[BlockNoteEditorComponent] Upload of data URI successful but no appServedUrl returned.');
+                    console.warn(
+                      '[BlockNoteEditorComponent] Upload of data URI successful but no appServedUrl returned.',
+                    );
                   }
                 } catch (uploadError) {
-                  console.error('[BlockNoteEditorComponent] Failed to upload image from data URI:', uploadError);
+                  console.error(
+                    '[BlockNoteEditorComponent] Failed to upload image from data URI:',
+                    uploadError,
+                  );
                 }
               }
             })(); // End of async IIFE
           }
         }
-        
+
         if (dataUriImagesFoundInHtml) {
-            console.log('[BlockNoteEditorComponent] data: URI image processing initiated from HTML paste.');
-            // We already called preventDefault inside the loop if a data URI was found.
-            // The original HTML (minus data URIs if they get replaced by this async process, or plus new blocks)
-            // won't be pasted by default. This simple version doesn't try to re-paste the non-image parts of HTML.
-            return true; // Indicate we've started handling it.
+          console.log(
+            '[BlockNoteEditorComponent] data: URI image processing initiated from HTML paste.',
+          );
+          // We already called preventDefault inside the loop if a data URI was found.
+          // The original HTML (minus data URIs if they get replaced by this async process, or plus new blocks)
+          // won't be pasted by default. This simple version doesn't try to re-paste the non-image parts of HTML.
+          return true; // Indicate we've started handling it.
         }
       }
 
       // --- 3. Handle Pasted Plain Text for Image URLs ---
       // This should run only if direct files or data URIs in HTML weren't the primary content handled.
-      if (!dataUriImagesFoundInHtml) { // Avoid processing plain text URL if it was part of an HTML data URI image.
+      if (!dataUriImagesFoundInHtml) {
+        // Avoid processing plain text URL if it was part of an HTML data URI image.
         const pastedText = event.clipboardData.getData('text/plain');
-        if (pastedText && isValidURL(pastedText) && IMAGE_URL_REGEX.test(pastedText)) {
-            console.log(
-                '[BlockNoteEditorComponent] Pasted text is a valid image URL, processing via handlePastedImageURL:',
-                pastedText,
-            );
-            event.preventDefault(); // Prevent default paste of plain text
-            // Fire-and-forget: handlePastedImageURL is async.
-            handlePastedImageURL(pastedText, currentEditor);
-            console.log('[BlockNoteEditorComponent] Plain text image URL paste initiated.');
-            return true; // Indicate paste was handled (or initiated)
+        if (
+          pastedText &&
+          isValidURL(pastedText) &&
+          IMAGE_URL_REGEX.test(pastedText)
+        ) {
+          console.log(
+            '[BlockNoteEditorComponent] Pasted text is a valid image URL, processing via handlePastedImageURL:',
+            pastedText,
+          );
+          event.preventDefault(); // Prevent default paste of plain text
+          // Fire-and-forget: handlePastedImageURL is async.
+          handlePastedImageURL(pastedText, currentEditor);
+          console.log(
+            '[BlockNoteEditorComponent] Plain text image URL paste initiated.',
+          );
+          return true; // Indicate paste was handled (or initiated)
         }
       }
 
       // If none of the above custom handlers dealt with the paste, use BlockNote's default.
-      console.log('[BlockNoteEditorComponent] No custom image handlers applied, falling back to defaultPasteHandler.');
+      console.log(
+        '[BlockNoteEditorComponent] No custom image handlers applied, falling back to defaultPasteHandler.',
+      );
       return defaultPasteHandler();
     },
   };
 
   // Ensure the type of editor from useCreateBlockNote matches AppEditor for consistency if needed elsewhere.
-  const editor = useCreateBlockNote<typeof appSchema.blockSchema, typeof appSchema.inlineContentSchema, typeof appSchema.styleSchema>(editorOptions) as AppEditor;
+  const editor = useCreateBlockNote<
+    typeof appSchema.blockSchema,
+    typeof appSchema.inlineContentSchema,
+    typeof appSchema.styleSchema
+  >(editorOptions) as AppEditor;
 
   useEffect(() => {
     onEditorChange(editor); // Removed `as AppEditor | null` because `editor` is now typed as AppEditor.
@@ -323,16 +363,16 @@ export default function BlockNoteEditorComponent({
       // Define the event handler function within the useEffect scope
       const handleChange = () => {
         // The onContentUpdate captured by this useEffect closure
-        if (onContentUpdate) { 
+        if (onContentUpdate) {
           onContentUpdate(editor.document as AppPartialBlock[]);
         }
       };
 
       const unsubscribe = editor.onEditorContentChange(handleChange);
-      
+
       return () => {
         if (typeof unsubscribe === 'function') {
-          // @ts-ignore - Linter struggles with type inference here despite the typeof check
+          // @ts-expect-error - Linter struggles with type inference here despite the typeof check
           unsubscribe();
         }
       };
