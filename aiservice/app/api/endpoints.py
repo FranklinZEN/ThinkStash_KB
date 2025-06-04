@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Body, Depends
 from fastapi.concurrency import run_in_threadpool # Added for non-blocking execution
-from typing import List, Optional
+from typing import List, Optional, Union
 import logging # For general logging
 import uuid # For generating unique IDs if needed for some operations
 
@@ -191,16 +191,25 @@ async def generate_title_endpoint(request_data: TitleGenerationRequest = Body(..
         # The crew constructor might take user_id if needed, but the run method is key for data.
         title_crew = TitleGenerationCrew() # Use default user_id from crew if not passed
         
-        # Run synchronous crew method in thread pool
-        suggested_title_str = await run_in_threadpool(title_crew.run, content_blocks=request_data.content_blocks)
+        # Convert Pydantic models to dictionaries for the crew
+        content_as_dicts = [block.model_dump(exclude_none=True) for block in request_data.content_blocks]
 
-        if suggested_title_str.startswith("Error:"):
+        # Run synchronous crew method in thread pool with corrected argument name
+        title_generation_result: TitleGenerationOutput = await run_in_threadpool(
+            title_crew.run, 
+            content_block_dicts=content_as_dicts
+        )
+
+        # Access the suggested_title attribute from the result object
+        final_suggested_title = title_generation_result.suggested_title
+
+        if final_suggested_title.startswith("Error:"):
             # Log the error server-side as well
-            print(f"Error from TitleGenerationCrew: {suggested_title_str}")
+            print(f"Error from TitleGenerationCrew: {final_suggested_title}")
             # Return a more generic error to the client for now, or a specific one if appropriate
-            raise HTTPException(status_code=500, detail=f"AI title generation failed: {suggested_title_str}")
+            raise HTTPException(status_code=500, detail=f"AI title generation failed: {final_suggested_title}")
 
-        return TitleGenerationResponse(suggested_title=suggested_title_str)
+        return TitleGenerationResponse(suggested_title=final_suggested_title)
     
     except HTTPException as http_exc: # Re-raise HTTPException
         raise http_exc
@@ -223,17 +232,26 @@ async def generate_keywords_endpoint(request_data: KeywordExtractionRequest = Bo
         raise HTTPException(status_code=400, detail="No content blocks provided.")
 
     try:
-        keyword_crew = GeneralPurposeKeywordExtractionCrew() # Instantiate the correct crew
+        # Convert Pydantic models to dictionaries for the crew's constructor
+        content_as_dicts = [block.model_dump(exclude_none=True) for block in request_data.content_blocks]
+
+        # Instantiate the crew, passing content_blocks to its constructor
+        keyword_crew = GeneralPurposeKeywordExtractionCrew(content_blocks=content_as_dicts)
         
-        # Run synchronous crew method in thread pool
-        suggested_keywords_list: List[str] = await run_in_threadpool(
-            keyword_crew.run,
-            content_blocks=request_data.content_blocks
-        )
+        # Run synchronous crew method in thread pool; run() takes no arguments itself
+        result: Union[List[str], str] = await run_in_threadpool(keyword_crew.run)
         
-        # The crew's run method should return an empty list if no keywords are found or an error occurs internally that it handles.
-        # If it can raise an exception that we want to specifically catch, that would be done here.
-        # For now, assume it returns a list (possibly empty).
+        if isinstance(result, str): # Indicates an error message was returned
+            if result.startswith("Error:"):
+                print(f"Error from KeywordExtractionCrew: {result}")
+                raise HTTPException(status_code=500, detail=f"AI keyword generation failed: {result}")
+            else:
+                # Should ideally not happen if errors are prefixed, but handle unexpected string
+                print(f"Unexpected string result from KeywordExtractionCrew: {result}")
+                raise HTTPException(status_code=500, detail="AI keyword generation produced an unexpected string result.")
+        
+        # If it's not a string, it should be List[str]
+        suggested_keywords_list = result
 
         return KeywordExtractionResponse(suggested_keywords=suggested_keywords_list)
     

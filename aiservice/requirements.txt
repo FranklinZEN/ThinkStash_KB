@@ -136,6 +136,7 @@ pydantic-settings
 trafilatura
 beautifulsoup4
 markdown-it-py
+markdownify
 python-docx
 lxml # Required by trafilatura and bs4, good to have explicit
 

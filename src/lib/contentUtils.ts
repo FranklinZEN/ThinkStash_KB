@@ -233,10 +233,12 @@ export const extractTextFromInlineContent = (
 export const mapPartialBlocksToAIServiceContentBlocks = (
   partialBlocks: AppPartialBlock[],
   userId: string,
-  documentId: string,
+  documentId?: string | null,
 ): AIServiceContentBlock[] => {
   const aiServiceBlocks: AIServiceContentBlock[] = [];
   if (!partialBlocks || partialBlocks.length === 0) return aiServiceBlocks;
+
+  const docIdToUse = documentId || `temp-doc-${uuidv4()}`;
 
   let currentOrderIndex = 0;
   let i = 0;
@@ -286,7 +288,7 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
           block_id: listBlockId,
           tmp_id: listBlockId,
           user_id: userId,
-          document_id: documentId,
+          document_id: docIdToUse,
           type: 'list',
           order_index: currentOrderIndex,
           items: listItemsContent,
@@ -309,7 +311,7 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
           block_id,
           tmp_id,
           user_id: userId,
-          document_id: documentId,
+          document_id: docIdToUse,
           type: block.type === 'heading' ? 'heading' : 'text', // Map 'paragraph' to 'text' for AI service
           order_index: currentOrderIndex,
           content: textContent,

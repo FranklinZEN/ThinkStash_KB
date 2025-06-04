@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       // user_id: userId, // Python KeywordExtractionRequest does not expect user_id
     };
 
-    const response = await fetch(`${AISERVICE_URL}/generate-keywords`, {
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/generate-keywords`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

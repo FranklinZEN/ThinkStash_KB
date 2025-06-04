@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       // user_id: userId, // Python TitleGenerationRequest does not expect user_id
     };
 
-    const response = await fetch(`${AISERVICE_URL}/generate-title`, {
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/generate-title`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

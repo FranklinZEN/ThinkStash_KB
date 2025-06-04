@@ -26,7 +26,9 @@ import {
   BlockNoteEditor as BlockNoteEditorType,
   PartialBlock,
 } from '@blocknote/core';
+import { type AppPartialBlock } from '@/lib/blocknote/appSchema';
 import { useStagingCardStore } from '@/stores/stagingCardStore';
+import { mapPartialBlocksToAIServiceContentBlocks } from '@/lib/contentUtils';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
@@ -136,7 +138,7 @@ interface CreateCardErrorResponse {
 }
 
 export default function NewCardPage() {
-  const { status } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const router = useRouter();
   const toast = useToast();
 
@@ -156,6 +158,14 @@ export default function NewCardPage() {
   const [currentKeyword, setCurrentKeyword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isStagingLoading = useStagingCardStore(state => state.isLoading);
+
+  // State for AI suggestions (adapted from CardDetailPage)
+  const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
+  const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
+  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(
+    null,
+  );
+  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
 
   useEffect(() => {
     let dataLoadedInEffect = false;
@@ -296,7 +306,179 @@ export default function NewCardPage() {
     }
   };
 
-  if (status === 'loading') {
+  // Handler for "Suggest Title" (adapted from CardDetailPage)
+  const handleSuggestTitle = async () => {
+    if (!_editor && (!editorContent || editorContent.length === 0)) {
+      toast({
+        title: 'No content available for title suggestion.',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    if (sessionStatus !== 'authenticated' || !session?.user?.id) {
+      toast({
+        title: 'User not authenticated.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    const userId = session.user.id;
+
+    const currentBlocks = _editor ? _editor.document : editorContent;
+
+    if (!currentBlocks || currentBlocks.length === 0 || isEditorEmpty(currentBlocks)) {
+      toast({
+        title: 'Content is empty, cannot suggest title.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    // For a new card, cardId is null or undefined.
+    // mapPartialBlocksToAIServiceContentBlocks will generate a temporary ID.
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      currentBlocks as AppPartialBlock[], // Cast needed if currentBlocks is PartialBlock[] from BlockNoteEditorType
+      userId,
+      null, // cardId is null for a new card
+    );
+
+    if (aiServiceContentBlocks.length === 0) {
+      toast({
+        title: 'No processable content found for title suggestion.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsSuggestingTitle(true);
+    setSuggestedTitle(null);
+    try {
+      const response = await fetch('/api/ai/generate-title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error_message) {
+        throw new Error(data.error_message || 'Failed to suggest title');
+      }
+      setSuggestedTitle(data.suggested_title);
+      toast({
+        title: 'Title suggestion received!',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (err) {
+      console.error('Suggest title error:', err);
+      const message =
+        err instanceof Error ? err.message : 'Could not suggest title.';
+      toast({
+        title: 'Error suggesting title',
+        description: message,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsSuggestingTitle(false);
+    }
+  };
+
+  // Handler for "Suggest Keywords" (adapted from CardDetailPage)
+  const handleSuggestKeywords = async () => {
+    if (!_editor && (!editorContent || editorContent.length === 0)) {
+      toast({
+        title: 'No content available for keyword suggestion.',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+     if (sessionStatus !== 'authenticated' || !session?.user?.id) {
+      toast({
+        title: 'User not authenticated.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    const userId = session.user.id;
+    
+    const currentBlocks = _editor ? _editor.document : editorContent;
+
+    if (!currentBlocks || currentBlocks.length === 0 || isEditorEmpty(currentBlocks)) {
+      toast({
+        title: 'Content is empty, cannot suggest keywords.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      currentBlocks as AppPartialBlock[], // Cast needed
+      userId,
+      null, // cardId is null for a new card
+    );
+
+    if (aiServiceContentBlocks.length === 0) {
+      toast({
+        title: 'No processable content found for keyword suggestion.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsSuggestingKeywords(true);
+    setSuggestedKeywords(null);
+    try {
+      const response = await fetch('/api/ai/generate-keywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error_message) {
+        throw new Error(data.error_message || 'Failed to suggest keywords');
+      }
+      setSuggestedKeywords(data.suggested_keywords);
+      toast({
+        title: 'Keyword suggestions received!',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (err) {
+      console.error('Suggest keywords error:', err);
+      const message =
+        err instanceof Error ? err.message : 'Could not suggest keywords.';
+      toast({
+        title: 'Error suggesting keywords',
+        description: message,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsSuggestingKeywords(false);
+    }
+  };
+
+  if (sessionStatus === 'loading') {
     return (
       <Flex justify="center" align="center" minH="100vh">
         <Spinner size="xl" />
@@ -304,7 +486,7 @@ export default function NewCardPage() {
     );
   }
 
-  if (status === 'unauthenticated') {
+  if (sessionStatus === 'unauthenticated') {
     // Should be handled by middleware or a higher-order component, but good to have a fallback
     router.push('/auth/signin');
     return null; // Render nothing while redirecting
@@ -337,18 +519,31 @@ export default function NewCardPage() {
               isDisabled={isSubmitting || isStagingLoading} 
             />
           </FormControl>
-          <FormControl>
-            <FormLabel>Content</FormLabel>
-            <Box borderWidth="1px" borderRadius="lg" p={1} minH="300px">
-              <BlockNoteEditorComponent
-                key={editorKey}
-                initialContent={editorContent} 
-                onContentUpdate={handleEditorContentUpdate}
-                onEditorChange={handleEditorInstanceReady}
-                editable={!(isSubmitting || isStagingLoading)} 
-              />
+          {/* ADDED: Button for Suggest Title */}
+          <Button 
+            onClick={handleSuggestTitle} 
+            isLoading={isSuggestingTitle} 
+            loadingText="Suggesting..."
+            isDisabled={isSubmitting || isStagingLoading || isSuggestingTitle}
+            mt={2}
+            size="sm"
+            colorScheme="purple"
+          >
+            Suggest Title with AI
+          </Button>
+          {/* ADDED: Display Suggested Title */}
+          {suggestedTitle && !isSuggestingTitle && (
+            <Box mt={2} p={3} borderWidth="1px" borderRadius="md" bg="purple.50">
+              <Text fontSize="sm" fontWeight="bold" mb={1}>Suggested Title:</Text>
+              <Text fontSize="sm" mb={2}>{suggestedTitle}</Text>
+              <Button size="xs" colorScheme="purple" variant="outline" onClick={() => {
+                setTitle(suggestedTitle);
+                setSuggestedTitle(null); // Clear suggestion after applying
+              }}>
+                Use this title
+              </Button>
             </Box>
-          </FormControl>
+          )}
           <FormControl>
             <FormLabel htmlFor="keywords">Keywords (Tags)</FormLabel>
             <HStack spacing={2} wrap="wrap" mb={2}>
@@ -368,6 +563,51 @@ export default function NewCardPage() {
               placeholder="Type a keyword and press Enter (e.g., #example)"
               isDisabled={isSubmitting || isStagingLoading} 
             />
+          </FormControl>
+          {/* ADDED: Button for Suggest Keywords */}
+          <Button 
+            onClick={handleSuggestKeywords} 
+            isLoading={isSuggestingKeywords}
+            loadingText="Suggesting..."
+            isDisabled={isSubmitting || isStagingLoading || isSuggestingKeywords}
+            mt={2}
+            size="sm"
+            colorScheme="teal"
+          >
+            Suggest Keywords with AI
+          </Button>
+          {/* ADDED: Display Suggested Keywords */}
+          {suggestedKeywords && suggestedKeywords.length > 0 && !isSuggestingKeywords && (
+            <Box mt={2} p={3} borderWidth="1px" borderRadius="md" bg="teal.50">
+              <Text fontSize="sm" fontWeight="bold" mb={1}>Suggested Keywords:</Text>
+              <HStack spacing={2} wrap="wrap" mb={2}>
+                {suggestedKeywords.map((kw) => (
+                  <Tag key={kw} borderRadius="full" variant="solid" colorScheme="blue">
+                    <TagLabel>{kw.startsWith('#') ? kw : `#${kw}`}</TagLabel>
+                  </Tag>
+                ))}
+              </HStack>
+              <Button size="xs" colorScheme="teal" variant="outline" onClick={() => {
+                // Add new keywords, ensuring no duplicates and maintaining # prefix
+                const newKeywords = [...new Set([...keywords, ...suggestedKeywords.map(k => k.startsWith('#') ? k : `#${k}`)])];
+                setKeywords(newKeywords);
+                setSuggestedKeywords(null); // Clear suggestions after applying
+              }}>
+                Add these keywords
+              </Button>
+            </Box>
+          )}
+          <FormControl>
+            <FormLabel>Content</FormLabel>
+            <Box borderWidth="1px" borderRadius="lg" p={1} minH="300px">
+              <BlockNoteEditorComponent
+                key={editorKey}
+                initialContent={editorContent} 
+                onContentUpdate={handleEditorContentUpdate}
+                onEditorChange={handleEditorInstanceReady}
+                editable={!(isSubmitting || isStagingLoading)} 
+              />
+            </Box>
           </FormControl>
           <Button type="submit" colorScheme="green" isLoading={isSubmitting} loadingText="Saving..." isDisabled={isStagingLoading}>
             Save Knowledge Card
