@@ -25,6 +25,7 @@ export const mapContentBlocksToPartialBlocks = (
     items: (string | AIServiceContentBlock)[],
     ordered: boolean,
     level: number = 0, // Keep track of nesting level for BlockNote
+    parentBlockIdHint?: string, // Optional hint from parent, not strictly used for item IDs yet
   ): PartialBlock[] => {
     console.log(
       `[ContentUtils] mapAIServiceListToPartialBlocks (level ${level}) received items:`,
@@ -36,12 +37,14 @@ export const mapContentBlocksToPartialBlocks = (
     let lastListItem: PartialBlock | null = null;
 
     items.forEach((item, index) => {
+      const listItemId = uuidv4(); // Each list item gets a unique ID
       console.log(
-        `[ContentUtils] mapAIServiceListToPartialBlocks (level ${level}) processing item ${index}:`,
+        `[ContentUtils] mapAIServiceListToPartialBlocks (level ${level}) processing item ${index} with ID ${listItemId}:`,
         JSON.parse(JSON.stringify(item)),
       );
       if (typeof item === 'string') {
         const listItem: PartialBlock = {
+          id: listItemId, // Assign unique ID
           type: ordered ? 'numberedListItem' : 'bulletListItem',
           content: [{ type: 'text', text: item, styles: {} }],
           children: [], // Initialize children for potential sub-lists
@@ -60,7 +63,8 @@ export const mapContentBlocksToPartialBlocks = (
         const nestedListItems = mapAIServiceListToPartialBlocks(
           item.items as (string | AIServiceContentBlock)[],
           item.ordered || false,
-          level + 1,
+          level + 1, // Pass incremented level
+          listItemId, // Pass current list item ID as parent hint for nested items
         );
         if (lastListItem) {
           lastListItem.children = nestedListItems;
@@ -94,7 +98,11 @@ export const mapContentBlocksToPartialBlocks = (
       `[ContentUtils] Processing aiBlocks[${blockIndex}]:`,
       JSON.parse(JSON.stringify(block)),
     );
+    // Ensure each block has a unique ID, using existing if available, otherwise generate one.
+    const blockId = block.block_id || block.tmp_id || uuidv4();
+
     let partialBlock: PartialBlock | PartialBlock[] = {
+      id: blockId,
       type: 'paragraph',
       content: [{ type: 'text', text: '', styles: {} }],
     };
@@ -102,6 +110,7 @@ export const mapContentBlocksToPartialBlocks = (
     switch (block.type) {
       case 'text':
         partialBlock = {
+          id: blockId,
           type: 'paragraph',
           content: block.content
             ? [{ type: 'text', text: block.content, styles: {} }]
@@ -110,6 +119,7 @@ export const mapContentBlocksToPartialBlocks = (
         break;
       case 'heading':
         partialBlock = {
+          id: blockId,
           type: 'heading',
           props: {
             level: (block.level && block.level >= 1 && block.level <= 3
@@ -130,6 +140,8 @@ export const mapContentBlocksToPartialBlocks = (
           partialBlock = mapAIServiceListToPartialBlocks(
             block.items as (string | AIServiceContentBlock)[],
             block.ordered || false,
+            0, // Start at level 0 for the main list
+            blockId, // Pass parent block ID for context if needed by list mapper
           );
         } else {
           console.warn(
@@ -143,6 +155,7 @@ export const mapContentBlocksToPartialBlocks = (
         if (block.gcs_url) {
           // console.log('[ImageDebug] Mapping image with URL (should be signed):', block.gcs_url); // Original log, can be re-enabled if needed
           partialBlock = {
+            id: blockId,
             type: 'image',
             props: {
               url: block.gcs_url,
@@ -152,6 +165,7 @@ export const mapContentBlocksToPartialBlocks = (
           };
         } else {
           partialBlock = {
+            id: blockId,
             type: 'paragraph',
             content: [
               {
@@ -165,6 +179,7 @@ export const mapContentBlocksToPartialBlocks = (
         break;
       case 'code_snippet':
         partialBlock = {
+          id: blockId,
           type: 'codeBlock',
           props: {
             language: block.language || 'plaintext',
@@ -178,6 +193,7 @@ export const mapContentBlocksToPartialBlocks = (
           JSON.parse(JSON.stringify(block)),
         );
         partialBlock = {
+          id: blockId,
           type: 'paragraph',
           content: [
             {

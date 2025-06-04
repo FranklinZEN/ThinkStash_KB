@@ -45,6 +45,7 @@ import {
 import {
   // extractTextFromInlineContent, // Removed as unused
   mapPartialBlocksToAIServiceContentBlocks,
+  mapContentBlocksToPartialBlocks,
 } from '../../../lib/contentUtils';
 
 // Helper function to check if editor content is effectively empty
@@ -215,6 +216,12 @@ export default function CardDetailPage() {
     null,
   );
   const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
+
+  // ADDED: State for AI Content Rewrite
+  const [isRewritingContent, setIsRewritingContent] = useState(false);
+  const [rewrittenContentBlocks, setRewrittenContentBlocks] = useState<AppPartialBlock[] | null>(null);
+  const [showSideBySideView, setShowSideBySideView] = useState(false);
+  const [originalContentForComparison, setOriginalContentForComparison] = useState<AppPartialBlock[] | null>(null);
 
   // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
   useEffect(() => {
@@ -548,6 +555,172 @@ export default function CardDetailPage() {
     }
   };
 
+  // ADDED: Handler for "AI Rewrite Content"
+  const handleRewriteContent = async () => {
+    if (!card || !card.userId || !cardId) {
+      toast({
+        title: 'Card data not loaded.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    // Determine the content to use as the "original" for comparison
+    let contentToUseAsOriginal: AppPartialBlock[] | undefined;
+    if (isEditing && editorContent && editorContent.length > 0) {
+      contentToUseAsOriginal = editorContent;
+    } else if (card.content) {
+      if (typeof card.content === 'string') {
+        try {
+          const parsedContent = JSON.parse(card.content);
+          if (Array.isArray(parsedContent)) {
+            contentToUseAsOriginal = parsedContent as AppPartialBlock[];
+          } else {
+            contentToUseAsOriginal = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+          }
+        } catch (e) {
+          contentToUseAsOriginal = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+        }
+      } else {
+        contentToUseAsOriginal = card.content as AppPartialBlock[];
+      }
+    }
+
+    if (!contentToUseAsOriginal || contentToUseAsOriginal.length === 0 || isEditorEmpty(contentToUseAsOriginal)) {
+      toast({
+        title: 'Current content is empty, cannot rewrite.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    setOriginalContentForComparison(contentToUseAsOriginal); // Set for SBS view
+
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      contentToUseAsOriginal, // Use the captured original
+      card.userId,
+      cardId,
+    );
+
+    if (aiServiceContentBlocks.length === 0) {
+      toast({
+        title: 'No processable content found for rewrite.',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      // Reset if we bailed early
+      setOriginalContentForComparison(null);
+      return;
+    }
+
+    setIsRewritingContent(true);
+    setRewrittenContentBlocks(null);
+    setShowSideBySideView(true); // Activate side-by-side mode
+
+    try {
+      const payload = {
+        content_blocks_to_rewrite: aiServiceContentBlocks,
+        document_metadata: { // Construct DocumentMetadata as expected by RewriteContentInput
+          document_id: cardId,
+          user_id: card.userId,
+          // Assuming card.source_url and card.source_type might not exist on the frontend Card type
+          // Provide fallbacks to satisfy Python model requirements if they are required.
+          source_identifier: (card as any).source_url || cardId, // Use cardId as a fallback source identifier
+          source_type: (card as any).source_type || 'knowledge_card', // Default source_type
+          title: card.title,
+          // final_url: (card as any).final_url || undefined, // If you add this to your card model
+          // Add other relevant fields from card if available and needed by the crew
+        },
+        user_id: card.userId, // Explicitly pass user_id for the request
+      };
+
+      const response = await fetch('/api/ai/rewrite-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error_message) {
+        throw new Error(data.error_message || 'Failed to rewrite content');
+      }
+
+      if (data.ai_rewritten_content_blocks) {
+        const mappedRewrittenBlocks = mapContentBlocksToPartialBlocks(data.ai_rewritten_content_blocks);
+        setRewrittenContentBlocks(mappedRewrittenBlocks);
+        toast({
+          title: 'Content Rewrite Received!',
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        });
+      } else {
+        throw new Error('Rewrite successful but no content blocks returned.');
+      }
+    } catch (err) {
+      console.error('Rewrite content error:', err);
+      const message = err instanceof Error ? err.message : 'Could not rewrite content.';
+      toast({
+        title: 'Error Rewriting Content',
+        description: message,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+      setShowSideBySideView(false); // Ensure side-by-side is hidden on error
+    } finally {
+      setIsRewritingContent(false);
+      // Do not hide setShowSideBySideView here, it's controlled by user actions now
+    }
+  };
+
+  // ADDED: Handler to accept rewritten content
+  const handleAcceptRewrite = () => {
+    if (rewrittenContentBlocks && editor) { // Ensure main editor instance is available
+      // Update the main editor's content directly
+      // This assumes `editor` is the instance of the *main* BlockNote editor
+      // We need to ensure `editorContent` and `editorContentForInitialLoad` are updated
+      // and the editor is re-keyed if necessary to reflect the new content.
+
+      setEditorContent(rewrittenContentBlocks);
+      setEditorContentForInitialLoad(rewrittenContentBlocks); // This becomes the new baseline
+
+      // Force re-initialization of the main editor when we switch back to single view
+      setEditorKey(prev => prev + 1); 
+    }
+    setShowSideBySideView(false);
+    setIsEditing(true); // Ensure we are in edit mode to save the accepted changes
+    setRewrittenContentBlocks(null);
+    setOriginalContentForComparison(null);
+    toast({
+      title: 'Rewritten content applied.',
+      description: 'You can now save the card.',
+      status: 'success',
+      duration: 3000,
+      isClosable: true,
+    });
+  };
+
+  // ADDED: Handler to discard rewritten content
+  const handleDiscardRewrite = () => {
+    setShowSideBySideView(false);
+    // If they were editing before, they remain editing. If not, switch to edit mode.
+    setIsEditing(true); 
+    setRewrittenContentBlocks(null);
+    setOriginalContentForComparison(null);
+    toast({
+      title: 'Rewrite discarded.',
+      status: 'info',
+      duration: 2000,
+      isClosable: true,
+    });
+  };
+
   // --- Save Changes ---
   const handleSaveChanges = async () => {
     if (!editor || !card) return;
@@ -651,6 +824,23 @@ export default function CardDetailPage() {
     // Ensure setIsSaving and setError(null) are correctly placed before the try block
     setIsSaving(true);
     setError(null);
+
+    // ---- START DIAGNOSTIC LOGS ----
+    console.log('[handleSaveChanges] Diagnostic Info:');
+    console.log('  hasTitleChanged:', hasTitleChanged);
+    console.log('  hasKeywordsChanged:', hasKeywordsChanged);
+    console.log('  hasContentChanged:', hasContentChanged);
+    // For content, log the actual content being compared if it's not too verbose,
+    // or at least their lengths or a hash if direct logging is too much.
+    // For now, let's log stringified versions carefully.
+    try {
+      console.log('  currentContentToValidate (first 200 chars):', JSON.stringify(currentContentToValidate)?.substring(0, 200));
+      console.log('  originalContentForComparison (first 200 chars):', JSON.stringify(originalContentForComparison)?.substring(0, 200));
+    } catch (e) {
+      console.warn('Error stringifying content for logging:', e);
+    }
+    console.log('  Final updatePayload being sent:', JSON.stringify(updatePayload));
+    // ---- END DIAGNOSTIC LOGS ----
 
     try {
       // Use PUT to replace the entire card data (or PATCH if API supports partial)
@@ -844,56 +1034,148 @@ export default function CardDetailPage() {
           fontFamily="'Open Sans', sans-serif"
           fontSize="36px"
         >
-          {isEditing ? 'Edit Knowledge Card' : card?.title || 'Card Details'}
+          {showSideBySideView ? "AI Content Rewrite Comparison" : (isEditing ? 'Edit Knowledge Card' : (card?.title || 'Card Details'))}
         </Heading>
         <Spacer />
-        {isEditing ? (
+
+        {!showSideBySideView && (
           <>
-            <Button
-              colorScheme="green"
-              onClick={handleSaveChanges}
-              isLoading={isSaving}
-              isDisabled={!canSave || isSaving || isDeleting}
-              mr={2}
-            >
-              Save
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setIsEditing(false);
-                setTitle(card.title); // Revert title on cancel
-                setKeywords(card.tags ? card.tags.map((tag) => tag.name) : []); // Revert keywords to original card tag names
-                // Revert editor content might require re-fetching or complex state management
-                // For now, just exit edit mode. User can save or refresh to discard.
-                // Consider calling fetchCard() here too if a full reset is desired on this cancel action.
-              }}
-              isDisabled={isSaving || isDeleting}
-            >
-              Cancel
-            </Button>
+            {isEditing ? (
+              <>
+                <Button
+                  colorScheme="green"
+                  onClick={handleSaveChanges}
+                  isLoading={isSaving}
+                  isDisabled={!canSave || isSaving || isDeleting || isRewritingContent}
+                  mr={2}
+                >
+                  Save Changes
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setIsEditing(false);
+                    if (card) {
+                      setTitle(card.title); 
+                      setKeywords(card.tags ? card.tags.map((tag) => tag.name) : []);
+                      if (card.content) {
+                        if (typeof card.content === 'string') {
+                          try {
+                            const parsed = JSON.parse(card.content);
+                            if(Array.isArray(parsed)) setEditorContentForInitialLoad(parsed as AppPartialBlock[]);
+                            else setEditorContentForInitialLoad([{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }]}]);
+                          } catch {
+                            setEditorContentForInitialLoad([{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }]}]);
+                          }
+                        } else {
+                          setEditorContentForInitialLoad(card.content as AppPartialBlock[]);
+                        }
+                      } else {
+                        setEditorContentForInitialLoad(undefined);
+                      }
+                      setEditorKey(prev => prev + 1);
+                    }
+                  }}
+                  isDisabled={isSaving || isDeleting || isRewritingContent}
+                >
+                  Cancel Edit
+                </Button>
+              </>
+            ) : (
+              <Button
+                colorScheme="blue"
+                onClick={() => setIsEditing(true)}
+                isDisabled={isSaving || isDeleting || isRewritingContent}
+                mr={2}
+              >
+                Edit Card
+              </Button>
+            )}
           </>
-        ) : (
-          <Button
-            colorScheme="blue"
-            onClick={() => setIsEditing(true)} // Toggle edit/save
-            isDisabled={isSaving || isDeleting} // Disable Edit button when saving/deleting
-            mr={2}
-          >
-            Edit Card
-          </Button>
         )}
-        <IconButton
-          aria-label="Delete Card"
-          icon={<DeleteIcon />} // Keep delete separate
-          colorScheme="red"
-          onClick={onAlertOpen} // Open confirmation dialog
-          isLoading={isDeleting}
-          isDisabled={isSaving || isDeleting}
-        />
+
+        {!showSideBySideView && card && (
+           <Button
+             size="sm"
+             ml={2}
+             colorScheme="orange"
+             onClick={handleRewriteContent}
+             isLoading={isRewritingContent}
+             loadingText="Preparing Rewrite..."
+             isDisabled={isRewritingContent || isSaving || isDeleting }
+           >
+             Rewrite with AI
+           </Button>
+        )}
+
+        {!showSideBySideView && (
+            <IconButton
+              aria-label="Delete Card"
+              icon={<DeleteIcon />}
+              colorScheme="red"
+              onClick={onAlertOpen}
+              isLoading={isDeleting}
+              isDisabled={isSaving || isDeleting || isRewritingContent}
+              ml={isEditing ? 0 : 2}
+            />
+        )}
       </Flex>
 
-      {isEditing ? (
+      {showSideBySideView && card && originalContentForComparison ? (
+        <Box>
+          <Flex mb={4} justifyContent="center" gap={3}>
+            <Button colorScheme="teal" onClick={handleAcceptRewrite} isLoading={isSaving}>
+              Use This Rewrite
+            </Button>
+            <Button variant="outline" onClick={handleDiscardRewrite}>
+              Discard Rewrite & Edit Original
+            </Button>
+          </Flex>
+
+          <Flex direction={{ base: "column", md: "row" }} gap={6}>
+            <Box flex={1}>
+              <Heading size="md" mb={2} textAlign="center">Original Content</Heading>
+              <Box borderWidth="1px" borderRadius="md" p={1} minH={{ base: "300px", md: "500px" }} bg="gray.50">
+                <BlockNoteEditorComponent
+                  key={`editor-original-sbs-${editorKey}`}
+                  editable={false}
+                  initialContent={originalContentForComparison}
+                  onEditorChange={() => {}}
+                />
+              </Box>
+            </Box>
+
+            <Box flex={1}>
+              <Heading size="md" mb={2} textAlign="center">AI Rewritten Suggestion</Heading>
+              <Box borderWidth="1px" borderRadius="md" p={1} minH={{ base: "300px", md: "500px" }} display="flex" flexDirection="column" justifyContent="center" alignItems="center" bg="gray.50">
+                {isRewritingContent ? (
+                  <Flex direction="column" align="center" justify="center" h="100%">
+                    <Spinner size="xl" />
+                    <Text mt={4}>Rewriting content...</Text>
+                  </Flex>
+                ) : rewrittenContentBlocks ? (
+                  <BlockNoteEditorComponent
+                    key={`editor-rewritten-sbs-${editorKey}`}
+                    editable={false}
+                    initialContent={rewrittenContentBlocks}
+                    onEditorChange={() => {}}
+                  />
+                ) : (
+                  <Text color="gray.500">Rewritten content will appear here.</Text>
+                )}
+              </Box>
+            </Box>
+          </Flex>
+           <Flex mt={4} justifyContent="center" gap={3}>
+             <Button colorScheme="teal" onClick={handleAcceptRewrite} isLoading={isSaving}>
+              Use This Rewrite
+            </Button>
+            <Button variant="outline" onClick={handleDiscardRewrite}>
+              Discard Rewrite & Edit Original
+            </Button>
+          </Flex>
+        </Box>
+      ) : isEditing ? (
         <Box
           as="form"
           onSubmit={(_e) => {
@@ -920,8 +1202,8 @@ export default function CardDetailPage() {
                 fontFamily="'Open Sans', sans-serif"
                 fontSize="18px"
               />
-              {/* ADDED: Suggest Title Button and Display */}
-              {isEditing && (
+              {/* RE-INSERTED: Suggest Title Button and Display */}
+              {isEditing && !showSideBySideView && (
                 <Box mt={2}>
                   <Button
                     size="sm"
@@ -966,7 +1248,7 @@ export default function CardDetailPage() {
                 onChange={handleKeywordChange}
                 onKeyDown={handleKeywordKeyDown}
                 placeholder="Type a keyword and press Enter"
-                isDisabled={!isEditing || isSaving} // Ensure it's disabled when not editing or when saving
+                isDisabled={!isEditing || isSaving}
                 fontFamily="'Open Sans', sans-serif"
                 fontSize="16px"
                 color="#A1824A"
@@ -994,67 +1276,67 @@ export default function CardDetailPage() {
                     />
                   </ChakraTag>
                 ))}
+                {/* RE-INSERTED: Suggest Keywords Button and Display */}
+                {isEditing && !showSideBySideView && (
+                  <Box mt={3}> {/* Adjusted margin if needed */}
+                    <Button
+                      size="sm"
+                      onClick={handleSuggestKeywords}
+                      isLoading={isSuggestingKeywords}
+                      loadingText="Suggesting..."
+                      colorScheme="purple"
+                    >
+                      Suggest Keywords with AI
+                    </Button>
+                    {suggestedKeywords &&
+                      suggestedKeywords.length > 0 &&
+                      !isSuggestingKeywords && (
+                        <Box mt={2}>
+                          <Text fontSize="sm" mb={1}>
+                            Suggestions:
+                          </Text>
+                          <HStack spacing={2} wrap="wrap" mb={2}>
+                            {suggestedKeywords.map((kw) => (
+                              <ChakraTag
+                                key={kw}
+                                borderRadius="full"
+                                variant="outline"
+                                colorScheme="blue"
+                              >
+                                <TagLabel>{kw}</TagLabel>
+                              </ChakraTag>
+                            ))}
+                          </HStack>
+                          <Button
+                            size="xs"
+                            colorScheme="teal"
+                            onClick={() => {
+                              const newKeywords = [
+                                ...new Set([...keywords, ...suggestedKeywords]),
+                              ];
+                              setKeywords(newKeywords);
+                              setSuggestedKeywords(null);
+                            }}
+                          >
+                            Add these keywords
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            ml={2}
+                            colorScheme="gray"
+                            onClick={() => {
+                              setKeywords(suggestedKeywords);
+                              setSuggestedKeywords(null);
+                            }}
+                          >
+                            Replace with these
+                          </Button>
+                        </Box>
+                      )}
+                  </Box>
+                )}
               </HStack>
-              {/* ADDED: Suggest Keywords Button and Display */}
-              {isEditing && (
-                <Box mt={2}>
-                  <Button
-                    size="sm"
-                    onClick={handleSuggestKeywords}
-                    isLoading={isSuggestingKeywords}
-                    loadingText="Suggesting..."
-                    colorScheme="purple"
-                  >
-                    Suggest Keywords with AI
-                  </Button>
-                  {suggestedKeywords &&
-                    suggestedKeywords.length > 0 &&
-                    !isSuggestingKeywords && (
-                      <Box mt={2}>
-                        <Text fontSize="sm" mb={1}>
-                          Suggestions:
-                        </Text>
-                        <HStack spacing={2} wrap="wrap" mb={2}>
-                          {suggestedKeywords.map((kw) => (
-                            <ChakraTag
-                              key={kw}
-                              borderRadius="full"
-                              variant="outline"
-                              colorScheme="blue"
-                            >
-                              <TagLabel>{kw}</TagLabel>
-                            </ChakraTag>
-                          ))}
-                        </HStack>
-                        <Button
-                          size="xs"
-                          colorScheme="teal"
-                          onClick={() => {
-                            const newKeywords = [
-                              ...new Set([...keywords, ...suggestedKeywords]),
-                            ];
-                            setKeywords(newKeywords);
-                            setSuggestedKeywords(null);
-                          }}
-                        >
-                          Add these keywords
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          ml={2}
-                          colorScheme="gray"
-                          onClick={() => {
-                            setKeywords(suggestedKeywords);
-                            setSuggestedKeywords(null);
-                          }}
-                        >
-                          Replace with these
-                        </Button>
-                      </Box>
-                    )}
-                </Box>
-              )}
             </FormControl>
 
             <FormControl isRequired>
@@ -1063,52 +1345,18 @@ export default function CardDetailPage() {
               </FormLabel>
               <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
                 <BlockNoteEditorComponent
-                  key={`editor-${editorKey}`}
+                  key={`editor-main-editing-${editorKey}`}
                   onEditorChange={handleEditorInstanceReady}
                   onContentUpdate={handleEditorContentUpdate}
-                  editable={isEditing}
+                  editable={true}
                   initialContent={editorContentForInitialLoad}
                 />
               </Box>
             </FormControl>
-
-            <Flex justify="flex-start" gap={3} mt={4}>
-              <Button
-                colorScheme="green"
-                type="submit"
-                isLoading={isSaving}
-                fontFamily="'Open Sans', sans-serif"
-                fontSize="16px"
-              >
-                Save Changes
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setIsEditing(false);
-                  if (card) {
-                    setTitle(card.title);
-                    setKeywords(
-                      card.tags ? card.tags.map((tag) => tag.name) : [],
-                    );
-                    // Content reset is implicitly handled by BlockNoteEditorComponent
-                    // when isEditing becomes false and it re-renders with card.content,
-                    // or by fetchCard() if the user used the header cancel that triggers a re-fetch.
-                  }
-                }}
-                isDisabled={isSaving}
-                fontFamily="'Open Sans', sans-serif"
-                fontSize="16px"
-              >
-                Cancel
-              </Button>
-            </Flex>
           </VStack>
         </Box>
       ) : (
         <Box>
-          {/* Display Title - Already part of the Heading element above for non-editing mode */}
-          {/* Display Tags/Keywords - If not editing, show them as static tags */}
           {card && card.tags && card.tags.length > 0 && (
             <Box my={4}>
               <Heading
@@ -1144,17 +1392,16 @@ export default function CardDetailPage() {
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
             <BlockNoteEditorComponent
-              key={`editor-readonly-${editorKey}`}
+              key={`editor-main-readonly-${editorKey}`}
               onEditorChange={handleEditorInstanceReady}
               onContentUpdate={handleEditorContentUpdate}
-              editable={!isEditing}
+              editable={false}
               initialContent={editorContentForInitialLoad}
             />
           </Box>
         </Box>
       )}
 
-      {/* Delete Confirmation Dialog */}
       <AlertDialog
         isOpen={isAlertOpen}
         leastDestructiveRef={cancelRef}

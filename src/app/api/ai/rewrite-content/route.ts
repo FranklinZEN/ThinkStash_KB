@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       user_id: finalUserId, // Ensure this is the authenticated user's ID
     };
 
-    const response = await fetch(`${AISERVICE_URL}/rewrite-content`, {
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/rewrite-content`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
