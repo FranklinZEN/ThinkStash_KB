@@ -95,6 +95,7 @@ class ContentRewriteAgents:
             llm=self.llm, # Assign the configured LLM to prevent OpenAI client instantiation issues
             allow_delegation=False,
             verbose=True,
+            max_iter=1 # Force single iteration, tool use should be the only action
         )
 
 # Example usage (for testing or integration into a crew)

@@ -124,15 +124,11 @@ class ContentRewriteCrewManager:
                 - When using this tool, you MUST set the 'temperature' parameter to {self.agents_factory.summarizer_temperature} and the 'max_tokens' parameter to {self.agents_factory.summarizer_max_tokens}.
 
                 ### Final Answer Format Reminder:
-                Your final, directly returned answer for this task must be a JSON object conforming to the 'SummarizerTaskOutput' Pydantic model structure.
-                Example: `{{"summary_text": "The main topic is X, supported by data point Y. [IMAGE: relevant_image_id_abc] This illustrates the key finding..."}}`
+                Your final output for this task MUST be ONLY the single, continuous string of summarized text itself, including any image placeholders. Do NOT wrap it in JSON or any other structure.
                 """),
             expected_output=(
-                "The single string summary, encapsulated within a 'SummarizerTaskOutput' Pydantic object. "
-                "This output is produced DIRECTLY and SOLELY by the 'Optimized LLM Interaction Tool' "
-                "during its FIRST successful execution for this task. Upon receiving this structured tool output, "
-                "the agent's work for this task is considered ABSOLUTELY COMPLETE. No further thoughts, actions, "
-                "or tool calls are required or permitted for this specific summarization task."
+                "A single string containing the summarized text. This string will be used to populate the "
+                "'summary_text' field of the 'SummarizerTaskOutput' Pydantic model by the system."
             ),
             agent=summarization_agent,
             output_pydantic=SummarizerTaskOutput,
@@ -141,8 +137,9 @@ class ContentRewriteCrewManager:
 
         task_reconstruct_output = Task(
             description=dedent("""
-                CRITICAL INSTRUCTION: Your ONLY function is to use the 'FastContentBlockProcessorTool' ONCE and IMMEDIATELY return its exact output.
-                DO NOT add any commentary, explanation, or any text other than the direct tool output.
+                CRITICAL INSTRUCTION: Your ONLY function is to use the 'FastContentBlockProcessorTool' ONCE.
+                Take the Python List of Dictionaries returned by the tool, CONVERT IT TO A JSON STRING, and then IMMEDIATELY return that JSON STRING.
+                DO NOT add any commentary, explanation, or any text other than the direct JSON STRING output.
                 
                 Tool Call Parameters:
                 1. 'operation': Use the exact string 'reconstruct_content_from_summary'.
@@ -152,13 +149,13 @@ class ContentRewriteCrewManager:
                 
                 Your final answer for this task MUST be the direct, unaltered, raw output from the 'FastContentBlockProcessorTool'.
                 """),
-            expected_output="A list of ContentBlock dictionaries, reconstructed from the summary and image metadata, as returned by the FastContentBlockProcessorTool.",
+            expected_output="A JSON string representation of a list of ContentBlock dictionaries, as returned by the FastContentBlockProcessorTool and then serialized to JSON.",
             agent=output_constructor_agent,
             tools=[self.agents_factory.content_processor_tool],
             context=[task_summarize_content],
             inputs={
                 "operation": "{{reconstructor_operation}}", # From crew_kickoff_inputs
-                "summarized_text": "{{context}}", # CHANGED: Use generic context placeholder
+                "summarized_text": "{{context.summary_text}}", # Explicitly access summary_text from context
                 "image_metadata_list_json": "{{reconstructor_image_metadata_list_json}}", # From crew_kickoff_inputs
                 "document_id": "{{reconstructor_document_id}}" # From crew_kickoff_inputs
             }
@@ -173,6 +170,17 @@ class ContentRewriteCrewManager:
         return content_rewrite_crew
 
     def _try_json_parse(self, data_str: str) -> Any:
+        # Step 1: Clean the string if it's wrapped in markdown code fences
+        if isinstance(data_str, str):
+            match_fences = re.match(r"^```(?:json)?\n(.*?)\n```$", data_str, re.DOTALL | re.IGNORECASE)
+            if match_fences:
+                data_str = match_fences.group(1).strip()
+            else:
+                # Also check for single-line backticks like `[...]` or `{"key": "value"}`
+                match_inline_fences = re.match(r"^`(.*)`$", data_str, re.DOTALL)
+                if match_inline_fences:
+                    data_str = match_inline_fences.group(1).strip()
+
         try:
             return ast.literal_eval(data_str)
         except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError) as e_ast:
@@ -251,7 +259,7 @@ class ContentRewriteCrewManager:
                 text_parts.append(block.content)
             elif block.type == "image" and block.image_id_ref:
                 # Normalize gcs_url: replace backslashes with forward slashes
-                normalized_gcs_url = block.gcs_url.replace("\\", "/") if block.gcs_url else None
+                normalized_gcs_url = block.gcs_url.replace("\\\\", "/") if block.gcs_url else None
                 essential_meta = {
                     "image_id_ref": block.image_id_ref,
                     "gcs_url": normalized_gcs_url, # Use normalized URL
@@ -263,6 +271,20 @@ class ContentRewriteCrewManager:
                 }
                 essential_image_metadata.append({k: v for k, v in essential_meta.items() if v is not None})
         concatenated_text = "\\n\\n".join(text_parts)
+
+        # ADD DETAILED LOGGING HERE
+        logger.debug(f"ContentRewriteCrewManager: Raw content_blocks_to_rewrite (first 3): {str(self.rewrite_input.content_blocks_to_rewrite[:3])}")
+        for i, block in enumerate(self.rewrite_input.content_blocks_to_rewrite):
+            if block.type == "image":
+                logger.debug(f"ContentRewriteCrewManager: Image block {i} details: image_id_ref='{block.image_id_ref}', gcs_url='{block.gcs_url}', alt_text='{block.alt_text}', caption='{block.caption}', llm_desc='{block.llm_description}'")
+            elif block.type == "text":
+                logger.debug(f"ContentRewriteCrewManager: Text block {i} content (first 50 chars): '{block.content[:50] if block.content else ''}'")
+            else:
+                logger.debug(f"ContentRewriteCrewManager: Block {i} type: {block.type}")
+
+
+        logger.info(f"ContentRewriteCrewManager: Populated essential_image_metadata BEFORE json.dumps: {json.dumps(essential_image_metadata, indent=2)}")
+        # END DETAILED LOGGING
 
         # current_document_id is no longer needed here as new_rewritten_document_id is used.
         # We can log the original one if needed for context.
@@ -279,7 +301,8 @@ class ContentRewriteCrewManager:
             'concatenated_text': concatenated_text,
             'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata),
             'reconstructor_image_metadata_list_json': json.dumps(essential_image_metadata),
-            'reconstructor_document_id': self.new_rewritten_document_id # Pass the new ID here
+            'reconstructor_document_id': self.new_rewritten_document_id, # Pass the new ID here
+            'reconstructor_operation': 'reconstruct_content_from_summary' # ADDED THIS LINE
         }
         
         if self.verbose_level > 1:
@@ -348,8 +371,16 @@ class ContentRewriteCrewManager:
                     elif last_task_output_obj is not None: # Check if the object itself exists
                         print(f"INFO: Trying str(last_task_output_obj) as candidate. Current type of last_task_output_obj: {type(last_task_output_obj)}") # Retained
                         try:
-                            candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
-                            print(f"INFO: str(last_task_output_obj) successful. Type: {type(candidate_data)}") # Retained
+                            # Attempt to get the direct output first if it's already a list (from tool)
+                            if isinstance(last_task_output_obj.output, list):
+                                candidate_data = last_task_output_obj.output
+                                print(f"INFO: Used last_task_output_obj.output directly as list. Type: {type(candidate_data)}")
+                            elif isinstance(last_task_output_obj.exported_output, list):
+                                candidate_data = last_task_output_obj.exported_output
+                                print(f"INFO: Used last_task_output_obj.exported_output directly as list. Type: {type(candidate_data)}")
+                            else: # Fallback to string conversion if direct list access fails
+                                candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
+                                print(f"INFO: str(last_task_output_obj) successful after checking .output. Type: {type(candidate_data)}") # Retained
                         except Exception as e_str_conv:
                             print(f"WARNING: str(last_task_output_obj) failed: {e_str_conv}") # Retained
 
@@ -402,8 +433,16 @@ class ContentRewriteCrewManager:
                 elif last_task_output_obj is not None: # Check if the object itself exists
                     print(f"INFO: Trying str(last_task_output_obj) as candidate. Current type of last_task_output_obj: {type(last_task_output_obj)}") # Retained
                     try:
-                        candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
-                        print(f"INFO: str(last_task_output_obj) successful. Type: {type(candidate_data)}") # Retained
+                        # Attempt to get the direct output first if it's already a list (from tool)
+                        if isinstance(last_task_output_obj.output, list):
+                            candidate_data = last_task_output_obj.output
+                            print(f"INFO: Used last_task_output_obj.output directly as list. Type: {type(candidate_data)}")
+                        elif isinstance(last_task_output_obj.exported_output, list):
+                            candidate_data = last_task_output_obj.exported_output
+                            print(f"INFO: Used last_task_output_obj.exported_output directly as list. Type: {type(candidate_data)}")
+                        else: # Fallback to string conversion if direct list access fails
+                            candidate_data = str(last_task_output_obj) # The __str__ method of TaskOutput might return the raw output string
+                            print(f"INFO: str(last_task_output_obj) successful after checking .output. Type: {type(candidate_data)}") # Retained
                     except Exception as e_str_conv:
                         print(f"WARNING: str(last_task_output_obj) failed: {e_str_conv}") # Retained
 

@@ -375,8 +375,58 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
           items: null,
           ordered: null,
           list_start_number: null,
+          language: null,
+          image_id_ref: null,
+          gcs_url: null,
+          alt_text: null,
+          caption: null,
+          width: null,
+          height: null,
+          llm_description: null,
+          page_number: null,
+          bbox: null,
         });
         currentOrderIndex++;
+      }
+      i++;
+    } else if (block.type === 'image') {
+      // Handle image blocks
+      const imageUrl = block.props?.url as string | undefined;
+      const imageCaption = block.props?.caption as string | undefined;
+
+      // The block.id from BlockNote PartialBlock is the original block_id/tmp_id
+      // from the AI Service, which should serve as the image_id_ref.
+      const imageIdRef = block.id; 
+
+      if (imageUrl && imageIdRef) {
+        aiServiceBlocks.push({
+          block_id: imageIdRef, // Use the original block ID as the main identifier
+          tmp_id: imageIdRef,   // Can be the same if no separate temp ID concept here
+          user_id: userId,
+          document_id: docIdToUse,
+          type: 'image',
+          order_index: currentOrderIndex,
+          image_id_ref: imageIdRef,
+          gcs_url: imageUrl, // This is the HTTPS URL from BlockNote
+          caption: imageCaption || null,
+          content: null,
+          level: null,
+          items: null,
+          ordered: null,
+          list_start_number: null,
+          language: null,
+          alt_text: null, // Potentially map from props if available, e.g., block.props.alt
+          width: null,    // Potentially map from props if available
+          height: null,   // Potentially map from props if available
+          llm_description: null,
+          page_number: null,
+          bbox: null,
+        });
+        currentOrderIndex++;
+      } else {
+        console.warn(
+          `[ContentUtils] Image block (ID: ${block_id}) is missing URL or ID. Skipping. URL: ${imageUrl}, ID: ${imageIdRef}`,
+        );
       }
       i++;
     } else {

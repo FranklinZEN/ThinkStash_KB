@@ -216,6 +216,13 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
+            # Log received inputs for this specific operation
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received summarized_text (first 100 chars): {summarized_text[:100] if summarized_text else 'None'}", flush=True)
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received image_metadata_list_json (first 100 chars): {image_metadata_list_json[:100] if image_metadata_list_json else 'None'}", flush=True)
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received document_id: {document_id}", flush=True)
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary using self.document_id for new blocks: {self.document_id}", flush=True)
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary using self.user_id for new blocks: {self.user_id}", flush=True)
+
             if summarized_text is None or image_metadata_list_json is None: # MODIFIED to use summarized_text
                 return [{"error": "'summarized_text' (after processing) and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."}]
 
@@ -271,7 +278,22 @@ class FastContentBlockProcessorTool(BaseTool):
                                 document_id=document_id_to_use_for_new_blocks,
                                 type='text',
                                 content=placeholder_tag.strip(),
-                                order_index=order_idx_counter
+                                order_index=order_idx_counter,
+                                # Initialize all other ContentBlock fields to None
+                                items=None,
+                                ordered=None,
+                                list_start_number=None,
+                                level=None,
+                                language=None,
+                                image_id_ref=None,
+                                gcs_url=None,
+                                alt_text=None,
+                                caption=None,
+                                width=None,
+                                height=None,
+                                llm_description=None,
+                                page_number=None,
+                                bbox=None
                             )
                             reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
                             order_idx_counter += 1
@@ -280,16 +302,16 @@ class FastContentBlockProcessorTool(BaseTool):
                     placeholder_identifier = id_match.group(1)
                     
                     img_meta_to_use = None
+                    # Prioritize lookup by image_id_ref, then gcs_url
                     if placeholder_identifier in image_meta_lookup_id:
                         img_meta_to_use = image_meta_lookup_id[placeholder_identifier]
-                    elif placeholder_identifier in image_meta_lookup_gcs:
+                    elif placeholder_identifier in image_meta_lookup_gcs: # Fallback if ID was a GCS URL
                         img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
                     
                     if img_meta_to_use:
                         final_block_id = img_meta_to_use.get('block_id', uuid.uuid4().hex)
-                        final_tmp_id = img_meta_to_use.get('tmp_id', img_meta_to_use.get('image_id_ref'))
-                        # For user_id and document_id of images, we might want to preserve their original ones if they exist
-                        # For now, let's assume rewritten blocks always get the new document_id and current user context
+                        # Use image_id_ref from metadata for tmp_id if available, otherwise the placeholder itself
+                        final_tmp_id = img_meta_to_use.get('image_id_ref', placeholder_identifier) 
                         final_user_id = current_user_id_for_tool 
                         final_document_id = document_id_to_use_for_new_blocks
 
@@ -299,6 +321,8 @@ class FastContentBlockProcessorTool(BaseTool):
                             user_id=final_user_id,
                             document_id=final_document_id,
                             type='image',
+                            content=None, # CRITICAL: Content for image block must be None
+                            order_index=order_idx_counter,
                             image_id_ref=img_meta_to_use.get('image_id_ref'),
                             gcs_url=img_meta_to_use.get('gcs_url'),
                             alt_text=img_meta_to_use.get('alt_text'),
@@ -306,12 +330,22 @@ class FastContentBlockProcessorTool(BaseTool):
                             llm_description=img_meta_to_use.get('llm_description'),
                             width=img_meta_to_use.get('width'),
                             height=img_meta_to_use.get('height'),
-                            order_index=order_idx_counter
+                            # Initialize non-image related fields to None
+                            items=None,
+                            ordered=None,
+                            list_start_number=None,
+                            level=None,
+                            language=None,
+                            page_number=None,
+                            bbox=None
                         )
                         reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
                         order_idx_counter += 1
-                        processed_image_ids.add(img_meta_to_use.get('image_id_ref')) # Track by ref
-                        processed_image_ids.add(img_meta_to_use.get('gcs_url'))     # Track by URL
+                        # Track processed images by both available identifiers
+                        if img_meta_to_use.get('image_id_ref'):
+                            processed_image_ids.add(img_meta_to_use.get('image_id_ref'))
+                        if img_meta_to_use.get('gcs_url'):
+                             processed_image_ids.add(img_meta_to_use.get('gcs_url'))
                     else:
                         # Placeholder was in text, but no matching image metadata found
                         missing_ref_text_block = ContentBlock(
@@ -321,7 +355,22 @@ class FastContentBlockProcessorTool(BaseTool):
                             document_id=document_id_to_use_for_new_blocks,
                             type='text',
                             content=f"[IMAGE: {placeholder_identifier} - Referenced but not found in provided image metadata]",
-                            order_index=order_idx_counter
+                            order_index=order_idx_counter,
+                            # Initialize all other ContentBlock fields to None
+                            items=None,
+                            ordered=None,
+                            list_start_number=None,
+                            level=None,
+                            language=None,
+                            image_id_ref=None,
+                            gcs_url=None,
+                            alt_text=None,
+                            caption=None,
+                            width=None,
+                            height=None,
+                            llm_description=None,
+                            page_number=None,
+                            bbox=None
                         )
                         reconstructed_blocks_dicts.append(missing_ref_text_block.model_dump(mode='json'))
                         order_idx_counter += 1
@@ -336,7 +385,22 @@ class FastContentBlockProcessorTool(BaseTool):
                             document_id=document_id_to_use_for_new_blocks,
                             type='text',
                             content=text_content,
-                            order_index=order_idx_counter
+                            order_index=order_idx_counter,
+                            # Initialize all other ContentBlock fields to None
+                            items=None,
+                            ordered=None,
+                            list_start_number=None,
+                            level=None,
+                            language=None,
+                            image_id_ref=None,
+                            gcs_url=None,
+                            alt_text=None,
+                            caption=None,
+                            width=None,
+                            height=None,
+                            llm_description=None,
+                            page_number=None,
+                            bbox=None
                         )
                         reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
                         order_idx_counter += 1
@@ -345,10 +409,18 @@ class FastContentBlockProcessorTool(BaseTool):
             for img_meta in image_metadata_list:
                 identifier_ref = img_meta.get('image_id_ref')
                 identifier_gcs = img_meta.get('gcs_url')
-                if not (identifier_ref in processed_image_ids or identifier_gcs in processed_image_ids):
-                    
+                # Check if already processed by looking up both identifiers if they exist
+                already_processed = False
+                if identifier_ref and identifier_ref in processed_image_ids:
+                    already_processed = True
+                if not already_processed and identifier_gcs and identifier_gcs in processed_image_ids:
+                    already_processed = True
+
+                if not already_processed:
                     final_block_id = img_meta.get('block_id', uuid.uuid4().hex)
-                    final_tmp_id = img_meta.get('tmp_id', img_meta.get('image_id_ref'))
+                    final_tmp_id = img_meta.get('tmp_id', img_meta.get('image_id_ref')) # Use image_id_ref for tmp_id
+                    # For appended images, use the user_id from their original metadata if available,
+                    # otherwise use the current_user_id_for_tool. Same for document_id.
                     final_user_id = img_meta.get('user_id', current_user_id_for_tool)
                     final_document_id = img_meta.get('document_id', document_id_to_use_for_new_blocks)
                     
@@ -358,6 +430,8 @@ class FastContentBlockProcessorTool(BaseTool):
                         user_id=final_user_id,
                         document_id=final_document_id,
                         type='image',
+                        content=None, # CRITICAL: Content for image block must be None
+                        order_index=order_idx_counter,
                         image_id_ref=img_meta.get('image_id_ref'),
                         gcs_url=img_meta.get('gcs_url'),
                         alt_text=img_meta.get('alt_text'),
@@ -365,14 +439,38 @@ class FastContentBlockProcessorTool(BaseTool):
                         llm_description=img_meta.get('llm_description'),
                         width=img_meta.get('width'),
                         height=img_meta.get('height'),
-                        order_index=order_idx_counter
+                        # Initialize non-image related fields to None
+                        items=None,
+                        ordered=None,
+                        list_start_number=None,
+                        level=None,
+                        language=None,
+                        page_number=None,
+                        bbox=None
                     )
                     reconstructed_blocks_dicts.append(appended_image_block.model_dump(mode='json'))
                     order_idx_counter += 1
                     # Optional: Log that an image was appended because it wasn't referenced
                     # print(f"DEBUG: Appended unreferenced image: {identifier_ref or identifier_gcs}")
             
-            return reconstructed_blocks_dicts
+            # Log the output before returning
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary ABOUT TO RETURN (first 2 blocks of actual): {str(reconstructed_blocks_dicts[:2])}", flush=True)
+            
+            # TEMPORARY: Return a small, known-good sample for debugging CrewAI's handling
+            sample_debug_return = [
+                {
+                    "block_id": "debug_block_1", "type": "text", "content": "Debug: Tool ran successfully.", 
+                    "user_id": str(self.user_id), "document_id": str(self.document_id), "order_index": 0
+                },
+                {
+                    "block_id": "debug_block_2", "type": "image", "image_id_ref": "debug_img_ref", 
+                    "gcs_url": "http://example.com/debug.jpg", "user_id": str(self.user_id), 
+                    "document_id": str(self.document_id), "order_index": 1, "content": None
+                }
+            ]
+            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary NOW RETURNING DEBUG SAMPLE: {str(sample_debug_return)}", flush=True)
+            return sample_debug_return
+            # return reconstructed_blocks_dicts # Original return commented out for debugging
 
         else:
             return f"Error: Operation '{operation}' not supported by FastContentBlockProcessorTool."
