@@ -355,7 +355,11 @@ export default function BlockNoteEditorComponent({
   >(editorOptions) as AppEditor;
 
   useEffect(() => {
-    onEditorChange(editor); // Removed `as AppEditor | null` because `editor` is now typed as AppEditor.
+    if (typeof onEditorChange === 'function') {
+      onEditorChange(editor);
+    } else {
+      console.warn('[BlockNoteEditorComponent] onEditorChange is not a function. Editor instance was:', editor);
+    }
   }, [editor, onEditorChange]);
 
   useEffect(() => {

@@ -21,6 +21,13 @@ import {
   Tag,
   TagLabel,
   TagCloseButton,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalFooter,
+  ModalBody,
+  ModalCloseButton,
 } from '@chakra-ui/react';
 import {
   BlockNoteEditor as BlockNoteEditorType,
@@ -28,7 +35,8 @@ import {
 } from '@blocknote/core';
 import { type AppPartialBlock } from '@/lib/blocknote/appSchema';
 import { useStagingCardStore } from '@/stores/stagingCardStore';
-import { mapPartialBlocksToAIServiceContentBlocks } from '@/lib/contentUtils';
+import { mapPartialBlocksToAIServiceContentBlocks, mapContentBlocksToPartialBlocks } from '@/lib/contentUtils';
+import type { ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
@@ -152,7 +160,7 @@ export default function NewCardPage() {
 
   const [title, setTitle] = useState('');
   const [_editor, setEditor] = useState<BlockNoteEditorType | null>(null);
-  const [editorContent, setEditorContent] = useState<PartialBlock[] | undefined>(undefined);
+  const [editorContent, setEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
   const [editorKey, setEditorKey] = useState(Date.now());
   const [keywords, setKeywords] = useState<string[]>([]);
   const [currentKeyword, setCurrentKeyword] = useState('');
@@ -167,28 +175,48 @@ export default function NewCardPage() {
   );
   const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
 
+  // New state variables for AI Rewrite functionality
+  const [originalEditorContent, setOriginalEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
+  const [rewrittenEditorContent, setRewrittenEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
+  const [isRewritingContent, setIsRewritingContent] = useState(false);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
+  const [displayMode, setDisplayMode] = useState<'original' | 'rewritten'>('original');
+  const [showComparisonView, setShowComparisonView] = useState(false);
+
   useEffect(() => {
     let dataLoadedInEffect = false;
 
     if (stagedTitle) {
       setTitle(stagedTitle);
+      setSuggestedTitle(null); 
       dataLoadedInEffect = true;
     }
     if (stagedKeywords) {
       setKeywords(stagedKeywords);
+      setSuggestedKeywords(null); 
       dataLoadedInEffect = true;
     }
 
     if (stagedContentBlocks) {
-      setEditorContent(stagedContentBlocks);
+      // When new staged content arrives, it's always the "original"
+      const initialContent = mapContentBlocksToPartialBlocks(stagedContentBlocks) as AppPartialBlock[];
+      setOriginalEditorContent(initialContent);
+      setEditorContent(initialContent); 
+      setRewrittenEditorContent(undefined); 
+      setDisplayMode('original');        
+      setShowComparisonView(false);
       if (_editor) {
-        console.log('[NewCardPage useEffect] Editor instance available, calling replaceBlocks for staged content.');
-        _editor.replaceBlocks(_editor.document, stagedContentBlocks);
+        console.log('[NewCardPage useEffect] Editor instance available, calling replaceBlocks for staged content (initial).');
+        _editor.replaceBlocks(_editor.document, initialContent);
       }
       setEditorKey(Date.now());
       dataLoadedInEffect = true;
-    } else if (stagedTitle || stagedKeywords) {
+    } else if (stagedTitle || stagedKeywords) { 
+      setOriginalEditorContent(undefined);
+      setRewrittenEditorContent(undefined);
       setEditorContent(undefined);
+      setDisplayMode('original');
+      setShowComparisonView(false);
       if (_editor) {
         console.log('[NewCardPage useEffect] Editor instance available, clearing blocks due to absent stagedContentBlocks.');
         _editor.replaceBlocks(_editor.document, []);
@@ -199,7 +227,7 @@ export default function NewCardPage() {
     if (dataLoadedInEffect) {
       toast({
         title: 'Content Ready',
-        description: 'Form has been populated.',
+        description: 'Form has been populated with reconstructed content.',
         status: 'info',
         duration: 3000,
         isClosable: true,
@@ -230,8 +258,16 @@ export default function NewCardPage() {
   );
 
   const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
-    setEditorContent(blocks);
-  }, []);
+    if (!showComparisonView) {
+      const appBlocks = blocks as AppPartialBlock[];
+      setEditorContent(appBlocks);
+      if (JSON.stringify(appBlocks) === JSON.stringify(rewrittenEditorContent)) {
+        setDisplayMode('rewritten');
+      } else {
+        setDisplayMode('original');
+      }
+    }
+  }, [showComparisonView, rewrittenEditorContent]);
 
   const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setCurrentKeyword(e.target.value);
@@ -243,7 +279,8 @@ export default function NewCardPage() {
       const newKeyword = currentKeyword.trim().startsWith('#')
         ? currentKeyword.trim()
         : `#${currentKeyword.trim()}`;
-      if (!keywords.includes(newKeyword)) {
+      // Ensure keyword uniqueness, case-insensitively for comparison but store with original casing preference
+      if (!keywords.some(kw => kw.toLowerCase() === newKeyword.toLowerCase())) {
         setKeywords([...keywords, newKeyword]);
       }
       setCurrentKeyword('');
@@ -251,43 +288,167 @@ export default function NewCardPage() {
   };
 
   const removeKeyword = (keywordToRemove: string) => {
-    setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
+    setKeywords(keywords.filter(keyword => keyword !== keywordToRemove));
+  };
+
+  const handleRewriteContent = async () => {
+    if (!editorContent || isEditorEmpty(editorContent)) {
+      toast({
+        title: 'Cannot Rewrite Empty Content',
+        description: 'Please add some content to the editor before rewriting.',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsRewritingContent(true);
+    setRewriteError(null);
+
+    // Explicitly create a new variable that TypeScript knows is AppPartialBlock[]
+    const currentAppPartialBlocks: AppPartialBlock[] = editorContent;
+
+    setOriginalEditorContent(currentAppPartialBlocks); 
+
+    try {
+      const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        currentAppPartialBlocks as any,
+        session?.user.id ?? 'unknown-user',
+      );
+
+      const response = await fetch('/api/ai/rewrite-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content_blocks: aiServiceBlocks }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message ||
+            `HTTP error ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const result: { rewritten_content: AIServiceContentBlock[] } =
+        await response.json();
+      
+      const newRewrittenContent = mapContentBlocksToPartialBlocks(result.rewritten_content) as AppPartialBlock[];
+      setRewrittenEditorContent(newRewrittenContent);
+      setShowComparisonView(true);
+
+      toast({
+        title: 'Content Rewritten',
+        description: 'AI has rewritten the content. Review and choose a version.',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (error) {
+      console.error('Error rewriting content:', error);
+      const errorMessage =
+        error instanceof Error ? error.message : 'An unknown error occurred';
+      setRewriteError(errorMessage);
+      toast({
+        title: 'Rewrite Error',
+        description: errorMessage,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsRewritingContent(false);
+    }
+  };
+
+  const handleUseOriginalFromComparison = () => {
+    if (originalEditorContent) {
+      setEditorContent(originalEditorContent);
+      if (_editor) {
+        _editor.replaceBlocks(_editor.document, originalEditorContent);
+      }
+      setDisplayMode('original');
+    }
+    setShowComparisonView(false);
+    toast({ title: "Original Content Selected", status: "info", duration: 2000, isClosable: true });
+  };
+
+  const handleUseRewrittenFromComparison = () => {
+    if (rewrittenEditorContent) {
+      setEditorContent(rewrittenEditorContent);
+      if (_editor) {
+        _editor.replaceBlocks(_editor.document, rewrittenEditorContent);
+      }
+      setDisplayMode('rewritten');
+    }
+    setShowComparisonView(false);
+    toast({ title: "Rewritten Content Selected", status: "success", duration: 2000, isClosable: true });
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
 
-    if (isStagingLoading) { 
-        toast({ title: 'Please wait for initial processing to complete.', status: 'warning'});
-        return;
+    if (title.trim() === '') {
+      toast({
+        title: 'Title is required',
+        description: 'Please enter a title for your card.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+      return;
+    }
+    
+    const contentToProcess = displayMode === 'rewritten' && rewrittenEditorContent && !isEditorEmpty(rewrittenEditorContent) 
+                             ? rewrittenEditorContent 
+                             : originalEditorContent;
+
+    if (isEditorEmpty(contentToProcess)) {
+      toast({
+        title: 'Content is required',
+        description: 'Please add some content to your card.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+      return;
     }
 
     setIsSubmitting(true);
-    const currentBlocks = _editor ? _editor.document : editorContent;
 
-    if (!title.trim()) {
-      toast({ title: 'Title is required', status: 'error', duration: 3000, isClosable: true });
+    if (!session?.user?.id) {
+      toast({
+        title: 'Authentication Error',
+        description: 'User ID not found. Please re-login.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
       setIsSubmitting(false);
       return;
     }
-    if (isEditorEmpty(currentBlocks)) {
-      toast({ title: 'Content cannot be empty', description: 'Please add some content to your card.', status: 'error', duration: 3000, isClosable: true });
-      setIsSubmitting(false);
-      return;
-    }
-
-    const cardData = {
-      title: title.trim(),
-      content: currentBlocks || [], // Ensure content is PartialBlock[]
-      tags: keywords.map((kw) => (kw.startsWith('#') ? kw.substring(1) : kw)),
-      folderId: null, 
-    };
 
     try {
+      const blocksToSave = mapPartialBlocksToAIServiceContentBlocks(
+        contentToProcess!, 
+        session.user.id,
+        null 
+      );
+
+      const payload = {
+        title: title,
+        contentBlocks: blocksToSave,
+        keywords: keywords.map(kw => kw.startsWith('#') ? kw.substring(1) : kw),
+        userId: session.user.id,
+      };
+      
+      console.log('[NewCardPage] handleSubmit: Sending payload:', JSON.stringify(payload, null, 2));
+
       const response = await fetch('/api/cards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cardData),
+        body: JSON.stringify(payload),
       });
       const responseData = await response.json() as CreateCardSuccessResponse | CreateCardErrorResponse;
 
@@ -306,52 +467,22 @@ export default function NewCardPage() {
     }
   };
 
-  // Handler for "Suggest Title" (adapted from CardDetailPage)
   const handleSuggestTitle = async () => {
-    if (!_editor && (!editorContent || editorContent.length === 0)) {
-      toast({
-        title: 'No content available for title suggestion.',
-        status: 'warning',
-        duration: 3000,
-        isClosable: true,
-      });
-      return;
-    }
     if (sessionStatus !== 'authenticated' || !session?.user?.id) {
       toast({
-        title: 'User not authenticated.',
+        title: 'Authentication Required',
+        description: 'You must be logged in to suggest titles.',
         status: 'error',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
-    const userId = session.user.id;
-
-    const currentBlocks = _editor ? _editor.document : editorContent;
-
-    if (!currentBlocks || currentBlocks.length === 0 || isEditorEmpty(currentBlocks)) {
+    if (!_editor || isEditorEmpty(_editor.document as AppPartialBlock[])) {
       toast({
-        title: 'Content is empty, cannot suggest title.',
-        status: 'info',
-        duration: 3000,
-        isClosable: true,
-      });
-      return;
-    }
-
-    // For a new card, cardId is null or undefined.
-    // mapPartialBlocksToAIServiceContentBlocks will generate a temporary ID.
-    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      currentBlocks as AppPartialBlock[], // Cast needed if currentBlocks is PartialBlock[] from BlockNoteEditorType
-      userId,
-      null, // cardId is null for a new card
-    );
-
-    if (aiServiceContentBlocks.length === 0) {
-      toast({
-        title: 'No processable content found for title suggestion.',
-        status: 'info',
+        title: 'Content Required',
+        description: 'Cannot suggest title for empty content.',
+        status: 'warning',
         duration: 3000,
         isClosable: true,
       });
@@ -361,31 +492,56 @@ export default function NewCardPage() {
     setIsSuggestingTitle(true);
     setSuggestedTitle(null);
     try {
+      const currentContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        _editor.document as AppPartialBlock[],
+        session.user.id,
+      );
+
+      if (currentContentBlocks.length === 0) {
+        toast({
+          title: 'Cannot Suggest Title',
+          description: 'Failed to prepare content for title suggestion.',
+          status: 'warning',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsSuggestingTitle(false);
+        return;
+      }
+      
+      console.log('[NewCardPage] handleSuggestTitle: Sending content for title suggestion:', JSON.stringify(currentContentBlocks, null, 2));
+
       const response = await fetch('/api/ai/generate-title', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+        body: JSON.stringify({ content_blocks: currentContentBlocks }),
       });
-      const data = await response.json();
-      if (!response.ok || data.error_message) {
-        throw new Error(data.error_message || 'Failed to suggest title');
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `HTTP error! status: ${response.status}`,
+        );
       }
+      const data = await response.json();
+      console.log('[NewCardPage] handleSuggestTitle: Received suggested title:', data.suggested_title);
       setSuggestedTitle(data.suggested_title);
       toast({
-        title: 'Title suggestion received!',
+        title: 'Title Suggested',
+        description: 'A new title has been suggested.',
         status: 'success',
         duration: 3000,
         isClosable: true,
       });
-    } catch (err) {
-      console.error('Suggest title error:', err);
+    } catch (error) {
+      console.error('Error suggesting title:', error);
       const message =
-        err instanceof Error ? err.message : 'Could not suggest title.';
+        error instanceof Error ? error.message : 'Unknown error suggesting title';
       toast({
-        title: 'Error suggesting title',
+        title: 'Title Suggestion Failed',
         description: message,
         status: 'error',
-        duration: 5000,
+        duration: 3000,
         isClosable: true,
       });
     } finally {
@@ -393,84 +549,95 @@ export default function NewCardPage() {
     }
   };
 
-  // Handler for "Suggest Keywords" (adapted from CardDetailPage)
-  const handleSuggestKeywords = async () => {
-    if (!_editor && (!editorContent || editorContent.length === 0)) {
+  const applySuggestedTitle = () => {
+    if (suggestedTitle) {
+      setTitle(suggestedTitle);
+      setSuggestedTitle(null); // Clear suggestion after applying
       toast({
-        title: 'No content available for keyword suggestion.',
+        title: 'Title Updated',
+        description: 'The suggested title has been applied.',
+        status: 'info',
+        duration: 2000,
+        isClosable: true,
+      });
+    }
+  };
+
+  const handleSuggestKeywords = async () => {
+    if (sessionStatus !== 'authenticated' || !session?.user?.id) {
+      toast({
+        title: 'Authentication Required',
+        description: 'You must be logged in to suggest keywords.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    if (!_editor || isEditorEmpty(_editor.document as AppPartialBlock[])) {
+      toast({
+        title: 'Content Required',
+        description: 'Cannot suggest keywords for empty content.',
         status: 'warning',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
-     if (sessionStatus !== 'authenticated' || !session?.user?.id) {
-      toast({
-        title: 'User not authenticated.',
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
-      return;
-    }
-    const userId = session.user.id;
-    
-    const currentBlocks = _editor ? _editor.document : editorContent;
-
-    if (!currentBlocks || currentBlocks.length === 0 || isEditorEmpty(currentBlocks)) {
-      toast({
-        title: 'Content is empty, cannot suggest keywords.',
-        status: 'info',
-        duration: 3000,
-        isClosable: true,
-      });
-      return;
-    }
-
-    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      currentBlocks as AppPartialBlock[], // Cast needed
-      userId,
-      null, // cardId is null for a new card
-    );
-
-    if (aiServiceContentBlocks.length === 0) {
-      toast({
-        title: 'No processable content found for keyword suggestion.',
-        status: 'info',
-        duration: 3000,
-        isClosable: true,
-      });
-      return;
-    }
-
     setIsSuggestingKeywords(true);
     setSuggestedKeywords(null);
     try {
+      const currentContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        _editor.document as AppPartialBlock[],
+        session.user.id,
+      );
+
+      if (currentContentBlocks.length === 0) {
+        toast({
+          title: 'Cannot Suggest Keywords',
+          description: 'Failed to prepare content for keyword suggestion.',
+          status: 'warning',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsSuggestingKeywords(false);
+        return;
+      }
+      
+      console.log('[NewCardPage] handleSuggestKeywords: Sending content for keyword suggestion:', JSON.stringify(currentContentBlocks, null, 2));
+
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+        body: JSON.stringify({ content_blocks: currentContentBlocks }),
       });
-      const data = await response.json();
-      if (!response.ok || data.error_message) {
-        throw new Error(data.error_message || 'Failed to suggest keywords');
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `HTTP error! status: ${response.status}`,
+        );
       }
-      setSuggestedKeywords(data.suggested_keywords);
+      const data = await response.json();
+      console.log('[NewCardPage] handleSuggestKeywords: Received suggested keywords:', data.suggested_keywords);
+      setSuggestedKeywords(data.suggested_keywords.map((kw: string) => kw.startsWith('#') ? kw : `#${kw}`));
       toast({
-        title: 'Keyword suggestions received!',
+        title: 'Keywords Suggested',
+        description: 'New keywords have been suggested.',
         status: 'success',
         duration: 3000,
         isClosable: true,
       });
-    } catch (err) {
-      console.error('Suggest keywords error:', err);
+    } catch (error) {
+      console.error('Error suggesting keywords:', error);
       const message =
-        err instanceof Error ? err.message : 'Could not suggest keywords.';
+        error instanceof Error
+          ? error.message
+          : 'Unknown error suggesting keywords';
       toast({
-        title: 'Error suggesting keywords',
+        title: 'Keyword Suggestion Failed',
         description: message,
         status: 'error',
-        duration: 5000,
+        duration: 3000,
         isClosable: true,
       });
     } finally {
@@ -478,7 +645,32 @@ export default function NewCardPage() {
     }
   };
 
-  if (sessionStatus === 'loading') {
+  const applySuggestedKeyword = (keyword: string) => {
+    const newKeyword = keyword.startsWith('#') ? keyword : `#${keyword}`;
+    if (!keywords.some(kw => kw.toLowerCase() === newKeyword.toLowerCase())) {
+      setKeywords([...keywords, newKeyword]);
+    }
+    // Optionally remove from suggested list or indicate it's been added
+  };
+
+  const applyAllSuggestedKeywords = () => {
+    if (suggestedKeywords) {
+      const keywordsToAdd = suggestedKeywords.filter(
+        sk => !keywords.some(kw => kw.toLowerCase() === sk.toLowerCase())
+      );
+      setKeywords([...keywords, ...keywordsToAdd]);
+      setSuggestedKeywords(null); // Clear suggestions after applying
+      toast({
+        title: 'Keywords Updated',
+        description: 'All new suggested keywords have been added.',
+        status: 'info',
+        duration: 2000,
+        isClosable: true,
+      });
+    }
+  };
+
+  if (sessionStatus === 'loading' || isStagingLoading) {
     return (
       <Flex justify="center" align="center" minH="100vh">
         <Spinner size="xl" />
@@ -510,40 +702,22 @@ export default function NewCardPage() {
         <VStack spacing={6} align="stretch">
           <FormControl isRequired>
             <FormLabel htmlFor="title">Title</FormLabel>
-            <Input
-              id="title"
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter card title"
-              isDisabled={isSubmitting || isStagingLoading} 
-            />
-          </FormControl>
-          {/* ADDED: Button for Suggest Title */}
-          <Button 
-            onClick={handleSuggestTitle} 
-            isLoading={isSuggestingTitle} 
-            loadingText="Suggesting..."
-            isDisabled={isSubmitting || isStagingLoading || isSuggestingTitle}
-            mt={2}
-            size="sm"
-            colorScheme="purple"
-          >
-            Suggest Title with AI
-          </Button>
-          {/* ADDED: Display Suggested Title */}
-          {suggestedTitle && !isSuggestingTitle && (
-            <Box mt={2} p={3} borderWidth="1px" borderRadius="md" bg="purple.50">
-              <Text fontSize="sm" fontWeight="bold" mb={1}>Suggested Title:</Text>
-              <Text fontSize="sm" mb={2}>{suggestedTitle}</Text>
-              <Button size="xs" colorScheme="purple" variant="outline" onClick={() => {
-                setTitle(suggestedTitle);
-                setSuggestedTitle(null); // Clear suggestion after applying
-              }}>
-                Use this title
+            <HStack mt={2} spacing={2}>
+              <Button
+                size="sm"
+                onClick={handleSuggestTitle}
+                isLoading={isSuggestingTitle}
+                disabled={isSuggestingTitle || !_editor || isEditorEmpty(_editor?.document as AppPartialBlock[])}
+              >
+                Suggest Title
               </Button>
-            </Box>
-          )}
+              {suggestedTitle && (
+                <Button size="sm" colorScheme="teal" variant="outline" onClick={applySuggestedTitle}>
+                  Apply: "{suggestedTitle.substring(0,30)}{suggestedTitle.length > 30 ? '...' : ''}"
+                </Button>
+              )}
+            </HStack>
+          </FormControl>
           <FormControl>
             <FormLabel htmlFor="keywords">Keywords (Tags)</FormLabel>
             <HStack spacing={2} wrap="wrap" mb={2}>
@@ -564,56 +738,104 @@ export default function NewCardPage() {
               isDisabled={isSubmitting || isStagingLoading} 
             />
           </FormControl>
-          {/* ADDED: Button for Suggest Keywords */}
-          <Button 
-            onClick={handleSuggestKeywords} 
-            isLoading={isSuggestingKeywords}
-            loadingText="Suggesting..."
-            isDisabled={isSubmitting || isStagingLoading || isSuggestingKeywords}
-            mt={2}
-            size="sm"
-            colorScheme="teal"
-          >
-            Suggest Keywords with AI
-          </Button>
-          {/* ADDED: Display Suggested Keywords */}
-          {suggestedKeywords && suggestedKeywords.length > 0 && !isSuggestingKeywords && (
-            <Box mt={2} p={3} borderWidth="1px" borderRadius="md" bg="teal.50">
-              <Text fontSize="sm" fontWeight="bold" mb={1}>Suggested Keywords:</Text>
-              <HStack spacing={2} wrap="wrap" mb={2}>
-                {suggestedKeywords.map((kw) => (
-                  <Tag key={kw} borderRadius="full" variant="solid" colorScheme="blue">
-                    <TagLabel>{kw.startsWith('#') ? kw : `#${kw}`}</TagLabel>
-                  </Tag>
-                ))}
-              </HStack>
-              <Button size="xs" colorScheme="teal" variant="outline" onClick={() => {
-                // Add new keywords, ensuring no duplicates and maintaining # prefix
-                const newKeywords = [...new Set([...keywords, ...suggestedKeywords.map(k => k.startsWith('#') ? k : `#${k}`)])];
-                setKeywords(newKeywords);
-                setSuggestedKeywords(null); // Clear suggestions after applying
-              }}>
-                Add these keywords
-              </Button>
-            </Box>
-          )}
-          <FormControl>
+          <FormControl mt={4}>
             <FormLabel>Content</FormLabel>
-            <Box borderWidth="1px" borderRadius="lg" p={1} minH="300px">
+            <Box border="1px solid" borderColor="gray.200" borderRadius="md" p={1} minH="300px">
               <BlockNoteEditorComponent
                 key={editorKey}
-                initialContent={editorContent} 
+                initialContent={editorContent}
                 onContentUpdate={handleEditorContentUpdate}
                 onEditorChange={handleEditorInstanceReady}
-                editable={!(isSubmitting || isStagingLoading)} 
+                editable={true}
               />
             </Box>
+            <HStack mt={2} spacing={2} justify="space-between">
+              <HStack>
+                <Button
+                  size="sm"
+                  onClick={handleRewriteContent}
+                  isLoading={isRewritingContent}
+                  colorScheme="purple"
+                  isDisabled={showComparisonView}
+                >
+                  AI Rewrite Content
+                </Button>
+              </HStack>
+            </HStack>
+            {rewriteError && <Text color="red.500" mt={1} fontSize="sm">Rewrite Error: {rewriteError}</Text>}
           </FormControl>
-          <Button type="submit" colorScheme="green" isLoading={isSubmitting} loadingText="Saving..." isDisabled={isStagingLoading}>
-            Save Knowledge Card
+          <FormControl>
+            <FormLabel>Suggested Keywords</FormLabel>
+            <Flex wrap="wrap" gap={2}>
+              {suggestedKeywords && suggestedKeywords.map((kw, index) => (
+                <Tag key={index} size="sm" variant="solid" colorScheme="purple">
+                  <TagLabel>{kw}</TagLabel>
+                  <TagCloseButton onClick={() => applySuggestedKeyword(kw)} aria-label={`Add keyword ${kw}`} />
+                </Tag>
+              ))}
+            </Flex>
+            <Button size="xs" mt={2} onClick={applyAllSuggestedKeywords}>Apply All New</Button>
+          </FormControl>
+          <Button
+            mt={6}
+            colorScheme="blue"
+            type="submit"
+            isLoading={isSubmitting}
+            disabled={isSubmitting || title.trim() === '' || isEditorEmpty(displayMode === 'rewritten' && rewrittenEditorContent ? rewrittenEditorContent : originalEditorContent)}
+          >
+            Save Card
           </Button>
         </VStack>
       </form>
+
+      {showComparisonView && originalEditorContent && rewrittenEditorContent && (
+        <Modal isOpen={showComparisonView} onClose={() => setShowComparisonView(false)} size="6xl">
+          <ModalOverlay />
+          <ModalContent>
+            <ModalHeader>Compare Original and Rewritten Content</ModalHeader>
+            <ModalCloseButton />
+            <ModalBody>
+              <Flex direction={{ base: "column", md: "row" }} gap={4}>
+                <Box flex={1} p={2} borderWidth="1px" borderRadius="md">
+                  <Heading size="md" mb={2}>Original</Heading>
+                  <Box maxHeight="500px" overflowY="auto" borderWidth="1px" borderColor="gray.200" borderRadius="md" p={1}>
+                    <BlockNoteEditorComponent
+                      key={`original-${editorKey}`}
+                      initialContent={originalEditorContent}
+                      editable={false}
+                      onEditorChange={(_editorInstance) => {}}
+                      onContentUpdate={() => {}}
+                    />
+                  </Box>
+                </Box>
+                <Box flex={1} p={2} borderWidth="1px" borderRadius="md">
+                  <Heading size="md" mb={2}>AI Rewritten</Heading>
+                  <Box maxHeight="500px" overflowY="auto" borderWidth="1px" borderColor="gray.200" borderRadius="md" p={1}>
+                    <BlockNoteEditorComponent
+                      key={`rewritten-${editorKey}`}
+                      initialContent={rewrittenEditorContent}
+                      editable={true} 
+                      onContentUpdate={(newContent) => {
+                        setRewrittenEditorContent(newContent);
+                      }}
+                      onEditorChange={(_editorInstance) => {}}
+                    />
+                  </Box>
+                </Box>
+              </Flex>
+            </ModalBody>
+            <ModalFooter>
+              <Button colorScheme="blue" mr={3} onClick={handleUseRewrittenFromComparison}>
+                Use Rewritten Content
+              </Button>
+              <Button variant="ghost" mr={3} onClick={handleUseOriginalFromComparison}>
+                Use Original Content
+              </Button>
+              <Button variant="outline" onClick={() => setShowComparisonView(false)}>Cancel</Button>
+            </ModalFooter>
+          </ModalContent>
+        </Modal>
+      )}
     </Container>
   );
 }

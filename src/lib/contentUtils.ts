@@ -109,15 +109,40 @@ export const mapContentBlocksToPartialBlocks = (
 
     switch (block.type) {
       case 'text':
+      case 'paragraph':
+        let paragraphBnContent: AppPartialBlock['content'] = [];
+        if (block.content != null) {
+          if (Array.isArray(block.content) && block.content.length > 0 && typeof block.content[0] === 'object' && block.content[0] !== null && 'type' in block.content[0] && 'text' in block.content[0]) {
+            // Assume it's already AppInlineContentArray if the first item looks like it
+            paragraphBnContent = [...block.content];
+            console.log(`[ContentUtils] Block type '${block.type}' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`);
+          } else if (typeof block.content === 'string') {
+            paragraphBnContent = block.content ? [{ type: 'text', text: block.content, styles: {} }] : [];
+          } else {
+            console.warn(`[ContentUtils] Block type '${block.type}' (ID: ${blockId}) has unexpected content type. Actual content:`, JSON.stringify(block.content));
+            paragraphBnContent = [{ type: 'text', text: '[Unsupported content format - Check console]', styles: { italic: true} }];
+          }
+        }
         partialBlock = {
           id: blockId,
           type: 'paragraph',
-          content: block.content
-            ? [{ type: 'text', text: block.content, styles: {} }]
-            : [],
+          content: paragraphBnContent,
         };
         break;
       case 'heading':
+        let headingBnContent: AppPartialBlock['content'] = [];
+        if (block.content != null) {
+          if (Array.isArray(block.content) && block.content.length > 0 && typeof block.content[0] === 'object' && block.content[0] !== null && 'type' in block.content[0] && 'text' in block.content[0]) {
+            // Assume it's already AppInlineContentArray
+            headingBnContent = [...block.content];
+            console.log(`[ContentUtils] Block type 'heading' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`);
+          } else if (typeof block.content === 'string') {
+            headingBnContent = block.content ? [{ type: 'text', text: block.content, styles: {} }] : [];
+          } else {
+            console.warn(`[ContentUtils] Block type 'heading' (ID: ${blockId}) has unexpected content type. Actual content:`, JSON.stringify(block.content));
+            headingBnContent = [{ type: 'text', text: '[Unsupported content format - Check console]', styles: { italic: true} }];
+          }
+        }
         partialBlock = {
           id: blockId,
           type: 'heading',
@@ -126,9 +151,7 @@ export const mapContentBlocksToPartialBlocks = (
               ? block.level
               : 1) as 1 | 2 | 3,
           },
-          content: block.content
-            ? [{ type: 'text', text: block.content, styles: {} }]
-            : [],
+          content: headingBnContent,
         };
         break;
       case 'list':
@@ -153,7 +176,6 @@ export const mapContentBlocksToPartialBlocks = (
         break;
       case 'image':
         if (block.gcs_url) {
-          // console.log('[ImageDebug] Mapping image with URL (should be signed):', block.gcs_url); // Original log, can be re-enabled if needed
           partialBlock = {
             id: blockId,
             type: 'image',
@@ -164,6 +186,7 @@ export const mapContentBlocksToPartialBlocks = (
             children: [],
           };
         } else {
+          console.warn(`[ContentUtils] Image block (ID: ${blockId}) is missing gcs_url.`);
           partialBlock = {
             id: blockId,
             type: 'paragraph',
@@ -178,31 +201,45 @@ export const mapContentBlocksToPartialBlocks = (
         }
         break;
       case 'code_snippet':
+        let codeContent = '';
+        if (block.content != null) {
+          if (typeof block.content === 'string') {
+            codeContent = block.content;
+          } else {
+            // Code snippets content should ideally always be a string from the AI Service
+            console.warn(`[ContentUtils] Block type 'code_snippet' (ID: ${blockId}) has non-string content. Forcing to string. Actual content:`, JSON.stringify(block.content));
+            codeContent = String(block.content); 
+          }
+        }
         partialBlock = {
           id: blockId,
           type: 'codeBlock',
           props: {
             language: block.language || 'plaintext',
           },
-          content: block.content || '',
+          content: codeContent ? [{ type: 'text', text: codeContent, styles: {} }] : [],
         };
         break;
       default:
         console.warn(
-          '[ContentUtils] Encountered unsupported block type:',
+          `[ContentUtils] Encountered unsupported block type: '${block.type || 'unknown'}' (ID: ${blockId}). Block data:`,
           JSON.parse(JSON.stringify(block)),
         );
+        // More robust handling for default case content
+        let defaultCaseText = `[Unsupported Block Type: ${block.type || 'unknown'}]`;
+        if (block.content != null) {
+          if (typeof block.content === 'string') {
+            defaultCaseText += ` ${block.content}`;
+          } else {
+            defaultCaseText += ' [Content is non-string, see console for details.]';
+            console.warn(`[ContentUtils] Default case for block type '${block.type}' (ID: ${blockId}) has non-string content:`, JSON.parse(JSON.stringify(block.content)));
+          }
+        }
+
         partialBlock = {
           id: blockId,
           type: 'paragraph',
-          content: [
-            {
-              type: 'text',
-              text: `[Unsupported Block Type: ${block.type || 'unknown'}] `,
-              styles: { italic: true },
-            },
-            { type: 'text', text: String(block.content || ''), styles: {} },
-          ],
+          content: [{ type: 'text', text: defaultCaseText, styles: { italic: true } }],
         };
     }
     console.log(
