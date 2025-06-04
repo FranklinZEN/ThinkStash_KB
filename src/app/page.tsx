@@ -162,11 +162,10 @@ export default function Home() {
         throw new Error(errorMsg);
       }
       
-      const mappedBlocks = mapContentBlocksToPartialBlocks(data.original_content_blocks);
       const titleToSet = data.extracted_title || data.document_metadata?.title || ''; 
       const keywordsToSet: string[] = [];
 
-      setStagedData(titleToSet, mappedBlocks, keywordsToSet);
+      setStagedData(titleToSet, data.original_content_blocks, keywordsToSet);
       toast({ title: 'Content Reconstructed!', description: 'Navigating to create card page...', status: 'success', duration: 2000, isClosable: true });
       onCloseUrlModal();
       setReconstructUrl('');
@@ -234,11 +233,10 @@ export default function Home() {
         throw new Error(errorMsg);
       }
       
-      const mappedBlocks = mapContentBlocksToPartialBlocks(reconstructData.original_content_blocks);
       const titleToSet = reconstructData.extracted_title || reconstructData.document_metadata?.title || selectedFile.name.split('.')[0].replace(/_/g, ' ') || 'Untitled Card'; 
       const keywordsToSet: string[] = []; // Keywords are not auto-generated at this stage
 
-      setStagedData(titleToSet, mappedBlocks, keywordsToSet);
+      setStagedData(titleToSet, reconstructData.original_content_blocks, keywordsToSet);
       toast({ title: 'Content Reconstructed!', description: 'Navigating to create card page...', status: 'success', duration: 2000, isClosable: true });
       onCloseFileModal();
       setSelectedFile(null);

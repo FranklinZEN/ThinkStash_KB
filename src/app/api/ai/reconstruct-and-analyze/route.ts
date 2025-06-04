@@ -198,44 +198,58 @@ export async function POST(req: NextRequest) {
 
     // Process content blocks to generate signed URLs for images
     if (pythonServiceResponse.original_content_blocks && storage) {
+      console.log('[NextAPI R&A] Starting GCS signed URL generation for image blocks.');
       for (const block of pythonServiceResponse.original_content_blocks as AIServiceContentBlock[]) {
-        // Cast to ensure type safety
-        if (
-          block.type === 'image' &&
-          block.gcs_url &&
-          block.gcs_url.startsWith('gs://')
-        ) {
-          try {
-            const gcsPath = block.gcs_url.substring('gs://'.length);
-            const firstSlashIndex = gcsPath.indexOf('/');
-            if (firstSlashIndex > 0) {
-              const bucketName = gcsPath.substring(0, firstSlashIndex);
-              const fileName = gcsPath.substring(firstSlashIndex + 1);
+        if (block.type === 'image') {
+          console.log(`[NextAPI R&A] Processing image block ID: ${block.block_id || block.tmp_id || 'N/A'}. Incoming gcs_url: ${block.gcs_url}`);
+          if (
+            block.gcs_url &&
+            block.gcs_url.startsWith('gs://')
+          ) {
+            console.log(`[NextAPI R&A] gs:// URL found: ${block.gcs_url}. Attempting to generate signed URL.`);
+            try {
+              const gcsPath = block.gcs_url.substring('gs://'.length);
+              const firstSlashIndex = gcsPath.indexOf('/');
+              if (firstSlashIndex > 0) {
+                const bucketName = gcsPath.substring(0, firstSlashIndex);
+                const fileName = gcsPath.substring(firstSlashIndex + 1);
 
-              console.log(
-                `[GCS Signed URL] Generating for: gs://${bucketName}/${fileName}`,
+                console.log(
+                  `[GCS Signed URL] Generating for: gs://${bucketName}/${fileName}`,
+                );
+                const signedUrl = await generateV4ReadSignedUrl(
+                  bucketName,
+                  fileName,
+                );
+                block.gcs_url = signedUrl; // Replace gs:// URL with signed HTTPS URL
+                console.log(
+                  `[GCS Signed URL] Successfully generated. New gcs_url (first 100 chars): ${block.gcs_url?.substring(0, 100)}...`,
+                );
+              } else {
+                console.warn(
+                  `[GCS Signed URL] Could not parse bucket/file from GCS URL: ${block.gcs_url}`,
+                );
+              }
+            } catch (e) {
+              console.error(
+                `[GCS Signed URL] Error processing GCS URL ${block.gcs_url}:`,
+                e,
               );
-              const signedUrl = await generateV4ReadSignedUrl(
-                bucketName,
-                fileName,
-              );
-              block.gcs_url = signedUrl; // Replace gs:// URL with signed HTTPS URL
-              console.log(
-                `[GCS Signed URL] Generated: ${signedUrl.substring(0, 100)}...`,
-              );
-            } else {
-              console.warn(
-                `[GCS Signed URL] Could not parse bucket/file from GCS URL: ${block.gcs_url}`,
-              );
+              // Decide on fallback: clear gcs_url, set to error, or leave as gs:// ?
+              // For now, let's clear it to make the frontend warning accurate if generation fails.
+              // block.gcs_url = undefined; // Or some error placeholder if preferred
             }
-          } catch (e) {
-            console.error(
-              `[GCS Signed URL] Error processing GCS URL ${block.gcs_url}:`,
-              e,
+          } else {
+            console.warn(
+              `[NextAPI R&A] Image block ID: ${block.block_id || block.tmp_id || 'N/A'} did not have a valid gs:// URL. Current gcs_url: ${block.gcs_url}`,
             );
-            // Optionally, set gcs_url to a placeholder or error indicator if generation fails
-            // block.gcs_url = 'error-generating-signed-url';
+            // If it's not a gs:// URL, we shouldn't send it to BlockNote if it expects a fetchable HTTPS URL.
+            // Consider clearing it if it's not already a valid HTTPS URL from a previous step (unlikely here).
+            // if (block.gcs_url && !block.gcs_url.startsWith('https')) {
+            //   block.gcs_url = undefined;
+            // }
           }
+          console.log(`[NextAPI R&A] Final gcs_url for image block ID: ${block.block_id || block.tmp_id || 'N/A'}: ${block.gcs_url}`);
         }
       }
     }

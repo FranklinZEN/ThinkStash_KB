@@ -36,7 +36,10 @@ import {
 import { type AppPartialBlock } from '@/lib/blocknote/appSchema';
 import { useStagingCardStore } from '@/stores/stagingCardStore';
 import { mapPartialBlocksToAIServiceContentBlocks, mapContentBlocksToPartialBlocks } from '@/lib/contentUtils';
-import type { ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
+import type {
+  ContentBlock as AIServiceContentBlock,
+  RewriteContentResponse,
+} from '@/types/api/ai-service';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
@@ -303,6 +306,9 @@ export default function NewCardPage() {
       return;
     }
 
+    // Show the comparison view immediately and reset rewritten content
+    setRewrittenEditorContent(undefined); 
+    setShowComparisonView(true);
     setIsRewritingContent(true);
     setRewriteError(null);
 
@@ -317,10 +323,22 @@ export default function NewCardPage() {
         session?.user.id ?? 'unknown-user',
       );
 
+      // Correct the key in the payload to match what the backend API route expects
+      const payloadToApi = {
+        content_blocks_to_rewrite: aiServiceBlocks,
+        // document_metadata can be added here if needed by your API/service
+        // user_id will be handled by the session on the backend
+      };
+
+      console.log(
+        '[NewCardPage] handleRewriteContent: Sending payload to /api/ai/rewrite-content:',
+        JSON.stringify(payloadToApi, null, 2),
+      );
+
       const response = await fetch('/api/ai/rewrite-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: aiServiceBlocks }),
+        body: JSON.stringify(payloadToApi), // Use the corrected payload
       });
 
       if (!response.ok) {
@@ -331,12 +349,13 @@ export default function NewCardPage() {
         );
       }
 
-      const result: { rewritten_content: AIServiceContentBlock[] } =
-        await response.json();
-      
-      const newRewrittenContent = mapContentBlocksToPartialBlocks(result.rewritten_content) as AppPartialBlock[];
+      // Use the correct type and access the correct property for rewritten content
+      const result: RewriteContentResponse = await response.json();
+
+      const newRewrittenContent = mapContentBlocksToPartialBlocks(
+        result.ai_rewritten_content_blocks, // Changed from result.rewritten_content
+      ) as AppPartialBlock[];
       setRewrittenEditorContent(newRewrittenContent);
-      setShowComparisonView(true);
 
       toast({
         title: 'Content Rewritten',
