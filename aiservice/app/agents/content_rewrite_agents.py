@@ -58,7 +58,7 @@ class ContentRewriteAgents:
                 This includes: achieving minimum 90% information retention, preserving key data points and nuances, using original terminology,
                 maintaining contextual integrity, and correctly integrating CRUCIAL images using the specified '[IMAGE: <image_id_ref_value>]' placeholder format.
                 You must use your 'Optimized LLM Interaction Tool' for this, ensuring the 'temperature' is {self.summarizer_temperature} and 'max_tokens' is {self.summarizer_max_tokens}.
-                Your final output MUST be a Pydantic object of type 'SummarizerTaskOutput', containing the 'summary_text' as a single string.
+                Your final output for the task MUST be a single, valid JSON string that conforms to the 'StructuredSummary' format (an object with a 'segments' key, where 'segments' is a list of objects, each having 'type' and either 'content' or 'image_id_ref'), as detailed in the task description.
                 """),
             backstory=dedent("""\
                 You are an advanced AI language model, a specialist in deep content analysis and synthesis with extreme fidelity.
@@ -74,35 +74,35 @@ class ContentRewriteAgents:
             max_iter=1 # Force single iteration
         )
 
-    def output_constructor_agent(self) -> Agent:
-        """
-        Agent responsible for reconstructing the final content blocks from summarized text and image metadata.
-        This agent should ONLY use its tool and return the direct output.
-        """
-        return Agent(
-            role="Output Reconstruction Architect",
-            goal=(
-                "Given summarized text, a list of essential image metadata, and a document ID, "
-                "use the FastContentBlockProcessorTool with the 'reconstruct_content_from_summary' operation "
-                "to create a new list of ContentBlock objects. You MUST use the tool and output its result directly."
-            ),
-            backstory=(
-                "You are a specialized agent focused on meticulously reconstructing structured content. "
-                "You do not engage in creative writing or summarization yourself. Your sole function is to "
-                "accurately process inputs through your designated tool and return the tool's direct output."
-            ),
-            tools=[self.content_processor_tool],
-            llm=self.llm, # Assign the configured LLM to prevent OpenAI client instantiation issues
-            allow_delegation=False,
-            verbose=True,
-            max_iter=1 # Force single iteration, tool use should be the only action
-        )
+    # def output_constructor_agent(self) -> Agent: # Method removed
+    #     """ # Method removed
+    #     Agent responsible for reconstructing the final content blocks from summarized text and image metadata.
+    #     This agent should ONLY use its tool and return the direct output.
+    #     """ # Method removed
+    #     return Agent( # Method removed
+    #         role="Output Reconstruction Architect", # Method removed
+    #         goal=( # Method removed
+    #             "Given summarized text, a list of essential image metadata, and a document ID, " # Method removed
+    #             "use the FastContentBlockProcessorTool with the 'reconstruct_content_from_summary' operation " # Method removed
+    #             "to create a new list of ContentBlock objects. You MUST use the tool and output its result directly."
+    #         ), # Method removed
+    #         backstory=( # Method removed
+    #             "You are a specialized agent focused on meticulously reconstructing structured content. " # Method removed
+    #             "You do not engage in creative writing or summarization yourself. Your sole function is to " # Method removed
+    #             "accurately process inputs through your designated tool and return the tool's direct output."
+    #         ), # Method removed
+    #         tools=[self.content_processor_tool], # Method removed
+    #         llm=self.llm, # Method removed
+    #         allow_delegation=False, # Method removed
+    #         verbose=True, # Method removed
+    #         max_iter=1 # Method removed
+    #     ) # Method removed
 
 # Example usage (for testing or integration into a crew)
 if __name__ == '__main__':
     agents_factory = ContentRewriteAgents()
     summarizer = agents_factory.summarization_agent()
-    constructor = agents_factory.output_constructor_agent()
+    # constructor = agents_factory.output_constructor_agent() # Updated example usage
 
     print(f"Created agent: {summarizer.role}")
-    print(f"Created agent: {constructor.role}") 
+    # print(f"Created agent: {constructor.role}") # Updated example usage 

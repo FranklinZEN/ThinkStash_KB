@@ -162,7 +162,7 @@ export default function Home() {
         throw new Error(errorMsg);
       }
       
-      const titleToSet = data.extracted_title || data.document_metadata?.title || ''; 
+      const titleToSet = data.extracted_title || data.document_metadata?.title || null; 
       const keywordsToSet: string[] = [];
 
       setStagedData(titleToSet, data.original_content_blocks, keywordsToSet);

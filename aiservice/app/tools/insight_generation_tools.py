@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 # import openai # No longer using direct openai client here for default
 import uuid # Added for generating block_ids
-import json # Add json import
+# import json # Add json import # Duplicate, removing
 
 from crewai.tools import BaseTool # Corrected import
 
@@ -26,8 +26,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI # Corrected import loc
 # Corrected import for ChatOpenAI
 from langchain_openai import ChatOpenAI # More direct import path
 
-# Import SummarizerTaskOutput for type checking
-from aiservice.app.models.task_output_models import SummarizerTaskOutput # Corrected import
+# Import SummarizerTaskOutput for type checking and new structured summary models
+from aiservice.app.models.task_output_models import SummarizerTaskOutput, StructuredSummary, Segment # Added StructuredSummary, Segment
+
+# Import logger
+from aiservice.app.config.logging_config import get_logger
+logger = get_logger(__name__)
 
 # --- Optimized LLM Interaction Tool ---
 
@@ -126,11 +130,12 @@ class OptimizedLLMInteractionTool(BaseTool):
 
 class FastContentBlockProcessorToolInput(BaseModel):
     """Input for FastContentBlockProcessorTool."""
-    content_blocks: Optional[List[ContentBlock]] = Field(default=None, description="Optional list of ContentBlock objects to process. Primarily used by operations like 'concatenate_text' or 'extract_image_metadata'. Not used by 'reconstruct_content_from_summary' if 'summarized_text' is provided.")
+    content_blocks: Optional[List[ContentBlock]] = Field(default=None, description="Optional list of ContentBlock objects to process. Primarily used by operations like 'concatenate_text' or 'extract_image_metadata'. Not used by 'reconstruct_content_from_summary' if 'summarized_text' or 'structured_summary_input' is provided.")
     operation: str = Field(description="The processing operation to perform.")
-    summarized_text: Optional[str] = Field(None, description="The summarized text string, used by 'reconstruct_content_from_summary'.")
+    summarized_text: Optional[str] = Field(None, description="DEPRECATED for reconstruction. The summarized text string, used by the old 'reconstruct_content_from_summary'.")
+    structured_summary_input: Optional[StructuredSummary] = Field(None, description="The structured summary model containing segments, used by 'reconstruct_content_from_summary'.")
     image_metadata_list_json: Optional[str] = Field(None, description="JSON string representation of the list of essential image metadata dictionaries, used by 'reconstruct_content_from_summary'.")
-    document_id: Optional[str] = Field(None, description="Document ID to associate with newly created blocks during reconstruction.")
+    document_id: Optional[str] = Field(None, description="Document ID to associate with newly created blocks during reconstruction. Primarily for override, tool usually uses document_id from init.")
 
 class FastContentBlockProcessorTool(BaseTool):
     name: str = "Fast Content Block Processor"
@@ -146,24 +151,33 @@ class FastContentBlockProcessorTool(BaseTool):
         super().__init__(**kwargs)
         self.user_id = user_id
         self.document_id = document_id # Store the document_id passed from ContentRewriteAgents
-        print(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}, document_id: {self.document_id}")
+        logger.info(f"FastContentBlockProcessorTool initialized with user_id: {self.user_id}, document_id: {self.document_id}")
 
-    def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, summarized_text: Optional[str] = None, image_metadata_list_json: Optional[str] = None, document_id: Optional[str] = None) -> Any:
+    def _run(self, operation: str, content_blocks: Optional[List[ContentBlock]] = None, 
+             summarized_text: Optional[str] = None, # Kept for now, but reconstruction will use new field
+             structured_summary_input: Optional[StructuredSummary] = None, # New field for structured summary
+             image_metadata_list_json: Optional[str] = None, 
+             document_id: Optional[str] = None) -> Any:
         """Processes content blocks based on the specified operation."""
         
-        # current_document_id_for_run is no longer needed from args directly for reconstruction,
-        # as self.document_id (set in __init__) will be used for new blocks.
-        # The document_id from args might still be used if this tool were called directly with an override.
-        document_id_to_use_for_new_blocks = self.document_id # Prioritize the one from __init__
-        if operation == "reconstruct_content_from_summary" and document_id:
-            # If document_id is explicitly passed in _run for reconstruction, it might be an override
-            # However, the plan is to use the one from __init__ for rewritten blocks.
-            # For now, let's stick to self.document_id for newly created blocks if it's set.
-            # If self.document_id was None, then use the one from args.
-            if not self.document_id:
-                document_id_to_use_for_new_blocks = document_id
-            elif document_id != self.document_id:
-                 print(f"WARNING (FastContentBlockProcessorTool): document_id in _run ({document_id}) differs from __init__ ({self.document_id}). Using __init__ version for new blocks.")
+        # Prioritize document_id passed to _run, then from __init__, then fallback
+        document_id_to_use_for_new_blocks = document_id # From _run args
+        if not document_id_to_use_for_new_blocks:
+            document_id_to_use_for_new_blocks = self.document_id # From __init__
+            if not document_id_to_use_for_new_blocks:
+                logger.critical(f"FastContentBlockProcessorTool: document_id not provided to _run and self.document_id not set in __init__. New blocks will get a random document_id.")
+                document_id_to_use_for_new_blocks = str(uuid.uuid4()) # Fallback
+        
+        # Log which document_id is being used for the current operation, especially for reconstruction
+        if operation == "reconstruct_content_from_summary":
+            logger.debug(f"FastContentBlockProcessorTool (reconstruct_content_from_summary): Using document_id '{document_id_to_use_for_new_blocks}' for new blocks.")
+        else:
+            logger.debug(f"FastContentBlockProcessorTool (operation: {operation}): Effective document_id for potential new blocks is '{document_id_to_use_for_new_blocks}'.")
+
+        current_user_id_for_tool = self.user_id
+        if not current_user_id_for_tool:
+            logger.warning(f"FastContentBlockProcessorTool: self.user_id not set in __init__. Using placeholder for new blocks.")
+            current_user_id_for_tool = "tool_reconstruct_fallback_user"
 
         if operation == "concatenate_text":
             all_text = []
@@ -216,264 +230,77 @@ class FastContentBlockProcessorTool(BaseTool):
             }
 
         elif operation == "reconstruct_content_from_summary":
-            # Log received inputs for this specific operation
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received summarized_text (first 100 chars): {summarized_text[:100] if summarized_text else 'None'}", flush=True)
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received image_metadata_list_json (first 100 chars): {image_metadata_list_json[:100] if image_metadata_list_json else 'None'}", flush=True)
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary received document_id: {document_id}", flush=True)
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary using self.document_id for new blocks: {self.document_id}", flush=True)
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary using self.user_id for new blocks: {self.user_id}", flush=True)
-
-            if summarized_text is None or image_metadata_list_json is None: # MODIFIED to use summarized_text
-                return [{"error": "'summarized_text' (after processing) and 'image_metadata_list_json' (JSON string) are required for 'reconstruct_content_from_summary'."}]
+            if not structured_summary_input:
+                logger.error("FastContentBlockProcessorTool: 'structured_summary_input' is required and cannot be None for 'reconstruct_content_from_summary'.")
+                return [{"error": "'structured_summary_input' is required and cannot be None for 'reconstruct_content_from_summary'."}]
+            
+            # If structured_summary_input.segments is an empty list, it's a valid scenario, return empty list of blocks.
+            if not structured_summary_input.segments:
+                logger.info("FastContentBlockProcessorTool: 'structured_summary_input.segments' is empty. Returning empty list for 'reconstruct_content_from_summary'.")
+                return []
+            
+            if image_metadata_list_json is None:
+                logger.error("FastContentBlockProcessorTool: 'image_metadata_list_json' is required for 'reconstruct_content_from_summary'.")
+                return [{"error": "'image_metadata_list_json' is required for 'reconstruct_content_from_summary'."}]
 
             try:
                 image_metadata_list: List[Dict[str, Any]] = json.loads(image_metadata_list_json)
             except json.JSONDecodeError as e:
+                logger.error(f"FastContentBlockProcessorTool: Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}")
                 return [{"error": f"Failed to parse 'image_metadata_list_json'. Invalid JSON: {e}"}]
 
             reconstructed_blocks_dicts: List[Dict[str, Any]] = []
             order_idx_counter = 0
-            processed_image_ids = set() 
 
-            image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in image_metadata_list if meta.get('gcs_url')}
-            image_meta_lookup_id = {meta.get('image_id_ref'): meta for meta in image_metadata_list if meta.get('image_id_ref')}
+            # Create a lookup for image metadata by image_id_ref for efficient access
+            image_meta_lookup = {meta.get('image_id_ref'): meta for meta in image_metadata_list if meta.get('image_id_ref')}
+            # Fallback lookup by gcs_url if image_id_ref is not primary
+            image_meta_lookup_gcs = {meta.get('gcs_url'): meta for meta in image_metadata_list if meta.get('gcs_url') and not meta.get('image_id_ref')}
 
-            current_user_id_for_tool = self.user_id
-            if not current_user_id_for_tool:
-                print("Warning: user_id not set in FastContentBlockProcessorTool. Using placeholder.")
-                current_user_id_for_tool = "tool_reconstruct_fallback_user"
-            
-            document_id_to_use_for_new_blocks = self.document_id
-            if not document_id_to_use_for_new_blocks:
-                print("CRITICAL WARNING (FastContentBlockProcessorTool): document_id_to_use_for_new_blocks is None/empty for reconstruction. New blocks will lack a document_id or have a fallback.")
-                document_id_to_use_for_new_blocks = str(uuid.uuid4())
-
-            import re
-            # Regex to capture image placeholders like [IMAGE: ID]
-            # The capturing group around the placeholder itself is key for re.split
-            placeholder_pattern_for_split = r'(\[IMAGE:\s*[^\s\[\]]+\s*\])'
-            # Regex to extract the ID from a captured placeholder
-            placeholder_id_extractor_pattern = r'\[IMAGE:\s*([^\s\[\]]+)\s*\]'
-
-            segments = re.split(placeholder_pattern_for_split, summarized_text)
-
-            for segment in segments:
-                if not segment: # Skip empty segments that can result from split
-                    continue
-
-                match_placeholder = re.fullmatch(placeholder_pattern_for_split, segment)
-                if match_placeholder:
-                    # This segment is an image placeholder
-                    placeholder_tag = match_placeholder.group(0) # The full tag, e.g., [IMAGE: ID1]
-                    id_match = re.search(placeholder_id_extractor_pattern, placeholder_tag)
-                    if not id_match:
-                        # Should not happen if placeholder_pattern_for_split matched
-                        print(f"Warning: Could not extract ID from supposed placeholder: {placeholder_tag}")
-                        # Treat as text if ID extraction fails unexpectedly
-                        if placeholder_tag.strip():
-                            text_block = ContentBlock(
-                                block_id=uuid.uuid4().hex,
-                                tmp_id=None,
-                                user_id=current_user_id_for_tool,
-                                document_id=document_id_to_use_for_new_blocks,
-                                type='text',
-                                content=placeholder_tag.strip(),
-                                order_index=order_idx_counter,
-                                # Initialize all other ContentBlock fields to None
-                                items=None,
-                                ordered=None,
-                                list_start_number=None,
-                                level=None,
-                                language=None,
-                                image_id_ref=None,
-                                gcs_url=None,
-                                alt_text=None,
-                                caption=None,
-                                width=None,
-                                height=None,
-                                llm_description=None,
-                                page_number=None,
-                                bbox=None
-                            )
-                            reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
-                            order_idx_counter += 1
-                        continue
-
-                    placeholder_identifier = id_match.group(1)
-                    
-                    img_meta_to_use = None
-                    # Prioritize lookup by image_id_ref, then gcs_url
-                    if placeholder_identifier in image_meta_lookup_id:
-                        img_meta_to_use = image_meta_lookup_id[placeholder_identifier]
-                    elif placeholder_identifier in image_meta_lookup_gcs: # Fallback if ID was a GCS URL
-                        img_meta_to_use = image_meta_lookup_gcs[placeholder_identifier]
-                    
-                    if img_meta_to_use:
-                        final_block_id = img_meta_to_use.get('block_id', uuid.uuid4().hex)
-                        # Use image_id_ref from metadata for tmp_id if available, otherwise the placeholder itself
-                        final_tmp_id = img_meta_to_use.get('image_id_ref', placeholder_identifier) 
-                        final_user_id = current_user_id_for_tool 
-                        final_document_id = document_id_to_use_for_new_blocks
-
-                        image_block = ContentBlock(
-                            block_id=final_block_id,
-                            tmp_id=final_tmp_id,
-                            user_id=final_user_id,
-                            document_id=final_document_id,
-                            type='image',
-                            content=None, # CRITICAL: Content for image block must be None
-                            order_index=order_idx_counter,
-                            image_id_ref=img_meta_to_use.get('image_id_ref'),
-                            gcs_url=img_meta_to_use.get('gcs_url'),
-                            alt_text=img_meta_to_use.get('alt_text'),
-                            caption=img_meta_to_use.get('caption'),
-                            llm_description=img_meta_to_use.get('llm_description'),
-                            width=img_meta_to_use.get('width'),
-                            height=img_meta_to_use.get('height'),
-                            # Initialize non-image related fields to None
-                            items=None,
-                            ordered=None,
-                            list_start_number=None,
-                            level=None,
-                            language=None,
-                            page_number=None,
-                            bbox=None
-                        )
-                        reconstructed_blocks_dicts.append(image_block.model_dump(mode='json'))
-                        order_idx_counter += 1
-                        # Track processed images by both available identifiers
-                        if img_meta_to_use.get('image_id_ref'):
-                            processed_image_ids.add(img_meta_to_use.get('image_id_ref'))
-                        if img_meta_to_use.get('gcs_url'):
-                             processed_image_ids.add(img_meta_to_use.get('gcs_url'))
-                    else:
-                        # Placeholder was in text, but no matching image metadata found
-                        missing_ref_text_block = ContentBlock(
-                            block_id=uuid.uuid4().hex,
-                            tmp_id=None,
-                            user_id=current_user_id_for_tool,
-                            document_id=document_id_to_use_for_new_blocks,
-                            type='text',
-                            content=f"[IMAGE: {placeholder_identifier} - Referenced but not found in provided image metadata]",
-                            order_index=order_idx_counter,
-                            # Initialize all other ContentBlock fields to None
-                            items=None,
-                            ordered=None,
-                            list_start_number=None,
-                            level=None,
-                            language=None,
-                            image_id_ref=None,
-                            gcs_url=None,
-                            alt_text=None,
-                            caption=None,
-                            width=None,
-                            height=None,
-                            llm_description=None,
-                            page_number=None,
-                            bbox=None
-                        )
-                        reconstructed_blocks_dicts.append(missing_ref_text_block.model_dump(mode='json'))
-                        order_idx_counter += 1
-                else:
-                    # This segment is plain text
-                    text_content = segment.strip()
-                    if text_content:
-                        text_block = ContentBlock(
-                            block_id=uuid.uuid4().hex,
-                            tmp_id=None,
-                            user_id=current_user_id_for_tool,
-                            document_id=document_id_to_use_for_new_blocks,
-                            type='text',
-                            content=text_content,
-                            order_index=order_idx_counter,
-                            # Initialize all other ContentBlock fields to None
-                            items=None,
-                            ordered=None,
-                            list_start_number=None,
-                            level=None,
-                            language=None,
-                            image_id_ref=None,
-                            gcs_url=None,
-                            alt_text=None,
-                            caption=None,
-                            width=None,
-                            height=None,
-                            llm_description=None,
-                            page_number=None,
-                            bbox=None
-                        )
-                        reconstructed_blocks_dicts.append(text_block.model_dump(mode='json'))
-                        order_idx_counter += 1
-            
-            # Append any images from image_metadata_list not referenced by placeholders
-            for img_meta in image_metadata_list:
-                identifier_ref = img_meta.get('image_id_ref')
-                identifier_gcs = img_meta.get('gcs_url')
-                # Check if already processed by looking up both identifiers if they exist
-                already_processed = False
-                if identifier_ref and identifier_ref in processed_image_ids:
-                    already_processed = True
-                if not already_processed and identifier_gcs and identifier_gcs in processed_image_ids:
-                    already_processed = True
-
-                if not already_processed:
-                    final_block_id = img_meta.get('block_id', uuid.uuid4().hex)
-                    final_tmp_id = img_meta.get('tmp_id', img_meta.get('image_id_ref')) # Use image_id_ref for tmp_id
-                    # For appended images, use the user_id from their original metadata if available,
-                    # otherwise use the current_user_id_for_tool. Same for document_id.
-                    final_user_id = img_meta.get('user_id', current_user_id_for_tool)
-                    final_document_id = img_meta.get('document_id', document_id_to_use_for_new_blocks)
-                    
-                    appended_image_block = ContentBlock(
-                        block_id=final_block_id,
-                        tmp_id=final_tmp_id,
-                        user_id=final_user_id,
-                        document_id=final_document_id,
-                        type='image',
-                        content=None, # CRITICAL: Content for image block must be None
-                        order_index=order_idx_counter,
-                        image_id_ref=img_meta.get('image_id_ref'),
-                        gcs_url=img_meta.get('gcs_url'),
-                        alt_text=img_meta.get('alt_text'),
-                        caption=img_meta.get('caption'),
-                        llm_description=img_meta.get('llm_description'),
-                        width=img_meta.get('width'),
-                        height=img_meta.get('height'),
-                        # Initialize non-image related fields to None
-                        items=None,
-                        ordered=None,
-                        list_start_number=None,
-                        level=None,
-                        language=None,
-                        page_number=None,
-                        bbox=None
-                    )
-                    reconstructed_blocks_dicts.append(appended_image_block.model_dump(mode='json'))
-                    order_idx_counter += 1
-                    # Optional: Log that an image was appended because it wasn't referenced
-                    # print(f"DEBUG: Appended unreferenced image: {identifier_ref or identifier_gcs}")
-            
-            # Log the output before returning
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary ABOUT TO RETURN (first 2 blocks of actual): {str(reconstructed_blocks_dicts[:2])}", flush=True)
-            
-            # TEMPORARY: Return a small, known-good sample for debugging CrewAI's handling
-            sample_debug_return = [
-                {
-                    "block_id": "debug_block_1", "type": "text", "content": "Debug: Tool ran successfully.", 
-                    "user_id": str(self.user_id), "document_id": str(self.document_id), "order_index": 0
-                },
-                {
-                    "block_id": "debug_block_2", "type": "image", "image_id_ref": "debug_img_ref", 
-                    "gcs_url": "http://example.com/debug.jpg", "user_id": str(self.user_id), 
-                    "document_id": str(self.document_id), "order_index": 1, "content": None
+            for segment in structured_summary_input.segments:
+                block_dict: Dict[str, Any] = {
+                    "block_id": str(uuid.uuid4()),
+                    "user_id": current_user_id_for_tool,
+                    "document_id": document_id_to_use_for_new_blocks,
+                    "order_index": order_idx_counter
                 }
-            ]
-            print(f"DEBUG FastContentBlockProcessorTool: reconstruct_content_from_summary NOW RETURNING DEBUG SAMPLE: {str(sample_debug_return)}", flush=True)
-            return sample_debug_return
-            # return reconstructed_blocks_dicts # Original return commented out for debugging
+                order_idx_counter += 1
+
+                if segment.type == "text":
+                    block_dict["type"] = "text"
+                    block_dict["content"] = segment.content
+                    reconstructed_blocks_dicts.append(block_dict)
+                
+                elif segment.type == "image_reference":
+                    image_ref = segment.image_id_ref
+                    img_meta = image_meta_lookup.get(image_ref) 
+                    if not img_meta: # Try gcs_url if not found by image_id_ref directly
+                        img_meta = image_meta_lookup_gcs.get(image_ref)
+                    
+                    if img_meta:
+                        block_dict["type"] = "image"
+                        block_dict["image_id_ref"] = img_meta.get('image_id_ref') # Use original ref if available
+                        block_dict["gcs_url"] = img_meta.get('gcs_url')
+                        block_dict["alt_text"] = img_meta.get('alt_text')
+                        block_dict["caption"] = img_meta.get('caption')
+                        block_dict["llm_description"] = img_meta.get('llm_description') # from essential_image_metadata
+                        block_dict["width"] = img_meta.get('width')
+                        block_dict["height"] = img_meta.get('height')
+                        reconstructed_blocks_dicts.append(block_dict)
+                    else:
+                        logger.warning(f"FastContentBlockProcessorTool: Could not find image metadata for reference: '{image_ref}'. Skipping image block.")
+                        # Optionally create a placeholder or error text block
+                        # block_dict["type"] = "text"
+                        # block_dict["content"] = f"[IMAGE NOT FOUND: {image_ref}]"
+                        # reconstructed_blocks_dicts.append(block_dict)
+                else:
+                    logger.warning(f"FastContentBlockProcessorTool: Unknown segment type: '{segment.type}'. Skipping segment.")
+            
+            logger.info(f"FastContentBlockProcessorTool: Reconstructed {len(reconstructed_blocks_dicts)} blocks from structured summary.")
+            return reconstructed_blocks_dicts
 
         else:
-            return f"Error: Operation '{operation}' not supported by FastContentBlockProcessorTool."
+            return [{"error": f"Unsupported operation: {operation}"}] # Return a list with an error dict for consistency
 
 # Example of how you might instantiate and use the tools (for testing or in crew setup)
 if __name__ == '__main__':
@@ -521,14 +348,25 @@ if __name__ == '__main__':
 
     reconstructed_with_placeholders = processor_tool._run(
         operation='reconstruct_content_from_summary',
-        summarized_text=sample_summary_text_with_placeholders,
-        image_metadata_list_json=json.dumps(essential_images_for_reconstruction)
+        structured_summary_input=StructuredSummary(segments=[
+            Segment(type="text", content="This is the summarized intro."),
+            Segment(type="image_reference", image_id_ref="img1"),
+            Segment(type="text", content="Then, more summary."),
+            Segment(type="image_reference", image_id_ref="gs://bucket/img_missing.jpg"),
+            Segment(type="text", content="And a final bit of text.")
+        ]),
+        image_metadata_list_json=json.dumps([
+            {"image_id_ref": "img1", "gcs_url": "gs://bucket/img1.jpg", "alt_text": "A cat"},
+            {"image_id_ref": "gs://bucket/img_missing.jpg", "gcs_url": "gs://bucket/img_missing.jpg", "alt_text": "Image not found"}
+        ])
     )
     print(f"Reconstructed (with placeholders): {reconstructed_with_placeholders}")
 
     reconstructed_no_placeholders = processor_tool._run(
         operation='reconstruct_content_from_summary',
-        summarized_text=sample_summary_text_no_placeholders,
-        image_metadata_list_json=json.dumps(essential_images_for_reconstruction) 
+        structured_summary_input=StructuredSummary(segments=[
+            Segment(type="text", content="This is a summary with no image references in it directly.")
+        ]),
+        image_metadata_list_json=json.dumps([])
     )
     print(f"Reconstructed (no placeholders, images not directly added unless policy changes): {reconstructed_no_placeholders}") 

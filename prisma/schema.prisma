@@ -150,3 +150,22 @@ model ImageRecord {
   @@index([knowledgeCardId])
 }
 
+// --- AI Task Management Model ---
+
+model AITask {
+  id           String   @id @default(uuid())
+  userId       String? // Optional: if tasks are user-specific
+  taskType     String // e.g., "CONTENT_REWRITE"
+  status       String // PENDING, PROCESSING, COMPLETED, FAILED
+  progressStage String?  // ADDED: To store messages like "Summarizing...", "Rewriting..."
+  inputData    Json? // Store original_content_blocks or a reference
+  resultData   Json? // Store ai_rewritten_content_blocks
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Optional: Index for querying by status or userId
+  @@index([status])
+  @@index([userId]) // Only if userId field is consistently used
+}
+

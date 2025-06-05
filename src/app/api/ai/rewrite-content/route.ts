@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type {
   RewriteContentRequest,
-  RewriteContentResponse,
-  ContentBlock,
+  // RewriteContentResponse, // This will now be simpler: { task_id: string }
+  ContentBlock, // Keep if needed for request body typing, though RewriteContentRequest covers it
 } from '@/types/api/ai-service';
 import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth'; // Adjust path if your authOptions are elsewhere
+import { authOptions } from '@/lib/auth';
+// Removed: import { v4 as uuidv4 } from 'uuid';
+// Removed: import Redis from 'ioredis';
 
-// const AISERVICE_URL = process.env.AISERVICE_URL || 'http://localhost:8000'; // Moved inside POST
+// Removed Redis client initialization and constants
+
+// Interface for the expected response from the aiservice submission endpoint
+interface AIServiceTaskSubmissionResponse {
+  task_id: string;
+  // Potentially other fields from aiservice, but task_id is key
+}
 
 export async function POST(req: NextRequest) {
-  // Read AISERVICE_URL inside the handler to ensure it picks up test-specific env vars
   const AISERVICE_URL = process.env.AISERVICE_URL || 'http://localhost:8000';
   try {
     const session = await getServerSession(authOptions);
@@ -20,7 +27,6 @@ export async function POST(req: NextRequest) {
     const userIdFromSession = session.user.id;
 
     const body = (await req.json()) as RewriteContentRequest;
-    // Ensure user_id in payload matches session user_id if provided, or use session user_id
     const {
       content_blocks_to_rewrite,
       document_metadata,
@@ -31,10 +37,8 @@ export async function POST(req: NextRequest) {
       console.warn(
         `User ID mismatch: session ${userIdFromSession}, request ${userIdFromRequest}. Using session user ID.`,
       );
-      // Optionally return 403 Forbidden if user_id in request is for someone else
-      // return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    const finalUserId = userIdFromSession; // Always prioritize userId from session
+    const finalUserId = userIdFromSession;
 
     if (!AISERVICE_URL) {
       console.error('AISERVICE_URL environment variable is not set.');
@@ -46,109 +50,82 @@ export async function POST(req: NextRequest) {
 
     if (
       !content_blocks_to_rewrite ||
-      !Array.isArray(content_blocks_to_rewrite)
+      !Array.isArray(content_blocks_to_rewrite) ||
+      content_blocks_to_rewrite.length === 0
     ) {
       return NextResponse.json(
         {
           error:
-            'Invalid request body: content_blocks_to_rewrite is required and must be an array.',
+            'Invalid request body: content_blocks_to_rewrite is required and must be a non-empty array.',
         },
         { status: 400 },
       );
     }
 
     console.log(
-      `API /ai/rewrite-content by user ${finalUserId}: Calling Python aiservice with ${content_blocks_to_rewrite.length} blocks.`,
+      `API /ai/rewrite-content by user ${finalUserId}: Submitting task to aiservice with ${content_blocks_to_rewrite.length} blocks.`,
     );
 
-    const pythonServicePayload = {
+    const aiservicePayload = {
       content_blocks_to_rewrite,
-      document_metadata,
-      user_id: finalUserId, // Ensure this is the authenticated user's ID
+      document_metadata, // This might be optional or handled differently by aiservice now
+      user_id: finalUserId,
+      // Ensure aiservice's RewriteContentInput model matches this structure or adapt as needed
     };
 
-    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/rewrite-content`, {
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`, { // New aiservice endpoint
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(pythonServicePayload),
+      body: JSON.stringify(aiservicePayload),
     });
 
     if (!response.ok) {
       let errorBody;
       try {
         errorBody = await response.json();
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (_) {
         errorBody = { message: await response.text() };
       }
-      console.error(`Python aiservice error (${response.status}):`, errorBody);
+      console.error(`aiservice task submission error (${response.status}):`, errorBody);
       return NextResponse.json(
         {
-          error: 'Python aiservice failed to rewrite content.',
+          error: 'aiservice failed to accept the rewrite task.',
           details:
             errorBody?.message ||
+            errorBody?.detail || // FastAPI often uses 'detail'
             errorBody ||
-            'Unknown error from Python service',
+            'Unknown error from aiservice submission endpoint',
         },
         { status: response.status },
       );
     }
 
-    // Define a type for the expected broader output from the Python service
-    // This includes fields we might not directly expose via this Next.js API route,
-    // but are present in the Python 'RewriteContentOutput' model.
-    interface PythonServiceRewriteOutput {
-      rewritten_document_id?: string | null;
-      ai_rewritten_content_blocks: ContentBlock[]; // Changed from any[] to ContentBlock[]
-      status_code?: string;
-      error_message?: string | null;
-      processing_time_ms?: number | null;
-      usage_metrics?: Record<string, unknown>; // Changed from Record<string, any> to Record<string, unknown>
-      trace_id?: string; // Example of an extra field
-    }
+    const aiserviceResponse = (await response.json()) as AIServiceTaskSubmissionResponse;
 
-    const pythonServiceResponse =
-      (await response.json()) as PythonServiceRewriteOutput;
-
-    if (
-      pythonServiceResponse.error_message &&
-      pythonServiceResponse.status_code &&
-      pythonServiceResponse.status_code.toLowerCase().includes('success')
-    ) {
-      console.warn(
-        'Python aiservice (rewrite) returned an error message in an apparent success payload:',
-        pythonServiceResponse.error_message,
-      );
-    } else if (pythonServiceResponse.error_message) {
-      console.info(
-        `Python aiservice (rewrite) returned an error message: ${pythonServiceResponse.error_message} with status: ${pythonServiceResponse.status_code}`,
+    if (!aiserviceResponse.task_id) {
+      console.error('aiservice did not return a task_id:', aiserviceResponse);
+      return NextResponse.json(
+        { error: 'Failed to get task_id from aiservice.' },
+        { status: 500 },
       );
     }
 
-    // Construct the response for the Next.js client, adhering to RewriteContentResponse type
-    const nextJsResponsePayload: RewriteContentResponse = {
-      rewritten_document_id: pythonServiceResponse.rewritten_document_id,
-      ai_rewritten_content_blocks:
-        pythonServiceResponse.ai_rewritten_content_blocks,
-      status_code: pythonServiceResponse.status_code,
-      error_message: pythonServiceResponse.error_message,
-      processing_time_ms: pythonServiceResponse.processing_time_ms,
-    };
+    // Return 202 Accepted with the task_id received from aiservice
+    return NextResponse.json({ task_id: aiserviceResponse.task_id }, { status: 202 });
 
-    return NextResponse.json(nextJsResponsePayload);
   } catch (error) {
-    console.error('Error in /ai/rewrite-content API route:', error);
+    console.error('Error in /ai/rewrite-content API route (aiservice call):', error);
     const errorMessage =
       error instanceof Error ? error.message : 'An unknown error occurred';
     if (error instanceof TypeError && error.message.includes('fetch failed')) {
       return NextResponse.json(
         {
-          error: 'Failed to connect to Python aiservice.',
+          error: 'Failed to connect to aiservice for task submission.',
           details: errorMessage,
         },
-        { status: 503 },
+        { status: 503 }, // Service Unavailable
       );
     }
     return NextResponse.json(

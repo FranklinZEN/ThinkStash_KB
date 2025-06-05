@@ -164,6 +164,7 @@ cachetools # For caching
 
 # Optional for specific database connections if not using an ORM that handles it
 # psycopg2-binary # For PostgreSQL
+psycopg2-binary # For PostgreSQL
 
 # For development and testing
 pytest-asyncio

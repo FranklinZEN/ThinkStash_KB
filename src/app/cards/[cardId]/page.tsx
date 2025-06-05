@@ -31,6 +31,13 @@ import {
   TagLabel,
   TagCloseButton,
   VStack,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalCloseButton,
+  ModalBody,
+  ModalFooter,
 } from '@chakra-ui/react';
 import { DeleteIcon } from '@chakra-ui/icons';
 
@@ -176,6 +183,100 @@ interface CardUpdatePayload {
   tags?: string[]; // This should be string[] as expected by the API endpoint body
 }
 
+// Component for side-by-side comparison (extracted for clarity, similar to NewCardPage)
+const SideBySideComparisonModal = ({
+  isOpen,
+  onClose,
+  originalContent,
+  rewrittenContent,
+  onAccept,
+  onDiscard,
+  isLoadingRewrite, // New prop
+  errorOnRewrite,   // New prop
+  currentProgressMessageForModal, // ADDED prop for modal
+  modalEditorKey, // ADDED prop for editor keys
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  originalContent: AppPartialBlock[] | null | undefined;
+  rewrittenContent: AppPartialBlock[] | null | undefined;
+  onAccept: () => void;
+  onDiscard: () => void;
+  isLoadingRewrite: boolean; // To show loading spinner on right side
+  errorOnRewrite: string | null;   // To show error on right side
+  currentProgressMessageForModal: string | null; // ADDED prop for modal
+  modalEditorKey: number; // ADDED prop for editor keys
+}) => {
+  if (!originalContent) return null; // Should not happen if modal is open based on originalContent presence
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} size="6xl" scrollBehavior="inside">
+      <ModalOverlay />
+      <ModalContent maxH="90vh">
+        <ModalHeader>Compare Original and Rewritten Content</ModalHeader>
+        <ModalCloseButton />
+        <ModalBody>
+          <Flex direction={{ base: 'column', md: 'row' }} gap={4}>
+            <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
+              <Heading size="sm" mb={2}>
+                Original Content
+              </Heading>
+              <BlockNoteEditorComponent
+                key={`original-comparison-${modalEditorKey}`}
+                initialContent={originalContent}
+                editable={false}
+                onEditorChange={() => {}}
+                onContentUpdate={() => {}}
+              />
+            </Box>
+            <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
+              <Heading size="sm" mb={2}>
+                AI Rewritten Content
+              </Heading>
+              {isLoadingRewrite ? (
+                <Flex justify="center" align="center" minH="200px" direction="column">
+                  <Spinner size="xl" />
+                  <Text mt={3}>AI Rewriting in progress...</Text>
+                  <Text mt={1} fontSize="sm" color="gray.500">{currentProgressMessageForModal || 'Initializing...'}</Text>
+                </Flex>
+              ) : errorOnRewrite ? (
+                <Flex justify="center" align="center" minH="200px" direction="column">
+                  <Text color="red.500" textAlign="center">Rewrite Error: {errorOnRewrite}</Text>
+                  <Text fontSize="sm" color="gray.500" mt={2} textAlign="center">You can close this window and try again.</Text>
+                </Flex>
+              ) : rewrittenContent ? (
+                <BlockNoteEditorComponent
+                  key={`rewritten-comparison-${modalEditorKey}`}
+                  initialContent={rewrittenContent}
+                  editable={false} // This editor should also be non-editable
+                  onEditorChange={() => {}}
+                  onContentUpdate={() => {}}
+                />
+              ) : (
+                <Flex justify="center" align="center" minH="200px">
+                  <Text color="gray.500">Waiting for rewritten content...</Text>
+                </Flex>
+              )}
+            </Box>
+          </Flex>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="ghost" mr={3} onClick={onDiscard}>
+            Discard Rewrite
+          </Button>
+          <Button
+            colorScheme="green"
+            onClick={onAccept}
+            isDisabled={isLoadingRewrite || !!errorOnRewrite || !rewrittenContent}
+          >
+            Accept Rewritten Content
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+};
+
 export default function CardDetailPage() {
   const { status } = useSession();
   const router = useRouter();
@@ -222,6 +323,16 @@ export default function CardDetailPage() {
   const [rewrittenContentBlocks, setRewrittenContentBlocks] = useState<AppPartialBlock[] | null>(null);
   const [showSideBySideView, setShowSideBySideView] = useState(false);
   const [originalContentForComparison, setOriginalContentForComparison] = useState<AppPartialBlock[] | null>(null);
+
+  // ADDED for asynchronous polling for AI Rewrite
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [pollingIntervalId, setPollingIntervalId] = useState<NodeJS.Timeout | null>(null);
+  const [pollingAttempts, setPollingAttempts] = useState(0);
+  const [rewriteError, setRewriteError] = useState<string | null>(null); // Specific error state
+  const [currentProgressMessage, setCurrentProgressMessage] = useState<string | null>(null); // ADDED
+
+  const POLLING_INTERVAL_MS = 3000; // 3 seconds
+  const MAX_POLLING_ATTEMPTS = 40; // 2 minutes timeout (40 * 3s)
 
   // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
   useEffect(() => {
@@ -567,7 +678,6 @@ export default function CardDetailPage() {
       return;
     }
 
-    // Determine the content to use as the "original" for comparison
     let contentToUseAsOriginal: AppPartialBlock[] | undefined;
     if (isEditing && editorContent && editorContent.length > 0) {
       contentToUseAsOriginal = editorContent;
@@ -597,10 +707,23 @@ export default function CardDetailPage() {
       });
       return;
     }
+
+    // Reset states for new rewrite operation
+    setIsRewritingContent(true);
+    setRewrittenContentBlocks(null);
     setOriginalContentForComparison(contentToUseAsOriginal); // Set for SBS view
+    setShowSideBySideView(true); // Activate side-by-side mode immediately
+    setRewriteError(null); // Clear previous rewrite errors
+    setTaskId(null); // Reset task ID
+    setPollingAttempts(0); // Reset polling attempts
+    if (pollingIntervalId) { // Clear any existing polling interval
+      clearInterval(pollingIntervalId);
+      setPollingIntervalId(null);
+    }
+    setCurrentProgressMessage("Initiating rewrite process..."); // ADDED initial message
 
     const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      contentToUseAsOriginal, // Use the captured original
+      contentToUseAsOriginal, 
       card.userId,
       cardId,
     );
@@ -612,31 +735,30 @@ export default function CardDetailPage() {
         duration: 3000,
         isClosable: true,
       });
-      // Reset if we bailed early
+      // Reset UI states if we bail early
+      setIsRewritingContent(false);
+      setShowSideBySideView(false); 
       setOriginalContentForComparison(null);
       return;
     }
 
-    setIsRewritingContent(true);
-    setRewrittenContentBlocks(null);
-    setShowSideBySideView(true); // Activate side-by-side mode
-
     try {
       const payload = {
         content_blocks_to_rewrite: aiServiceContentBlocks,
-        document_metadata: { // Construct DocumentMetadata as expected by RewriteContentInput
+        document_metadata: { 
           document_id: cardId,
           user_id: card.userId,
-          // Assuming card.source_url and card.source_type might not exist on the frontend Card type
-          // Provide fallbacks to satisfy Python model requirements if they are required.
-          source_identifier: (card as any).source_url || cardId, // Use cardId as a fallback source identifier
-          source_type: (card as any).source_type || 'knowledge_card', // Default source_type
+          source_identifier: (card as any).source_url || cardId, 
+          source_type: (card as any).source_type || 'knowledge_card', 
           title: card.title,
-          // final_url: (card as any).final_url || undefined, // If you add this to your card model
-          // Add other relevant fields from card if available and needed by the crew
         },
-        user_id: card.userId, // Explicitly pass user_id for the request
+        user_id: card.userId,
       };
+
+      console.log(
+        '[CardDetailPage] handleRewriteContent: Sending payload to /api/ai/rewrite-content for task submission:',
+        JSON.stringify(payload, null, 2),
+      );
 
       const response = await fetch('/api/ai/rewrite-content', {
         method: 'POST',
@@ -644,40 +766,185 @@ export default function CardDetailPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
-
-      if (!response.ok || data.error_message) {
-        throw new Error(data.error_message || 'Failed to rewrite content');
-      }
-
-      if (data.ai_rewritten_content_blocks) {
-        const mappedRewrittenBlocks = mapContentBlocksToPartialBlocks(data.ai_rewritten_content_blocks);
-        setRewrittenContentBlocks(mappedRewrittenBlocks);
-        toast({
-          title: 'Content Rewrite Received!',
-          status: 'success',
-          duration: 3000,
-          isClosable: true,
-        });
-      } else {
-        throw new Error('Rewrite successful but no content blocks returned.');
+      if (response.status === 202) { // Task submitted successfully
+        const result = await response.json();
+        if (result.task_id) {
+          setTaskId(result.task_id);
+          toast({
+            title: 'Rewrite Task Submitted',
+            description: `Task ID: ${result.task_id}. Polling for results...`,
+            status: 'info',
+            duration: 3000,
+            isClosable: true,
+          });
+          // Polling will be handled by the useEffect hook watching `taskId`
+          // setIsRewritingContent(true) is already set and polling will turn it off
+        } else {
+          // This case should ideally not happen if backend sends 202 correctly with task_id
+          throw new Error('Task ID not found in submission response despite 202 status.');
+        }
+      } else { // Handle other non-202 responses as errors
+        const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+        throw new Error(
+          errorData.message ||
+            `Error submitting rewrite task: ${response.statusText}`,
+        );
       }
     } catch (err) {
-      console.error('Rewrite content error:', err);
-      const message = err instanceof Error ? err.message : 'Could not rewrite content.';
+      console.error('Error submitting rewrite task:', err);
+      const message = err instanceof Error ? err.message : 'Could not submit rewrite task.';
+      setRewriteError(message);
       toast({
-        title: 'Error Rewriting Content',
+        title: 'Submission Error',
         description: message,
         status: 'error',
         duration: 5000,
         isClosable: true,
       });
-      setShowSideBySideView(false); // Ensure side-by-side is hidden on error
-    } finally {
+      // Reset UI on submission error
       setIsRewritingContent(false);
-      // Do not hide setShowSideBySideView here, it's controlled by user actions now
+      setShowSideBySideView(false);
+      setOriginalContentForComparison(null);
+      // No taskId set, so polling won't start
     }
+    // The finally block that set setIsRewritingContent(false) is removed.
+    // Loading state is now managed by the polling useEffect upon completion/failure/timeout.
   };
+
+  // useEffect for polling AI Rewrite task status
+  useEffect(() => {
+    if (!taskId || !isRewritingContent) {
+      if (pollingIntervalId) {
+        clearInterval(pollingIntervalId);
+        setPollingIntervalId(null);
+      }
+      return;
+    }
+
+    const intervalId = setInterval(async () => {
+      console.log(`[CardDetailPage] Polling task status for ID: ${taskId}, Attempt: ${pollingAttempts + 1}`);
+      try {
+        const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
+        if (!response.ok) {
+          // Handle non-200 responses during polling (e.g., 404 if task ID is wrong after a bit)
+          const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+          throw new Error(errorData.message || `Failed to poll task status: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status === 'COMPLETED') {
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttempts(0);
+          setTaskId(null);
+
+          if (data.resultData && data.resultData.ai_rewritten_content_blocks) {
+            const mappedRewrittenBlocks = mapContentBlocksToPartialBlocks(data.resultData.ai_rewritten_content_blocks);
+            setRewrittenContentBlocks(mappedRewrittenBlocks);
+            // setShowSideBySideView(true) should already be true from handleRewriteContent call earlier
+            toast({
+              title: 'Content Rewritten Successfully',
+              description: 'AI has completed rewriting the content.',
+              status: 'success',
+              duration: 3000,
+              isClosable: true,
+            });
+          } else {
+            // This case indicates a problem with the backend result even if status is COMPLETED
+            throw new Error('Rewrite completed, but no content was returned.');
+          }
+        } else if (data.status === 'FAILED') {
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttempts(0);
+          setTaskId(null);
+          setCurrentProgressMessage(null); // ADDED: Clear progress
+          const errorMessage = data.errorMessage || 'Rewrite task failed with no specific error message.';
+          setRewriteError(errorMessage);
+          toast({
+            title: 'Rewrite Task Failed',
+            description: errorMessage,
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
+          setShowSideBySideView(false); // Hide SBS view on failure
+          setOriginalContentForComparison(null); // Clear original content for comparison too
+        } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
+          setCurrentProgressMessage(data.progressStage || 'Processing...'); // ADDED: Update progress
+          if (pollingAttempts + 1 >= MAX_POLLING_ATTEMPTS) {
+            clearInterval(intervalId);
+            setPollingIntervalId(null);
+            setIsRewritingContent(false);
+            setPollingAttempts(0);
+            setTaskId(null);
+            setCurrentProgressMessage(null); // ADDED: Clear progress
+            const timeoutMessage = 'Rewrite task timed out after several attempts.';
+            setRewriteError(timeoutMessage);
+            toast({
+              title: 'Rewrite Timeout',
+              description: timeoutMessage,
+              status: 'error',
+              duration: 5000,
+              isClosable: true,
+            });
+            setShowSideBySideView(false); // Hide SBS view on timeout
+            setOriginalContentForComparison(null);
+          }
+        } else {
+          // Unknown status from backend
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttempts(0);
+          setTaskId(null);
+          setCurrentProgressMessage(null); // ADDED: Clear progress
+          const unknownStatusMessage = `Received an unknown task status: ${data.status}`;
+          setRewriteError(unknownStatusMessage);
+          toast({
+            title: 'Unknown Task Status',
+            description: unknownStatusMessage,
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
+          setShowSideBySideView(false);
+          setOriginalContentForComparison(null);
+        }
+      } catch (error) {
+        // Catch all errors from fetch or data processing within the interval
+        clearInterval(intervalId);
+        setPollingIntervalId(null);
+        setIsRewritingContent(false);
+        setPollingAttempts(0);
+        setTaskId(null);
+        setCurrentProgressMessage(null); // ADDED: Clear progress
+        const errorMessage =
+          error instanceof Error ? error.message : 'An unknown error occurred during polling';
+        setRewriteError(errorMessage);
+        toast({
+          title: 'Polling Error',
+          description: errorMessage,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
+        setShowSideBySideView(false); // Hide SBS on polling error
+        setOriginalContentForComparison(null);
+      }
+    }, POLLING_INTERVAL_MS);
+
+    setPollingIntervalId(intervalId); // Store the interval ID so it can be cleared
+
+    // Cleanup function for the useEffect
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      setPollingIntervalId(null); // Clear stored interval ID on cleanup
+    };
+  }, [taskId, isRewritingContent, pollingAttempts, toast, pollingIntervalId]); // Added pollingIntervalId to dependencies
 
   // ADDED: Handler to accept rewritten content
   const handleAcceptRewrite = () => {
@@ -1202,36 +1469,31 @@ export default function CardDetailPage() {
                 fontFamily="'Open Sans', sans-serif"
                 fontSize="18px"
               />
-              {/* RE-INSERTED: Suggest Title Button and Display */}
-              {isEditing && !showSideBySideView && (
-                <Box mt={2}>
+              {isEditing && (
+                <HStack mt={2} spacing={2}>
                   <Button
                     size="sm"
                     onClick={handleSuggestTitle}
                     isLoading={isSuggestingTitle}
-                    loadingText="Suggesting..."
-                    colorScheme="purple"
+                    isDisabled={isSuggestingTitle || !isEditing || isSaving || showSideBySideView}
                   >
-                    Suggest Title with AI
+                    Suggest Title
                   </Button>
-                  {suggestedTitle && !isSuggestingTitle && (
-                    <Flex mt={2} align="center">
-                      <Text mr={2} fontSize="sm">
-                        Suggested: &quot;{suggestedTitle}&quot;
-                      </Text>
-                      <Button
-                        size="xs"
-                        colorScheme="teal"
-                        onClick={() => {
-                          setTitle(suggestedTitle);
-                          setSuggestedTitle(null);
-                        }}
-                      >
-                        Use this title
-                      </Button>
-                    </Flex>
+                  {suggestedTitle && (
+                    <Button
+                      size="sm"
+                      colorScheme="teal"
+                      variant="outline"
+                      onClick={() => {
+                        setTitle(suggestedTitle);
+                        setSuggestedTitle(null);
+                      }}
+                      isDisabled={!isEditing || isSaving}
+                    >
+                      Apply: "{suggestedTitle.substring(0,30)}{suggestedTitle.length > 30 ? '...' : ''}"
+                    </Button>
                   )}
-                </Box>
+                </HStack>
               )}
             </FormControl>
 
@@ -1276,9 +1538,8 @@ export default function CardDetailPage() {
                     />
                   </ChakraTag>
                 ))}
-                {/* RE-INSERTED: Suggest Keywords Button and Display */}
                 {isEditing && !showSideBySideView && (
-                  <Box mt={3}> {/* Adjusted margin if needed */}
+                  <Box mt={3}>
                     <Button
                       size="sm"
                       onClick={handleSuggestKeywords}
@@ -1444,6 +1705,28 @@ export default function CardDetailPage() {
           </AlertDialogContent>
         </AlertDialogOverlay>
       </AlertDialog>
+
+      {/* Use the extracted SideBySideComparisonModal component */}
+      <SideBySideComparisonModal
+        isOpen={showSideBySideView}
+        onClose={() => {
+          // If closing the modal manually (e.g. Escape key or close button)
+          // treat it like a discard if a rewrite was in progress or completed.
+          if (isRewritingContent || rewrittenContentBlocks) {
+            handleDiscardRewrite(); // This already sets showSideBySideView to false
+          } else {
+            setShowSideBySideView(false);
+          }
+        }}
+        originalContent={originalContentForComparison}
+        rewrittenContent={rewrittenContentBlocks}
+        onAccept={handleAcceptRewrite}
+        onDiscard={handleDiscardRewrite}
+        isLoadingRewrite={isRewritingContent}
+        errorOnRewrite={rewriteError}
+        currentProgressMessageForModal={currentProgressMessage}
+        modalEditorKey={editorKey}
+      />
     </Container>
   );
 }

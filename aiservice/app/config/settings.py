@@ -7,9 +7,9 @@ import os
 # --- Determine the path to the .env file relative to this settings.py file ---
 # Directory where settings.py is located (aiservice/app/config)
 _SETTINGS_DIR = os.path.dirname(os.path.abspath(__file__))
-# Path to .env file (should be in aiservice/.env)
-# So, go up two directories (config -> app -> aiservice) then find .env
-_ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(_SETTINGS_DIR)), ".env")
+# Path to .env file (should be in the project root, one level above the 'aiservice' directory)
+# aiservice/app/config -> aiservice/app -> aiservice -> project_root
+_ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_SETTINGS_DIR))), ".env")
 
 class WebServiceSpecificSettings(BaseSettings):
     # Copied from MockWebServiceSettings in web_service.py and defaults from WebService constructor
@@ -53,11 +53,14 @@ class Settings(BaseSettings):
     app_name: str = "ThinkStash AI Service"
     debug_mode: bool = Field(default=False, description="Enable debug mode for more verbose logging.")
 
+    # Database URL (for PostgreSQL)
+    database_url: Optional[str] = Field(None, env="DATABASE_URL", description="PostgreSQL database connection URL.")
+
     # LLM Configuration - Focused on Gemini via OpenAI Compatibility Layer
     # This will load GEMINI_API_KEY from the .env file
     gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY", description="API key for Gemini models (used by OpenAI compatibility layer).")
     
-    # Flag to explicitly use the Gemini via OpenAI compatibility layer strategy
+    # Flag to explicitly use the Gemini via OpenAI compatibility layer
     use_gemini_via_openai_compatibility: bool = Field(default=True, env="USE_GEMINI_VIA_OPENAI_COMPATIBILITY", description="Flag to enable Gemini via OpenAI compatibility layer.")
     
     # Model name for the text generation, as used by the OpenAI compatibility layer

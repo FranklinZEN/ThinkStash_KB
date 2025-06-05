@@ -829,34 +829,6 @@ class WebAcquisitionService(BaseService):
             preliminary_blocks = parsed_blocks_pass1
             raw_images = raw_images_pass1
 
-            # Fallback: If Trafilatura gave content but we found no images from its output,
-            # try parsing the full original HTML to recover images.
-            if main_content_html_trafilatura and not raw_images:
-                self.logger.warning(f"No images found after parsing Trafilatura output for {final_url_after_redirects}. Attempting fallback to parse full HTML for images.")
-                # ADDED: Log the full HTML content being used for fallback
-                self.logger.debug(f"FALLBACK_HTML_CONTENT for {final_url_after_redirects} (first 5000 chars):\n{fetched_content[:5000]}")
-                
-                # Clear previous results (or decide if you want to merge, for now, let's re-process full)
-                # To avoid duplicate text blocks if Trafilatura already got good text, a more sophisticated merge would be needed.
-                # For simplicity now: if Trafilatura missed images, we re-process the whole original page.
-                # This might degrade text quality if the full page is noisy compared to Trafilatura's output.
-                preliminary_blocks_fallback, raw_images_fallback = await self._parse_and_structure_html(
-                    html_content=fetched_content, # Parse the original full HTML
-                    base_url=final_url_after_redirects,    
-                    original_request_url=final_url_after_redirects, 
-                    job_id=job_id_for_run,
-                    user_id=user_id_for_run,
-                    playwright_image_details_map=playwright_image_details_map # Pass PW details again
-                )
-                # Decide how to combine. For now, if fallback yields images, prioritize its output.
-                # A more nuanced approach might merge text from pass1 and images from fallback.
-                if raw_images_fallback:
-                    self.logger.info(f"Fallback to full HTML parsing for {final_url_after_redirects} yielded {len(raw_images_fallback)} images. Using fallback results.")
-                    preliminary_blocks = preliminary_blocks_fallback
-                    raw_images = raw_images_fallback
-                else:
-                    self.logger.warning(f"Fallback to full HTML parsing for {final_url_after_redirects} also yielded no images.")
-            
             duration = time.time() - start_time
             self.logger.info(f"WebService execution for {final_url_after_redirects} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")
             

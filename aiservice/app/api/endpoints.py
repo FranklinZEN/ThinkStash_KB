@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi import APIRouter, HTTPException, Body, Depends, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool # Added for non-blocking execution
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict
 import logging # For general logging
 import uuid # For generating unique IDs if needed for some operations
+import psycopg2
+import psycopg2.extras # For dictionary cursor
+import json # For serializing data to JSON for DB
+import datetime
 
 # Pydantic Models for request/response bodies
 from aiservice.app.models.insight_generation_models import (
@@ -12,6 +16,7 @@ from aiservice.app.models.insight_generation_models import (
 )
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationInput, OrchestrationOutput # Added OrchestrationInput, OrchestrationOutput
 from aiservice.app.models.pipeline_models import DocumentMetadata, RawImageInput # Added DocumentMetadata, RawImageInput
+from aiservice.app.models.task_models import TaskStatus # Enum for task statuses
 
 # LLM Configuration - This might be handled within the crew/agents now
 # from aiservice.app.config.llm_config import get_configured_llm # Commented out as manager should handle LLM
@@ -22,7 +27,7 @@ from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerat
 from aiservice.app.crews.keyword_extraction_crew import GeneralPurposeKeywordExtractionCrew
 
 # Settings and Services for Orchestrator
-from aiservice.app.config.settings import Settings
+from aiservice.app.config.settings import Settings, settings # To get DATABASE_URL
 from aiservice.app.services.orchestrator import ParallelOrchestrator
 from aiservice.app.services.routing_service import RoutingService
 from aiservice.app.services.acquisition.web_service import WebAcquisitionService
@@ -32,6 +37,16 @@ from aiservice.app.services.processing.image_processing_service import ImageProc
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
 from aiservice.app.config.logging_config import get_logger # Corrected local import
 # TODO: Check if any of the above services require additional tool imports for their instantiation if not using DI
+
+# --- Imports for DB Utils ---
+from aiservice.app.services.task_db_service import (
+    get_db_connection,
+    update_task_status_processing,
+    update_task_status_completed,
+    update_task_status_failed,
+    update_task_status_failed_background_error
+)
+# --- End Imports for DB Utils ---
 
 router = APIRouter()
 
@@ -285,3 +300,163 @@ async def generate_keywords_endpoint(request_data: KeywordExtractionRequest = Bo
 # async def generate_keywords(payload: GenerateKeywordsInput):
 #     # Logic to call GeneralPurposeKeywordExtractionCrew
 #     pass 
+
+# --- Background Task for Content Rewrite (Refactored to use task_db_service) ---
+async def process_rewrite_task_in_background(
+    task_id: str,
+    user_id: Optional[str],
+    content_blocks_to_rewrite_dict: List[Dict],
+    document_metadata_dict: Optional[Dict]
+):
+    logger = get_logger(__name__)
+    logger.info(f"[Task {task_id}] Background processing started.")
+    conn = None
+    try:
+        conn = get_db_connection() # Now from task_db_service
+        
+        update_task_status_processing(task_id, conn)
+        logger.info(f"[Task {task_id}] Status updated to PROCESSING via db_service.") # Updated log message
+
+        # Reconstruct RewriteContentInput for the manager
+        from aiservice.app.models.insight_generation_models import RewriteContentInput
+        from aiservice.app.models.orchestration_models import ContentBlock 
+        from aiservice.app.models.pipeline_models import DocumentMetadata 
+
+        parsed_content_blocks = []
+        if content_blocks_to_rewrite_dict:
+            for block_dict in content_blocks_to_rewrite_dict:
+                parsed_content_blocks.append(ContentBlock(**block_dict))
+        
+        parsed_doc_metadata = None
+        if document_metadata_dict:
+            parsed_doc_metadata = DocumentMetadata(**document_metadata_dict)
+        
+        actual_rewrite_input = RewriteContentInput(
+            content_blocks_to_rewrite=parsed_content_blocks,
+            document_metadata=parsed_doc_metadata,
+            user_id=user_id,
+            original_content_blocks_json_string=None 
+        )
+        
+        # Pass task_id and conn to the manager for progress updates
+        manager = ContentRewriteCrewManager(
+            rewrite_input=actual_rewrite_input,
+            task_id=task_id,
+            db_connection=conn
+        )
+        output: RewriteContentOutput = manager.run()
+
+        logger.info(f"[Task {task_id}] Rewrite processing completed by manager.")
+
+        if output.error_message:
+            logger.error(f"[Task {task_id}] Rewrite failed: {output.error_message}")
+            update_task_status_failed(task_id, output.error_message, conn)
+        else:
+            logger.info(f"[Task {task_id}] Rewrite successful. Storing results.")
+            result_payload_for_db = {
+                "ai_rewritten_content_blocks": [block.model_dump() for block in output.ai_rewritten_content_blocks],
+                "usage_metrics": output.usage_metrics,
+                "processing_time_ms": output.processing_time_ms,
+                "trace_id": output.trace_id
+            }
+            update_task_status_completed(task_id, result_payload_for_db, conn)
+        
+        logger.info(f"[Task {task_id}] Database updated with final status via db_service.") # Updated log message
+
+    except Exception as e:
+        logger.error(f"[Task {task_id}] Error in background task: {e}", exc_info=True)
+        if conn: # conn might be None if get_db_connection() failed
+            try:
+                error_msg_for_db = f"Background processing error: {str(e)}"
+                update_task_status_failed_background_error(task_id, error_msg_for_db, conn)
+            except Exception as db_service_err:
+                logger.error(f"[Task {task_id}] CRITICAL: Failed to update task status to FAILED via db_service after background error: {db_service_err}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+        logger.info(f"[Task {task_id}] Background processing finished.")
+
+
+# --- New Asynchronous Task Submission Endpoint (Uses its own get_db_connection for initial insert) ---
+@router.post("/submit-rewrite-task", 
+              status_code=202, 
+              response_model=dict, 
+              summary="Submit a Content Rewrite Task Asynchronously",
+              description="Accepts content for rewriting, creates a task, and processes it in the background.")
+async def submit_rewrite_task(
+    payload: RewriteContentInput, 
+    background_tasks: BackgroundTasks
+):
+    logger = get_logger(__name__)
+    task_id = str(uuid.uuid4())
+    conn = None
+    # For the initial insert, we'll still use a local connection logic or could also use get_db_connection from service
+    # Let's switch this to use the shared get_db_connection as well for consistency
+    
+    logger.info(f"Received submission for rewrite task. Assigning task_id: {task_id}")
+
+    try:
+        conn = get_db_connection() # Use the one from task_db_service
+        
+        input_data_dict = {
+            "original_content_blocks": [block.model_dump(exclude_none=True) for block in payload.content_blocks_to_rewrite],
+            "document_metadata": payload.document_metadata.model_dump(exclude_none=True) if payload.document_metadata else None
+        }
+        input_data_json = json.dumps(input_data_dict)
+        current_time = datetime.datetime.utcnow()
+
+        # This part remains a direct DB call, as it's an INSERT not an UPDATE handled by current db_utils
+        # Could be refactored into a create_ai_task in db_utils later if desired.
+        with conn.cursor() as cur:
+            sql = '''
+            INSERT INTO "AITask" (id, "userId", "taskType", status, "inputData", "createdAt", "updatedAt")
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            '''
+            cur.execute(sql, (
+                task_id, 
+                payload.user_id, 
+                "CONTENT_REWRITE", 
+                TaskStatus.PENDING.value, 
+                input_data_json, 
+                current_time, 
+                current_time
+            ))
+            conn.commit()
+        logger.info(f"[Task {task_id}] Successfully created in DB with status PENDING.")
+
+        background_tasks.add_task(
+            process_rewrite_task_in_background, 
+            task_id,
+            payload.user_id,
+            [block.model_dump(exclude_none=True) for block in payload.content_blocks_to_rewrite],
+            payload.document_metadata.model_dump(exclude_none=True) if payload.document_metadata else None
+        )
+        logger.info(f"[Task {task_id}] Queued for background processing.")
+        
+        return {"task_id": task_id}
+
+    except Exception as e: # Catches errors from get_db_connection or the INSERT block
+        logger.error(f"Failed to submit rewrite task {task_id}: {e}", exc_info=True)
+        if isinstance(e, ConnectionError): # Specific error from our get_db_connection
+            raise HTTPException(status_code=503, detail=str(e)) # Service Unavailable
+        raise HTTPException(status_code=500, detail=f"Failed to submit rewrite task: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+            logger.info(f"[Task {task_id}] DB connection closed for submission endpoint.")
+
+
+# Ensure this new endpoint is registered with the main FastAPI app
+# This is usually done by including this router in aiservice/main.py
+# e.g., app.include_router(endpoints_router, prefix="/api/v1/ai", tags=["AI Endpoints"])
+# The path for this new endpoint will be /api/v1/ai/api/v1/ai/submit-rewrite-task if the prefix is /api/v1/ai for the router
+# Or, if the main app includes this router at / , then the path would be /api/v1/ai/submit-rewrite-task
+# Let's adjust the endpoint path to be relative to the router's prefix.
+# The router prefix is typically defined in main.py when including the router.
+# Assuming the router is mounted at /api/v1/ai, then the endpoint path should be /submit-rewrite-task
+
+# Corrected path for the new endpoint, assuming router is mounted at /api/v1/ai
+# @router.post("/submit-rewrite-task", ...)
+# The previous @router.post("/api/v1/ai/submit-rewrite-task" was likely too specific if the router has a prefix.
+# Let's remove the /api/v1/ai part from the decorator path as it will be handled by the main app's router inclusion.
+# (Correcting the endpoint path in the edit block if it's wrong there) 
