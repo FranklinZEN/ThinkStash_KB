@@ -17,11 +17,14 @@ interface TaskStatusResponse {
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { taskId: string } },
+  { params }: { params: Promise<{ taskId: string }> },
 ): Promise<NextResponse> {
   let resolvedTaskId: string | undefined;
 
   try {
+    const { taskId } = await params;
+    resolvedTaskId = taskId;
+
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       // No taskId available yet for this specific log, but context is clear
@@ -32,10 +35,6 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userIdFromSession = session.user.id;
-
-    // Await params as suggested by the error log if needed, but often it's directly available
-    // For route handlers, params is usually directly an object: { taskId: string }
-    resolvedTaskId = params.taskId;
 
     console.info('GET /ai/rewrite-status/[taskId] request received', {
       taskId: resolvedTaskId,
@@ -146,7 +145,7 @@ export async function GET(
     return NextResponse.json(responsePayload);
   } catch (error) {
     console.error('Unhandled error in /ai/rewrite-status/[taskId] API route', {
-      taskId: resolvedTaskId || params.taskId || 'unknown_taskId_in_catch',
+      taskId: resolvedTaskId || 'unknown_taskId_in_catch',
       errorDetails:
         error instanceof Error
           ? { message: error.message, stack: error.stack }

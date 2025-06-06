@@ -1,38 +1,31 @@
-import { FlatCompat } from '@eslint/eslintrc';
+// eslint.config.js
+import nextConfig from 'eslint-config-next';
+import prettierConfig from 'eslint-config-prettier';
 
-const compat = new FlatCompat();
-
-const config = [
+export default [
   {
     ignores: [
-      'node_modules/**',
-      '.next/**',
-      'out/**',
-      'build/**',
-      'generated/**',
-      'eslint.config.js',
-      '.venv/**',
-      'dist/**',
-      'coverage/**',
-      'public/**',
-      'documentation/**',
-      'aiservice/.venv/**',
-    ],
+      "node_modules/**", ".next/**", "out/**", "build/**",
+      "generated/**", ".venv/**", "dist/**", "coverage/**",
+      "public/**", "documentation/**", "aiservice/.venv/**"
+    ]
   },
-  ...compat.extends('next/core-web-vitals'),
-  ...compat.extends('plugin:@typescript-eslint/recommended'),
-  ...compat.extends('prettier'),
-  {
-    files: ["**/*.ts", "**/*.tsx"],
-    rules: {
-      '@typescript-eslint/no-unused-vars': ['warn', {
-        varsIgnorePattern: '^_',
-        argsIgnorePattern: '^_',
-        ignoreRestSiblings: true
-      }],
-      '@typescript-eslint/no-explicit-any': 'warn',
-    },
-  },
-];
 
-export default config; 
+  // Use the Next.js config as the primary source of truth.
+  nextConfig,
+
+  // Your project-specific rule overrides.
+  {
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-unused-vars': ['warn', {
+        "varsIgnorePattern": "^_",
+        "argsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }],
+    }
+  },
+
+  // Add Prettier config LAST to disable conflicting style rules.
+  prettierConfig,
+]; 
