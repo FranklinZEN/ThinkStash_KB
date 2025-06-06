@@ -25,7 +25,7 @@ from aiservice.app.config.settings import Settings
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
 from aiservice.app.models.task_output_models import SummarizerTaskOutput, StructuredSummary, Segment
-from aiservice.app.services.task_db_service import update_task_progress_stage
+from aiservice.app.services.task_db_service import update_task_progress_stage, update_task_status_completed, update_task_status_failed
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,8 @@ class ContentRewriteCrewManager:
                  rewrite_input: RewriteContentInput,
                  task_id: Optional[str] = None,
                  db_connection: Optional[Any] = None,
-                 verbose_level: int = 0):
+                 verbose_level: int = 0,
+                 correlation_id: Optional[str] = None):
         """
         Initializes the crew manager with the necessary input data.
         Args:
@@ -44,30 +45,34 @@ class ContentRewriteCrewManager:
             task_id: The ID of the current task, for progress updates.
             db_connection: Active database connection for progress updates.
             verbose_level: Integer to control verbosity of logs. 0 = minimal.
+            correlation_id: Optional correlation ID for end-to-end request tracing.
         """
         self.rewrite_input = rewrite_input
-        self.task_id = task_id
+        self.task_id = task_id if task_id else str(uuid.uuid4())
         self.db_connection = db_connection
         self.verbose_level = verbose_level
+        self.correlation_id = correlation_id
         
-        # Determine user_id for the rewrite operation (self.user_id_for_rewrite)
-        self.user_id_for_rewrite = "default_user_id_rewrite_op" # Default
+        self.user_id_for_rewrite = "default_user_id_rewrite_op"
         if self.rewrite_input.user_id:
             self.user_id_for_rewrite = self.rewrite_input.user_id
         elif self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.user_id:
             self.user_id_for_rewrite = self.rewrite_input.document_metadata.user_id
         
-        # Determine the original document_id if available (for logging/reference, not for new blocks)
-        self.original_document_id = "original_doc_id_not_found" # Default
+        self.original_document_id = "original_doc_id_not_found"
         if self.rewrite_input.document_metadata and self.rewrite_input.document_metadata.document_id:
             self.original_document_id = self.rewrite_input.document_metadata.document_id
 
-        # Generate a new unique document_id for the rewritten content blocks
         self.new_rewritten_document_id = str(uuid.uuid4())
 
-        print(f"INFO: ContentRewriteCrewManager initialized. User ID for rewrite: {self.user_id_for_rewrite}, Original Document ID: {self.original_document_id}, New Rewritten Document ID: {self.new_rewritten_document_id}")
+        logger.info("ContentRewriteCrewManager initialized", extra={
+            'task_id': self.task_id,
+            'correlation_id': self.correlation_id,
+            'user_id_for_rewrite': self.user_id_for_rewrite,
+            'original_document_id': self.original_document_id,
+            'new_rewritten_document_id': self.new_rewritten_document_id
+        })
         
-        # Pass user_id_for_rewrite and new_rewritten_document_id to ContentRewriteAgents
         self.agents_factory = ContentRewriteAgents(
             user_id=self.user_id_for_rewrite,
             document_id_for_output_blocks=self.new_rewritten_document_id
@@ -197,49 +202,73 @@ class ContentRewriteCrewManager:
     def _clean_json_string(self, raw_output: Optional[str]) -> Optional[str]:
         """
         Cleans the raw LLM output to extract a valid JSON string.
-        Handles markdown code blocks (triple and single backticks) and attempts to find a JSON object.
+        Handles markdown code blocks and finds the main JSON object, ignoring leading/trailing text.
         Returns the cleaned JSON string or None if no valid JSON object is found.
         """
         if not raw_output:
             return None
         
-        # Pattern to find JSON within ```json ... ``` or ``` ... ```
-        # It also handles cases where 'json' might be missing after ```
-        # DOTALL allows . to match newlines, MULTILINE is not needed here as we search the whole string
-        match_triple = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
-        if match_triple:
-            return match_triple.group(1).strip()
-
-        # Pattern to find JSON within ` ... ` (single backticks)
-        match_single = re.search(r"`(\{.*\})`", raw_output, re.DOTALL)
-        if match_single:
-            return match_single.group(1).strip()
+        # Enhanced pattern to find JSON within ```json ... ``` or ``` ... ```, more resilient to variations
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw_output, re.DOTALL)
         
-        # If the raw output itself looks like a JSON object (e.g. agent returned only JSON)
-        # This is a fallback and might be too greedy if the string contains {} but isn't valid JSON.
-        stripped_output = raw_output.strip()
-        if stripped_output.startswith("{") and stripped_output.endswith("}"):
+        content_to_parse = raw_output
+        if match:
+            # If a markdown block is found, parse its content
+            content_to_parse = match.group(1).strip()
+        
+        # Find the first '{' and the last '}' to isolate the main JSON object
+        # This is effective against leading/trailing garbage text from the LLM
+        start_brace_index = content_to_parse.find('{')
+        end_brace_index = content_to_parse.rfind('}')
+        
+        if start_brace_index != -1 and end_brace_index > start_brace_index:
+            json_str_candidate = content_to_parse[start_brace_index : end_brace_index + 1]
             try:
-                # Validate if it's actually parseable JSON
-                json.loads(stripped_output)
-                return stripped_output
-            except json.JSONDecodeError:
-                # It looked like a JSON object but wasn't valid.
-                logger.debug(f"_clean_json_string: Stripped output '{stripped_output[:100]}...' looked like JSON but failed to parse.")
-                pass # Fall through to return None or let other patterns try
+                # The final check: ensure the extracted string is valid JSON
+                json.loads(json_str_candidate)
+                return json_str_candidate
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"Extracted string appeared to be a JSON object but failed validation.",
+                    extra={
+                        'task_id': self.task_id, 
+                        'correlation_id': self.correlation_id,
+                        'error': str(e),
+                        'json_candidate': json_str_candidate[:500] # Log a preview of the invalid string
+                    }
+                )
+                return None # Return None if parsing fails
 
-        logger.warning(f"_clean_json_string: Could not extract JSON object from raw_output using common patterns. Raw output (first 200 chars): {raw_output[:200]}")
-        return None # Return None if no JSON object is reliably extracted
+        logger.warning(
+            "Could not extract a valid JSON object from the raw output.",
+            extra={
+                'task_id': self.task_id,
+                'correlation_id': self.correlation_id,
+                'raw_output_preview': raw_output[:500]
+            }
+        )
+        return None
 
     def safe_parse_to_content_blocks(self, data: Any, field_name: str) -> List[ContentBlock]:
         parsed_blocks: List[ContentBlock] = []
         if not isinstance(data, list):
-            print(f"ERROR: Data for '{field_name}' is not a list, but type {type(data)}. Cannot parse into ContentBlocks.") # Retained
+            logger.error("Data for field is not a list, cannot parse into ContentBlocks.", extra={
+                'task_id': self.task_id,
+                'correlation_id': self.correlation_id,
+                'field_name': field_name,
+                'data_type': str(type(data))
+            })
             return []
 
         for i, item in enumerate(data):
             if not isinstance(item, dict):
-                print(f"ERROR: Item {i} in '{field_name}' is not a dictionary, but type {type(item)}. Skipping.") # Retained
+                logger.error("Item in field is not a dictionary, skipping.", extra={
+                    'task_id': self.task_id,
+                    'correlation_id': self.correlation_id,
+                    'field_name': field_name,
+                    'item_index': i,
+                    'item_type': str(type(item))
+                })
                 continue
             try:
                 if 'block_id' not in item or item['block_id'] is None:
@@ -249,283 +278,324 @@ class ContentRewriteCrewManager:
                     if 'content' in item and isinstance(item['content'], str):
                          item['type'] = 'text'
                     else:
-                        print(f"WARNING: Item {i} in '{field_name}' is missing 'type' and cannot infer. Skipping. Item: {str(item)[:100]}") # Retained
+                        logger.warning("Content block item is missing 'type' and cannot be inferred to 'text'. Skipping.", extra={
+                            'task_id': self.task_id,
+                            'correlation_id': self.correlation_id,
+                            'item_index': i,
+                            'item_preview': str(item)[:200]
+                        })
                         continue
 
-                block = ContentBlock(**item)
-                parsed_blocks.append(block)
-            except Exception as e:
-                print(f"ERROR: Failed to validate item {i} in '{field_name}' as ContentBlock. Error: {e}. Item: {str(item)[:200]}") # Retained
-        
-        if data and not parsed_blocks:
-             print(f"WARNING: Input data for '{field_name}' was non-empty but resulted in zero successfully parsed ContentBlocks.") # Retained
-        elif not data:
-             pass
+                if item['type'] not in ['text', 'image', 'video', 'audio', 'file', 'embed', 'link', 'divider', 'heading', 'list_item', 'list']:
+                    logger.error("Content block item has an unrecognized 'type'.", extra={
+                        'task_id': self.task_id,
+                        'correlation_id': self.correlation_id,
+                        'item_index': i,
+                        'block_type': item.get('type'),
+                        'item_preview': str(item)[:200]
+                    })
+                    continue 
+                
+                if item['type'] == 'image':
+                    if 'image_url' not in item or not item['image_url']:
+                         logger.warning("Image block is missing 'image_url'. Attempting to use 'gcs_url'.", extra={
+                            'task_id': self.task_id,
+                            'correlation_id': self.correlation_id,
+                            'item_index': i,
+                            'item_data': str(item)[:200]
+                         })
+                         if 'gcs_url' in item and item['gcs_url']:
+                             item['image_url'] = item['gcs_url']
+                         else:
+                             logger.error("Image block is missing 'image_url' and 'gcs_url'. Skipping.", extra={
+                                 'task_id': self.task_id,
+                                 'correlation_id': self.correlation_id,
+                                 'item_index': i,
+                                 'item_data': str(item)[:200]
+                             })
+                             continue
 
+                if 'document_id' not in item or item['document_id'] is None:
+                    item['document_id'] = self.new_rewritten_document_id
+                
+                if 'user_id' not in item or item['user_id'] is None:
+                    item['user_id'] = self.user_id_for_rewrite
+
+                parsed_blocks.append(ContentBlock(**item))
+            except ValidationError as e:
+                logger.error("Pydantic validation error for item in field.", extra={
+                    'task_id': self.task_id,
+                    'correlation_id': self.correlation_id,
+                    'field_name': field_name,
+                    'item_index': i,
+                    'validation_error': str(e),
+                    'item_data': str(item)[:200]
+                })
+            except Exception as e_gen:
+                logger.error("Generic error parsing item in field.", extra={
+                    'task_id': self.task_id,
+                    'correlation_id': self.correlation_id,
+                    'field_name': field_name,
+                    'item_index': i,
+                    'error': str(e_gen),
+                    'item_data': str(item)[:200]
+                }, exc_info=True)
         return parsed_blocks
 
     def run(self) -> RewriteContentOutput:
         start_time = time.time()
-        logger.info(f"ContentRewriteCrewManager run initiated. User ID: {self.user_id_for_rewrite}, Rewritten Document ID: {self.new_rewritten_document_id}")
+        current_trace_id = self.correlation_id if self.correlation_id else self.task_id
 
-        parsed_content_blocks: List[ContentBlock] = []
-        usage_metrics_dict: Optional[Dict[str, Any]] = None
-        final_status_code: OrchestrationStatusCodeEnum = OrchestrationStatusCodeEnum.ERROR_UNKNOWN
-        final_error_message: Optional[str] = "Rewrite process did not complete successfully."
-
-        # Helper for progress updates
-        def _update_progress(stage_message: str):
-            if self.task_id and self.db_connection:
+        def _update_progress(stage_message: str, status_code_enum_member: Optional[OrchestrationStatusCodeEnum] = None):
+            logger.info(f"Progress: {stage_message}", extra={
+                'task_id': self.task_id, 
+                'correlation_id': self.correlation_id, 
+                'stage': stage_message,
+                'status_code': status_code_enum_member.value if status_code_enum_member else None
+            })
+            if self.task_id and self.db_connection and status_code_enum_member:
                 try:
                     update_task_progress_stage(self.task_id, stage_message, self.db_connection)
-                    logger.info(f"[Task {self.task_id}] Progress updated to: {stage_message}")
-                except Exception as e:
-                    logger.error(f"[Task {self.task_id}] Failed to update progress stage to '{stage_message}': {e}")
-            else:
-                logger.debug(f"Skipping progress update (task_id or db_connection not set): {stage_message}")
+                except Exception as e_db_progress:
+                    logger.error("Failed to update task progress in DB.", extra={
+                        'task_id': self.task_id,
+                        'correlation_id': self.correlation_id,
+                        'stage': stage_message,
+                        'status_code_being_set': status_code_enum_member.value if status_code_enum_member else 'N/A',
+                        'error': str(e_db_progress)
+                    }, exc_info=True)
 
-        _update_progress("Preparing content...")
+        logger.info("ContentRewriteCrewManager run method started.", extra={
+            'task_id': self.task_id, 
+            'correlation_id': self.correlation_id
+        })
+        _update_progress("Rewrite process initiated", OrchestrationStatusCodeEnum.REWRITE_STARTED)
 
-        # 1. Pre-process input
-        concatenated_text = ""
-        essential_image_metadata: List[Dict[str, Any]] = []
-        text_parts = []
-        for block in self.rewrite_input.content_blocks_to_rewrite:
-            if block.type == "text" and block.content:
-                text_parts.append(block.content)
-            elif block.type == "image" and block.image_id_ref:
-                normalized_gcs_url = block.gcs_url.replace("\\\\", "/") if block.gcs_url else None
-                essential_meta = {
-                    "image_id_ref": block.image_id_ref,
-                    "gcs_url": normalized_gcs_url,
-                    "alt_text": block.alt_text,
-                    "caption": block.caption,
-                    "llm_description": block.llm_description,
-                    "width": block.width,
-                    "height": block.height
-                }
-                essential_image_metadata.append({k: v for k, v in essential_meta.items() if v is not None})
-        concatenated_text = "\n\n".join(text_parts)
-        
-        essential_image_metadata_json = json.dumps(essential_image_metadata)
-
-        logger.info(f"ContentRewriteCrewManager: Populated essential_image_metadata for reconstruction tool: {essential_image_metadata_json[:200]}...")
-
-        # 2. Setup the crew
-        self.crew = self.setup_crew()
-
-        # 3. Prepare inputs for the crew's summarization task
-        crew_kickoff_inputs = {
-            'concatenated_text': concatenated_text,
-            'essential_image_metadata_for_summarizer_prompt': essential_image_metadata_json 
-        }
-        
-        _update_progress("Summarizing content with AI...")
-
-        if self.verbose_level > 1:
-            logger.debug(f"Kicking off crew with inputs (metadata potentially truncated for log):")
-            logger.debug(f"  concatenated_text length: {len(crew_kickoff_inputs['concatenated_text'])}")
-            logger.debug(f"  essential_image_metadata_for_summarizer_prompt: {crew_kickoff_inputs['essential_image_metadata_for_summarizer_prompt'][:200] if crew_kickoff_inputs['essential_image_metadata_for_summarizer_prompt'] else '[]'}...")
-
-        crew_result_raw: Any = None
-        summarizer_output_obj: Optional[SummarizerTaskOutput] = None
-        
         try:
-            # 4. Kick off the crew execution (only summarization task now)
-            crew_result_raw = self.crew.kickoff(inputs=crew_kickoff_inputs)
+            _update_progress("Preparing input for summarization agent", OrchestrationStatusCodeEnum.REWRITE_SUMMARIZATION_AGENT_STARTED)
+            concatenated_text = ""
+            if self.rewrite_input.content_blocks_to_rewrite:
+                concatenated_text = "\n\n".join(
+                    [block.content for block in self.rewrite_input.content_blocks_to_rewrite if block.type == "text" and block.content]
+                )
+            
+            essential_image_metadata = []
+            if self.rewrite_input.content_blocks_to_rewrite:
+                for block in self.rewrite_input.content_blocks_to_rewrite:
+                    if block.type == "image":
+                        # Direct access to flat attributes on the ContentBlock model
+                        essential_image_metadata.append({
+                            "image_id_ref": block.image_id_ref or block.block_id,
+                            "caption": block.caption,
+                            "alt_text": block.alt_text,
+                            "llm_description": block.llm_description,
+                            "gcs_url": block.gcs_url
+                        })
+            
+            if not concatenated_text and not essential_image_metadata:
+                logger.warning("No text or image content to rewrite.", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id
+                })
+                _update_progress("No content provided for rewrite", OrchestrationStatusCodeEnum.REWRITE_FAILED_EMPTY_INPUT)
+                return RewriteContentOutput(
+                    status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_EMPTY_INPUT.value,
+                    error_message="AI rewrite failed: No text or image content was provided.",
+                    ai_rewritten_content_blocks=[],
+                    trace_id=current_trace_id
+                )
 
-            # 5. Process usage metrics
-            if crew_result_raw and hasattr(self.crew, 'usage_metrics') and self.crew.usage_metrics:
-                um = self.crew.usage_metrics
-                temp_metrics_dict = {}
-                known_attrs = ['total_tokens', 'prompt_tokens', 'completion_tokens', 'successful_requests']
-                for attr in known_attrs:
-                    if hasattr(um, attr): temp_metrics_dict[attr] = getattr(um, attr)
+            self.crew = self.setup_crew()
+            logger.info("Content Rewrite Crew setup complete. Kicking off...", extra={
+                'task_id': self.task_id, 
+                'correlation_id': self.correlation_id
+            })
+            _update_progress("Summarization agent running", OrchestrationStatusCodeEnum.REWRITE_SUMMARIZATION_AGENT_PROCESSING)
+
+            crew_inputs = {
+                'concatenated_text': concatenated_text,
+                'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata)
+            }
+            
+            crew_result = self.crew.kickoff(inputs=crew_inputs)
+            
+            if not crew_result or not crew_result.tasks_output:
+                logger.error("Crew kickoff returned empty or no task outputs.", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id, 
+                    'crew_result_raw': str(crew_result)[:500]
+                })
+                _update_progress("Summarization agent failed to produce output", OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_AGENT_ERROR)
+                return RewriteContentOutput(
+                    status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_AGENT_ERROR.value,
+                    error_message="AI rewrite failed: The summarization agent did not produce any output.",
+                    ai_rewritten_content_blocks=[],
+                    trace_id=current_trace_id
+                )
+
+            logger.info(f"Crew kickoff completed. Number of task outputs: {len(crew_result.tasks_output)}", extra={
+                'task_id': self.task_id, 
+                'correlation_id': self.correlation_id
+            })
+            _update_progress("Summarization agent finished, processing output", OrchestrationStatusCodeEnum.REWRITE_SUMMARIZATION_AGENT_COMPLETED)
+
+            summarizer_task_output: Optional[TaskOutput] = None
+            for task_out in crew_result.tasks_output:
+                # Check agent name or a unique characteristic of the summarizer task's output/description
+                if hasattr(task_out, 'agent') and "Summarization Specialist" in str(task_out.agent):
+                     summarizer_task_output = task_out
+                     break
+                elif hasattr(task_out, 'description') and "Detailed Content Analysis and High-Fidelity Summarization Specialist" in task_out.description:
+                     summarizer_task_output = task_out
+                     break
+            
+            if not summarizer_task_output:
+                logger.error("Could not find Summarization Specialist's output in crew results.", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id, 
+                    'crew_task_outputs_summary': [str(t)[:100] for t in crew_result.tasks_output] # Log summary of outputs
+                })
+                _update_progress("Summarization agent output not found", OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_AGENT_ERROR)
+                return RewriteContentOutput(
+                    status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_AGENT_ERROR.value,
+                    error_message="AI rewrite failed: The output from the summarization agent could not be found.",
+                    ai_rewritten_content_blocks=[],
+                    trace_id=current_trace_id
+                )
+
+            # For debugging: log the raw output from the summarizer task
+            if summarizer_task_output:
+                logger.debug("Raw output from summarizer_task_output", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id,
+                    'summarizer_output_str': str(summarizer_task_output)[:1000] # Log first 1000 chars
+                })
                 
-                if isinstance(um, dict): usage_metrics_dict = {**um, **temp_metrics_dict}
-                elif temp_metrics_dict: usage_metrics_dict = temp_metrics_dict
-                else:
-                    try: usage_metrics_dict = vars(um)
-                    except TypeError: logger.error(f"vars(um) failed for type {type(um)}. usage_metrics will be None.")
-                
-                if not isinstance(usage_metrics_dict, dict) and usage_metrics_dict is not None:
-                    logger.critical(f"usage_metrics_dict is NOT a dict after conversion. Type: {type(usage_metrics_dict)}. Setting to None.")
-                    usage_metrics_dict = None
+                log_extras = {'task_id': self.task_id, 'correlation_id': self.correlation_id}
 
-            # 6. Process summarization output
-            raw_json_from_llm_for_segments = None
-            parsed_structured_summary_model: Optional[StructuredSummary] = None
-
-            if crew_result_raw:
-                task_outputs = getattr(crew_result_raw, 'tasks_output', None)
-                if task_outputs and isinstance(task_outputs, list) and task_outputs:
-                    last_task_output = task_outputs[-1] # This is a TaskOutput object
-
-                    # Path 1: Ideal - CrewAI's Pydantic parser worked as expected for the task
-                    if hasattr(last_task_output, 'exported_output') and isinstance(last_task_output.exported_output, StructuredSummary):
-                        parsed_structured_summary_model = last_task_output.exported_output
-                        # Try to get the original raw string from the agent that led to this parsed model
-                        raw_json_from_llm_for_segments = getattr(last_task_output, 'raw', None)
-                        if not raw_json_from_llm_for_segments and parsed_structured_summary_model: # Fallback if .raw is not available
-                            raw_json_from_llm_for_segments = parsed_structured_summary_model.model_dump_json() # Re-serialize
-                        logger.info("Extracted StructuredSummary from last_task_output.exported_output.")
+                try:
+                    # The 'raw' output from the task is the JSON string we need.
+                    raw_output_str = summarizer_task_output.raw
                     
-                    # Path 2: CrewAI's Pydantic parser for the task didn't populate exported_output as StructuredSummary (e.g., it's None).
-                    # So, we attempt to parse from last_task_output.raw manually.
-                    elif hasattr(last_task_output, 'raw') and isinstance(last_task_output.raw, str):
-                        agent_raw_output_for_task = last_task_output.raw
-                        logger.info(
-                            f"last_task_output.exported_output was None or not a StructuredSummary "
-                            f"(type: {type(getattr(last_task_output, 'exported_output', None))}). "
-                            f"Attempting to parse from last_task_output.raw: {agent_raw_output_for_task[:200]}..."
-                        )
-                        try:
-                            cleaned_json_str = self._clean_json_string(agent_raw_output_for_task)
-                            if cleaned_json_str:
-                                parsed_data = json.loads(cleaned_json_str)
-                                parsed_structured_summary_model = StructuredSummary(**parsed_data)
-                                # Store the original agent's raw output for this task for transparency,
-                                # even if it included markdown, as it's what we processed.
-                                raw_json_from_llm_for_segments = agent_raw_output_for_task 
-                                logger.info(f"Successfully parsed StructuredSummary from cleaned last_task_output.raw. Cleaned JSON preview: {cleaned_json_str[:100]}...")
-                            else:
-                                logger.error(f"Cleaning last_task_output.raw resulted in an empty or None string. Original raw: {agent_raw_output_for_task[:200]}...")
-                        except (json.JSONDecodeError, ValidationError) as e:
-                            # Log the cleaned string attempt if available, otherwise the original raw for context
-                            cleaned_attempt_preview = "N/A"
-                            if 'cleaned_json_str' in locals() and cleaned_json_str: # Check if cleaned_json_str was defined
-                                cleaned_attempt_preview = cleaned_json_str[:100]
-                            elif agent_raw_output_for_task: # Fallback to previewing the result of cleaning the raw output directly
-                                 cleaned_attempt_preview = (self._clean_json_string(agent_raw_output_for_task) or "None after cleaning")[:100]
+                    # Clean the string to remove markdown and other text outside the JSON object.
+                    cleaned_json_str = self._clean_json_string(raw_output_str)
+                    if not cleaned_json_str:
+                        # Raise a specific error if cleaning results in an empty string
+                        raise ValueError("After cleaning, the summarizer agent's output was empty or contained no valid JSON.")
 
-                            logger.error(
-                                f"Failed to parse StructuredSummary from cleaned last_task_output.raw. Error: {e}. "
-                                f"Cleaned JSON attempt preview: {cleaned_attempt_preview}. "
-                                f"Original raw content for task: {agent_raw_output_for_task[:200]}..."
-                            )
-                        except Exception as e: # Catch any other unexpected error during cleaning/parsing
-                            logger.error(f"Unexpected error processing last_task_output.raw: {e}. Original raw content for task: {agent_raw_output_for_task[:200]}...")
-                    else: # This case means last_task_output.raw was not a string or not present.
-                        logger.warning(
-                            "last_task_output.exported_output was not StructuredSummary, and last_task_output.raw "
-                            f"is not available or not a string. last_task_output.raw type: {type(getattr(last_task_output, 'raw', None))}"
-                        )
-                
-                # Path 3: Fallback if tasks_output is not available/helpful, or if parsing above failed.
-                # Try to parse from crew_result_raw.raw (this is the raw output of the entire crew execution).
-                # This is less direct, as crew_result_raw.raw can be verbose.
-                if not parsed_structured_summary_model and hasattr(crew_result_raw, 'raw') and isinstance(crew_result_raw.raw, str):
-                    entire_crew_raw_output = crew_result_raw.raw
-                    logger.info(f"Could not get StructuredSummary from task_outputs. Attempting to parse from crew_result_raw.raw: {entire_crew_raw_output[:200]}...")
-                    try:
-                        cleaned_json_str = self._clean_json_string(entire_crew_raw_output)
-                        if cleaned_json_str:
-                            # The _clean_json_string should ideally find the JSON from the "Final Answer" if present in the log
-                            parsed_data = json.loads(cleaned_json_str)
-                            parsed_structured_summary_model = StructuredSummary(**parsed_data)
-                            # If we parsed from the entire crew's raw output, the cleaned_json_str is the best "raw JSON" we have.
-                            raw_json_from_llm_for_segments = cleaned_json_str 
-                            logger.info(f"Successfully parsed StructuredSummary from cleaned crew_result_raw.raw. Cleaned JSON preview: {cleaned_json_str[:100]}...")
-                        else:
-                            logger.error(f"Cleaning crew_result_raw.raw resulted in an empty or None string. Original crew raw: {entire_crew_raw_output[:200]}...")
-                    except (json.JSONDecodeError, ValidationError) as e:
-                        cleaned_attempt_preview = "N/A"
-                        if 'cleaned_json_str' in locals() and cleaned_json_str:
-                            cleaned_attempt_preview = cleaned_json_str[:100]
-                        elif entire_crew_raw_output:
-                             cleaned_attempt_preview = (self._clean_json_string(entire_crew_raw_output) or "None after cleaning")[:100]
-                        logger.error(
-                            f"Failed to parse StructuredSummary from cleaned crew_result_raw.raw. Error: {e}. "
-                            f"Cleaned JSON attempt preview: {cleaned_attempt_preview}. "
-                            f"Original crew_result_raw.raw content: {entire_crew_raw_output[:200]}..."
-                        )
-                    except Exception as e:
-                            logger.error(f"Unexpected error processing crew_result_raw.raw: {e}. Original crew_result_raw.raw content: {entire_crew_raw_output[:200]}...")
-                
-                # Path 4: Check crew_result_raw.pydantic_output (if crew itself has pydantic_output defined, which it doesn't here but good for robustness)
-                if not parsed_structured_summary_model and hasattr(crew_result_raw, 'pydantic_output') and isinstance(crew_result_raw.pydantic_output, StructuredSummary):
-                    parsed_structured_summary_model = crew_result_raw.pydantic_output
-                    raw_json_from_llm_for_segments = parsed_structured_summary_model.model_dump_json() # Re-serialize as best guess for raw
-                    logger.info("Extracted StructuredSummary from crew_result_raw.pydantic_output.")
+                    # The agent's output is the 'StructuredSummary' itself, not a wrapper object.
+                    # We validate the cleaned JSON string directly into the StructuredSummary model.
+                    structured_summary_from_llm = StructuredSummary.model_validate_json(cleaned_json_str)
 
-                # Final check and return logic
-                if parsed_structured_summary_model and raw_json_from_llm_for_segments is not None:
-                    summarizer_output_obj = SummarizerTaskOutput(
-                        structured_summary=parsed_structured_summary_model,
-                        raw_llm_output_json=raw_json_from_llm_for_segments
+                    logger.info("Successfully parsed and validated agent output into StructuredSummary.", extra=log_extras)
+
+                except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
+                    logger.error(
+                        "Failed to validate or parse agent output into StructuredSummary.",
+                        extra={
+                            **log_extras, 
+                            'error': str(e),
+                            'cleaned_json_string_that_failed': cleaned_json_str,
+                            'raw_agent_output': raw_output_str,
+                        },
+                        exc_info=True
                     )
-                    logger.info(f"Summarization successful. Number of segments: {len(summarizer_output_obj.structured_summary.segments)}")
-
-                    _update_progress("Reconstructing content from summary...")
-
-                    # 7. Call FastContentBlockProcessorTool directly for reconstruction
-                    reconstruction_tool = self.agents_factory.content_processor_tool # Get the instance directly
-                    
-                    logger.info(f"Calling FastContentBlockProcessorTool with structured_summary_input, image_metadata_list_json: {essential_image_metadata_json[:200]}..., and document_id: {self.new_rewritten_document_id}")
-                    
-                    reconstructed_block_dicts: List[Dict] = reconstruction_tool._run(
-                        operation="reconstruct_content_from_summary",
-                        structured_summary_input=summarizer_output_obj.structured_summary, # Pass Pydantic model
-                        image_metadata_list_json=essential_image_metadata_json,
-                        document_id=self.new_rewritten_document_id
+                    _update_progress("Failed to parse summarizer output (validation)", OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_OUTPUT_PARSING)
+                    return RewriteContentOutput(
+                        status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_SUMMARIZATION_OUTPUT_PARSING.value,
+                        error_message=f"AI rewrite failed: The summarization agent produced output that could not be parsed. Details: {str(e)}",
+                        ai_rewritten_content_blocks=[],
+                        trace_id=current_trace_id
                     )
 
-                    if isinstance(reconstructed_block_dicts, list) and reconstructed_block_dicts and isinstance(reconstructed_block_dicts[0], dict) and "error" in reconstructed_block_dicts[0]:
-                        tool_error_msg = reconstructed_block_dicts[0]["error"]
-                        final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION # Or a new specific code
-                        final_error_message = f"FastContentBlockProcessorTool failed during reconstruction: {tool_error_msg}"
-                        logger.error(final_error_message)
-                    elif not isinstance(reconstructed_block_dicts, list):
-                        final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_TYPE
-                        final_error_message = f"FastContentBlockProcessorTool returned unexpected type: {type(reconstructed_block_dicts)}. Expected List[Dict]."
-                        logger.error(final_error_message)
-                    else:
-                        parsed_content_blocks = self.safe_parse_to_content_blocks(reconstructed_block_dicts, "ai_rewritten_content_blocks (from_tool)")
-                        if not parsed_content_blocks and reconstructed_block_dicts: # Non-empty list from tool, but parsing failed
-                            final_status_code = OrchestrationStatusCodeEnum.ERROR_CONTENT_BLOCK_VALIDATION
-                            final_error_message = "FastContentBlockProcessorTool output was a list of dicts, but failed Pydantic validation into ContentBlocks."
-                            logger.error(f"{final_error_message} Tool output (first item): {str(reconstructed_block_dicts[0])[:500] if reconstructed_block_dicts else 'Empty List'}")
-                        elif parsed_content_blocks or not reconstructed_block_dicts: # Successfully parsed or empty list output
-                            final_status_code = OrchestrationStatusCodeEnum.SUCCESS
-                            final_error_message = None
-                            logger.info(f"Successfully reconstructed and parsed {len(parsed_content_blocks)} content blocks.")
-                        else: # Should not happen if above logic is correct
-                            final_status_code = OrchestrationStatusCodeEnum.ERROR_UNKNOWN
-                            final_error_message = "Unknown error after attempting to parse reconstructed blocks from tool."
-                            logger.error(final_error_message)
-                else: # ADDED: Handle case where summarization output processing failed
-                    _update_progress("Failed to process summarization output.") # Update progress before error
-                    final_status_code = OrchestrationStatusCodeEnum.ERROR_UNEXPECTED_OUTPUT_TYPE
-                    final_error_message = "Failed to process or parse valid structured summary from LLM output after all attempts."
-                    logger.error(f"{final_error_message} parsed_structured_summary_model is None or raw_json_from_llm_for_segments is None.")
-                    # parsed_content_blocks will remain empty, and usage_metrics might still be available from crew.kickoff
+            # Get the reconstruction tool directly from the agents_factory instance
+            reconstruction_tool = self.agents_factory.content_processor_tool
+            
+            # Re-get essential image metadata for the reconstruction tool
+            # This is done here again to ensure the tool gets the exact same data as the summarizer
+            essential_image_metadata = reconstruction_tool._run(
+                operation="extract_image_metadata", 
+                content_blocks=self.rewrite_input.content_blocks_to_rewrite
+            )
+            image_metadata_json = json.dumps(essential_image_metadata or [])
+
+            try:
+                # The tool expects the structured summary data directly
+                reconstructed_block_dicts: List[Dict[str, Any]] = reconstruction_tool._run(
+                    operation="reconstruct_content_from_summary",
+                    structured_summary_input=structured_summary_from_llm,
+                    image_metadata_list_json=image_metadata_json
+                )
+                
+                if not reconstructed_block_dicts or not isinstance(reconstructed_block_dicts, list):
+                    raise ValueError("Reconstruction tool returned no valid block dictionaries.")
+
+                logger.info(f"FastContentBlockProcessorTool finished reconstruction. Number of blocks: {len(reconstructed_block_dicts)}", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id
+                })
+
+            except Exception as e_recon:
+                logger.error("FastContentBlockProcessorTool._run failed during reconstruction.", extra={
+                    'task_id': self.task_id,
+                    'correlation_id': self.correlation_id,
+                    'error': str(e_recon)
+                }, exc_info=True)
+                _update_progress(f"Content reconstruction failed: {str(e_recon)}", OrchestrationStatusCodeEnum.REWRITE_FAILED_RECONSTRUCTION)
+                return RewriteContentOutput(
+                    status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_RECONSTRUCTION.value,
+                    error_message=f"AI rewrite failed: The content reconstruction step encountered an error. Details: {str(e_recon)}",
+                    ai_rewritten_content_blocks=[],
+                    trace_id=current_trace_id
+                )
+
+            _update_progress("Content reconstruction successful, parsing to ContentBlock models", OrchestrationStatusCodeEnum.REWRITE_RECONSTRUCTION_COMPLETED)
+            rewritten_content_blocks = self.safe_parse_to_content_blocks(
+                reconstructed_block_dicts, "reconstructed_blocks_from_tool"
+            )
+
+            if not rewritten_content_blocks and reconstructed_block_dicts:
+                 logger.warning("Reconstruction tool returned data, but safe_parse_to_content_blocks yielded empty result.", extra={
+                    'task_id': self.task_id, 
+                    'correlation_id': self.correlation_id
+                 })
+                 # This might be a partial success or a type of failure depending on requirements.
+                 # For now, it will proceed to a success status but with empty blocks.
+
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            logger.info("Content rewrite process completed successfully.", extra={
+                'task_id': self.task_id, 
+                'correlation_id': self.correlation_id,
+                'processing_time_ms': processing_time_ms,
+                'num_rewritten_blocks': len(rewritten_content_blocks)
+            })
+            _update_progress("Rewrite process completed successfully", OrchestrationStatusCodeEnum.REWRITE_SUCCESS)
+            
+            return RewriteContentOutput(
+                status_code=OrchestrationStatusCodeEnum.REWRITE_SUCCESS.value,
+                ai_rewritten_content_blocks=rewritten_content_blocks,
+                token_usage=crew_result.token_usage.model_dump() if crew_result and crew_result.token_usage else None,
+                processing_time_ms=processing_time_ms,
+                trace_id=current_trace_id
+            )
 
         except Exception as e:
-            _update_progress("Error during rewrite process.") # Update progress on generic exception
-            final_status_code = OrchestrationStatusCodeEnum.ERROR_CREW_EXECUTION_FAILED
-            final_error_message = f"An exception occurred during crew kickoff or direct tool call: {str(e)}"
-            logger.critical(f"Crew/Tool execution failed: {final_error_message}", exc_info=True)
-            # Attempt to capture usage metrics if available
-            if self.crew and hasattr(self.crew, 'usage_metrics') and self.crew.usage_metrics:
-                try:
-                    usage_metrics_dict = self.crew.usage_metrics if isinstance(self.crew.usage_metrics, dict) else vars(self.crew.usage_metrics)
-                except: # Be very defensive here
-                    logger.error("Failed to capture usage_metrics during exception handling.")
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"Unhandled exception in ContentRewriteCrewManager.run: {str(e)}", extra={
+                'task_id': self.task_id,
+                'correlation_id': self.correlation_id,
+                'processing_time_ms': processing_time_ms
+            }, exc_info=True)
+            
+            _update_progress(f"Unhandled exception: {str(e)}", OrchestrationStatusCodeEnum.REWRITE_FAILED_UNHANDLED_EXCEPTION)
 
-
-        end_time = time.time()
-        processing_time_ms = (end_time - start_time) * 1000
-        status_value = final_status_code.value if isinstance(final_status_code, OrchestrationStatusCodeEnum) else str(final_status_code)
-        logger.info(f"ContentRewriteCrewManager run finished in {processing_time_ms/1000:.2f} seconds. Status: {status_value}")
-
-        return RewriteContentOutput(
-            ai_rewritten_content_blocks=parsed_content_blocks,
-            status_code=status_value,
-            error_message=final_error_message,
-            usage_metrics=usage_metrics_dict,
-            processing_time_ms=processing_time_ms,
-            trace_id=None # TODO: Implement trace_id propagation if needed
-        )
+            return RewriteContentOutput(
+                status_code=OrchestrationStatusCodeEnum.REWRITE_FAILED_UNHANDLED_EXCEPTION.value,
+                error_message=f"AI rewrite failed due to an unexpected internal error. Please try again later or contact support if the issue persists. Details: {str(e)}",
+                ai_rewritten_content_blocks=[],
+                processing_time_ms=processing_time_ms,
+                trace_id=current_trace_id
+            )
 
 # Example Usage (for direct testing if needed)
 if __name__ == "__main__":
@@ -580,8 +650,8 @@ if __name__ == "__main__":
         print(f"Error: {output.error_message}")
 
     print("\n--- Crew Execution Metrics ---")
-    if output.usage_metrics:
-        print(f"Usage Metrics: {output.usage_metrics}")
+    if output.token_usage:
+        print(f"Token Usage: {output.token_usage}")
     else:
-        print("Usage Metrics: N/A")
+        print("Token Usage: N/A")
     print(f"Processing Time: {output.processing_time_ms} ms") 

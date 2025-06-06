@@ -6,7 +6,7 @@ import type {
 } from '@/types/api/ai-service';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-// Removed: import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 // Removed: import Redis from 'ioredis';
 
 // Removed Redis client initialization and constants
@@ -19,12 +19,22 @@ interface AIServiceTaskSubmissionResponse {
 
 export async function POST(req: NextRequest) {
   const AISERVICE_URL = process.env.AISERVICE_URL || 'http://localhost:8000';
+  const correlationId = uuidv4();
+
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
+      console.error("Unauthorized access attempt to /ai/rewrite-content", {
+        correlationId,
+        reason: "No session or user ID found",
+      });
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userIdFromSession = session.user.id;
+    console.info("POST /ai/rewrite-content request received", {
+      correlationId,
+      userId: userIdFromSession,
+    });
 
     const body = (await req.json()) as RewriteContentRequest;
     const {
@@ -34,14 +44,19 @@ export async function POST(req: NextRequest) {
     } = body;
 
     if (userIdFromRequest && userIdFromRequest !== userIdFromSession) {
-      console.warn(
-        `User ID mismatch: session ${userIdFromSession}, request ${userIdFromRequest}. Using session user ID.`,
-      );
+      console.warn("User ID mismatch in /ai/rewrite-content", {
+        correlationId,
+        sessionUserId: userIdFromSession,
+        requestUserId: userIdFromRequest,
+        message: "Using session user ID.",
+      });
     }
     const finalUserId = userIdFromSession;
 
     if (!AISERVICE_URL) {
-      console.error('AISERVICE_URL environment variable is not set.');
+      console.error("AISERVICE_URL environment variable is not set.", {
+        correlationId,
+      });
       return NextResponse.json(
         { error: 'AI service configuration error.' },
         { status: 500 },
@@ -53,6 +68,12 @@ export async function POST(req: NextRequest) {
       !Array.isArray(content_blocks_to_rewrite) ||
       content_blocks_to_rewrite.length === 0
     ) {
+      console.warn("Invalid request body for /ai/rewrite-content", {
+        correlationId,
+        userId: finalUserId,
+        error: "content_blocks_to_rewrite is required and must be a non-empty array.",
+        bodyReceived: body, // Log received body for debugging (could be large)
+      });
       return NextResponse.json(
         {
           error:
@@ -62,18 +83,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.log(
-      `API /ai/rewrite-content by user ${finalUserId}: Submitting task to aiservice with ${content_blocks_to_rewrite.length} blocks.`,
-    );
+    console.info("Submitting task to aiservice from /ai/rewrite-content", {
+      correlationId,
+      userId: finalUserId,
+      numBlocks: content_blocks_to_rewrite.length,
+      aiserviceUrl: `${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`,
+    });
 
     const aiservicePayload = {
       content_blocks_to_rewrite,
-      document_metadata, // This might be optional or handled differently by aiservice now
+      document_metadata,
       user_id: finalUserId,
-      // Ensure aiservice's RewriteContentInput model matches this structure or adapt as needed
+      correlation_id: correlationId,
     };
 
-    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`, { // New aiservice endpoint
+    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -88,13 +112,18 @@ export async function POST(req: NextRequest) {
       } catch (_) {
         errorBody = { message: await response.text() };
       }
-      console.error(`aiservice task submission error (${response.status}):`, errorBody);
+      console.error("aiservice task submission error", {
+        correlationId,
+        userId: finalUserId,
+        aiserviceStatus: response.status,
+        aiserviceErrorBody: errorBody,
+      });
       return NextResponse.json(
         {
           error: 'aiservice failed to accept the rewrite task.',
           details:
             errorBody?.message ||
-            errorBody?.detail || // FastAPI often uses 'detail'
+            errorBody?.detail ||
             errorBody ||
             'Unknown error from aiservice submission endpoint',
         },
@@ -105,18 +134,29 @@ export async function POST(req: NextRequest) {
     const aiserviceResponse = (await response.json()) as AIServiceTaskSubmissionResponse;
 
     if (!aiserviceResponse.task_id) {
-      console.error('aiservice did not return a task_id:', aiserviceResponse);
+      console.error("aiservice did not return a task_id", {
+        correlationId,
+        userId: finalUserId,
+        aiserviceResponse,
+      });
       return NextResponse.json(
         { error: 'Failed to get task_id from aiservice.' },
         { status: 500 },
       );
     }
 
-    // Return 202 Accepted with the task_id received from aiservice
+    console.info("Successfully submitted task to aiservice and received task_id", {
+      correlationId,
+      userId: finalUserId,
+      taskIdFromAiservice: aiserviceResponse.task_id,
+    });
     return NextResponse.json({ task_id: aiserviceResponse.task_id }, { status: 202 });
 
   } catch (error) {
-    console.error('Error in /ai/rewrite-content API route (aiservice call):', error);
+    console.error("Unhandled error in /ai/rewrite-content API route", {
+      correlationId,
+      errorDetails: error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) },
+    });
     const errorMessage =
       error instanceof Error ? error.message : 'An unknown error occurred';
     if (error instanceof TypeError && error.message.includes('fetch failed')) {
@@ -124,14 +164,16 @@ export async function POST(req: NextRequest) {
         {
           error: 'Failed to connect to aiservice for task submission.',
           details: errorMessage,
+          correlationId,
         },
-        { status: 503 }, // Service Unavailable
+        { status: 503 }, 
       );
     }
     return NextResponse.json(
       {
         error: 'Internal server error in Next.js API route.',
         details: errorMessage,
+        correlationId,
       },
       { status: 500 },
     );

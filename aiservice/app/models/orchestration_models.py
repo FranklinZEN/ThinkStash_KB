@@ -65,6 +65,24 @@ class OrchestrationStatusCodeEnum(str, enum.Enum):
     FAILURE_STRUCTURING = "failure_structuring"
     UNSUPPORTED_TYPE = "unsupported_type"
 
+    # AI Rewrite Process Specific Statuses (Task Progress Stages)
+    REWRITE_PENDING = "rewrite_pending" # Initial state in DB before processing starts
+    REWRITE_STARTED = "rewrite_started"
+    REWRITE_SUMMARIZATION_AGENT_STARTED = "rewrite_summarization_agent_started"
+    REWRITE_SUMMARIZATION_AGENT_PROCESSING = "rewrite_summarization_agent_processing"
+    REWRITE_SUMMARIZATION_AGENT_COMPLETED = "rewrite_summarization_agent_completed"
+    REWRITE_RECONSTRUCTION_STARTED = "rewrite_reconstruction_started"
+    REWRITE_RECONSTRUCTION_COMPLETED = "rewrite_reconstruction_completed"
+    REWRITE_SUCCESS = "rewrite_success" # Final success state for the rewrite task
+
+    # AI Rewrite Process Specific Failure Statuses
+    REWRITE_FAILED_EMPTY_INPUT = "rewrite_failed_empty_input"
+    REWRITE_FAILED_SUMMARIZATION_AGENT_ERROR = "rewrite_failed_summarization_agent_error"
+    REWRITE_FAILED_SUMMARIZATION_OUTPUT_PARSING = "rewrite_failed_summarization_output_parsing"
+    REWRITE_FAILED_RECONSTRUCTION = "rewrite_failed_reconstruction"
+    REWRITE_FAILED_UNHANDLED_EXCEPTION = "rewrite_failed_unhandled_exception"
+    REWRITE_FAILED_DB_UPDATE = "rewrite_failed_db_update" # For when DB updates fail within the crew manager
+
 class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])
     user_id: Optional[str] = Field(default=None, description="User identifier for the entire orchestration, if available.")

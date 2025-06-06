@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, FormEvent } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
@@ -48,7 +48,7 @@ import {
   // type AppInlineContent as _AppInlineContent, // Removed as unused
   // type AppInlineContentArray, // Removed as unused
 } from '@/lib/blocknote/appSchema';
-// import { type ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service'; // Removed as unused
+import type { ContentBlock } from '@/types/api/ai-service';
 import {
   // extractTextFromInlineContent, // Removed as unused
   mapPartialBlocksToAIServiceContentBlocks,
@@ -277,8 +277,15 @@ const SideBySideComparisonModal = ({
   );
 };
 
-export default function CardDetailPage() {
-  const { status } = useSession();
+// const BlockNoteEditorViewer = dynamic(() => import("@/components/BlockNoteEditorViewer"), { ssr: false }); // REMOVED as unused
+
+const POLLING_INTERVAL_MS_CARD_DETAIL = 3000;
+const MAX_POLLING_ATTEMPTS_CARD_DETAIL = 60; // Approx 3 minutes (60 * 3s)
+
+interface CardDetailPageProps {}
+
+export default function CardDetailPage({}: CardDetailPageProps) {
+  const { data: session, status } = useSession();
   const router = useRouter();
   const params = useParams();
   const cardId = params?.cardId as string;
@@ -294,7 +301,6 @@ export default function CardDetailPage() {
   const [card, setCard] = useState<KnowledgeCard | null>(null);
   const [title, setTitle] = useState('');
   const [keywords, setKeywords] = useState<string[]>([]); // State for keywords
-  const [currentKeyword, setCurrentKeyword] = useState(''); // State for current keyword input
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -313,10 +319,14 @@ export default function CardDetailPage() {
   // ADDED: State for AI suggestions
   const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
-  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(
-    null,
-  );
-  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
+  // const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>( // REMOVED OLD
+  //   null,
+  // );
+  // const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false); // REMOVED OLD - will be replaced by isGeneratingKeywords
+
+  // New state for simplified keyword generation
+  const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
+  const [keywordError, setKeywordError] = useState<string | null>(null);
 
   // ADDED: State for AI Content Rewrite
   const [isRewritingContent, setIsRewritingContent] = useState(false);
@@ -330,6 +340,8 @@ export default function CardDetailPage() {
   const [pollingAttempts, setPollingAttempts] = useState(0);
   const [rewriteError, setRewriteError] = useState<string | null>(null); // Specific error state
   const [currentProgressMessage, setCurrentProgressMessage] = useState<string | null>(null); // ADDED
+
+  const [pollingAttemptsRewrite, setPollingAttemptsRewrite] = useState(0);
 
   const POLLING_INTERVAL_MS = 3000; // 3 seconds
   const MAX_POLLING_ATTEMPTS = 40; // 2 minutes timeout (40 * 3s)
@@ -457,25 +469,31 @@ export default function CardDetailPage() {
   }, [status, cardId, router, fetchCard]);
 
   // Keyword/Tag handling functions (copied from NewCardPage and adapted)
-  const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentKeyword(e.target.value);
-  };
+  // const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => { // REMOVED OLD
+  //   setCurrentKeyword(e.target.value);
+  // };
 
-  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && currentKeyword.trim() !== '') {
-      e.preventDefault();
-      const newKeyword = currentKeyword.trim().startsWith('#')
-        ? currentKeyword.trim()
-        : `#${currentKeyword.trim()}`;
-      if (!keywords.includes(newKeyword)) {
-        setKeywords([...keywords, newKeyword]);
-      }
-      setCurrentKeyword('');
-    }
-  };
+  // const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => { // REMOVED OLD
+  //   if (e.key === 'Enter' && currentKeyword.trim() !== '') {
+  //     e.preventDefault();
+  //     const newKeyword = currentKeyword.trim().startsWith('#')
+  //       ? currentKeyword.trim()
+  //       : `#${currentKeyword.trim()}`;
+  //     if (!keywords.includes(newKeyword)) {
+  //       setKeywords([...keywords, newKeyword]);
+  //     }
+  //     setCurrentKeyword('');
+  //   }
+  // };
 
-  const removeKeyword = (keywordToRemove: string) => {
-    setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
+  // const removeKeyword = (keywordToRemove: string) => { // REMOVED OLD
+  //   setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
+  // };
+
+  // New handler for comma-separated keyword input
+  const handleKeywordsInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const newKeywords = event.target.value.split(',').map(kw => kw.trim()).filter(kw => kw !== '');
+    setKeywords(newKeywords);
   };
 
   // ADDED: Handler for "Suggest Title"
@@ -573,96 +591,78 @@ export default function CardDetailPage() {
     }
   };
 
-  // ADDED: Handler for "Suggest Keywords"
-  const handleSuggestKeywords = async () => {
-    if (!editor && !card?.content) {
-      toast({
-        title: 'No content available for keyword suggestion.',
-        status: 'warning',
-        duration: 3000,
-      });
-      return;
-    }
-    if (!card || !card.userId || !cardId) {
-      toast({
-        title: 'Card data not loaded.',
-        status: 'error',
-        duration: 3000,
-      });
-      return;
-    }
+  // New handler for AI Keyword Generation Button Click
+  const handleGenerateKeywordsAIClick = async () => {
+    setIsGeneratingKeywords(true);
+    setKeywordError(null);
 
-    let contentToProcess: AppPartialBlock[] | undefined = editorContent;
-    if (!isEditing || !editorContent || editorContent.length === 0) {
-      if (card?.content) {
-        if (typeof card.content === 'string') {
-          // Correctly type the string content as a paragraph with text inline content
-          contentToProcess = [
-            {
-              type: 'paragraph',
-              content: [{ type: 'text', text: card.content, styles: {} }],
-            },
-          ];
-        } else {
-          contentToProcess = card.content as AppPartialBlock[];
+    let contentToProcess: AppPartialBlock[] | undefined;
+    if (isEditing && editorContent && !isEditorEmpty(editorContent)) {
+      contentToProcess = editorContent;
+    } else if (card?.content) {
+      if (typeof card.content === 'string') {
+        try {
+          const parsed = JSON.parse(card.content);
+          if (Array.isArray(parsed)) {
+            contentToProcess = parsed as AppPartialBlock[];
+          } else {
+            contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+          }
+        } catch {
+          contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
         }
+      } else {
+        contentToProcess = card.content as AppPartialBlock[];
       }
     }
 
-    if (!contentToProcess || contentToProcess.length === 0) {
-      toast({
-        title: 'Content is empty, cannot suggest keywords.',
-        status: 'info',
-        duration: 3000,
-      });
+    if (isEditorEmpty(contentToProcess)) {
+      setKeywordError("Cannot generate keywords: Content is empty.");
+      setIsGeneratingKeywords(false);
       return;
     }
 
-    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      contentToProcess,
-      card.userId,
-      cardId,
-    );
-
-    if (aiServiceContentBlocks.length === 0) {
-      toast({
-        title: 'No processable content found for keyword suggestion.',
-        status: 'info',
-        duration: 3000,
-      });
+    const currentUserId = session?.user?.id || card?.userId;
+    if (!currentUserId) {
+      setKeywordError("User information not available. Please ensure you are logged in or card data is loaded.");
+      setIsGeneratingKeywords(false);
       return;
     }
+    
+    const currentCardId = cardId || card?.id;
+    if (!currentCardId) {
+        setKeywordError("Card ID not available.");
+        setIsGeneratingKeywords(false);
+        return;
+    }
 
-    setIsSuggestingKeywords(true);
-    setSuggestedKeywords(null);
     try {
+      const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        contentToProcess || [],
+        currentUserId,
+        currentCardId 
+      );
+      
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
+        body: JSON.stringify({ content_blocks: aiServiceBlocks }),
       });
-      const data = await response.json();
-      if (!response.ok || data.error_message) {
-        throw new Error(data.error_message || 'Failed to suggest keywords');
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to generate keywords from API');
       }
-      setSuggestedKeywords(data.suggested_keywords);
-      toast({
-        title: 'Keyword suggestions received!',
-        status: 'success',
-        duration: 3000,
-      });
-    } catch (err) {
-      console.error('Suggest keywords error:', err);
-      const message =
-        err instanceof Error ? err.message : 'Could not suggest keywords.';
-      toast({
-        title: 'Error suggesting keywords',
-        description: message,
-        status: 'error',
-        duration: 5000,
-      });
+
+      const result = await response.json();
+      setKeywords(result.suggested_keywords || []);
+      toast({ title: 'Keywords Suggested', description: 'AI has suggested keywords.', status: 'success', duration: 3000, isClosable: true });
+    } catch (error: any) {
+      console.error("Error generating keywords:", error);
+      setKeywordError(error.message || 'An unexpected error occurred while generating keywords.');
+      // setKeywords([]); // Decide if keywords should be cleared on error
     } finally {
-      setIsSuggestingKeywords(false);
+      setIsGeneratingKeywords(false);
     }
   };
 
@@ -822,129 +822,105 @@ export default function CardDetailPage() {
     }
 
     const intervalId = setInterval(async () => {
-      console.log(`[CardDetailPage] Polling task status for ID: ${taskId}, Attempt: ${pollingAttempts + 1}`);
-      try {
-        const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
-        if (!response.ok) {
-          // Handle non-200 responses during polling (e.g., 404 if task ID is wrong after a bit)
-          const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
-          throw new Error(errorData.message || `Failed to poll task status: ${response.statusText}`);
-        }
+      let currentAttempt;
+      setPollingAttemptsRewrite(prev => {
+        currentAttempt = prev + 1;
+        return currentAttempt;
+      });
 
-        const data = await response.json();
+      // Ensure currentAttempt is defined for the log, though it should be by the setter logic
+      const attemptToLog = pollingAttemptsRewrite + 1; 
+      console.log(`[CardDetailPage] Polling AI rewrite task ${taskId}, Attempt: ${attemptToLog}`);
 
-        if (data.status === 'COMPLETED') {
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0);
-          setTaskId(null);
-
-          if (data.resultData && data.resultData.ai_rewritten_content_blocks) {
-            const mappedRewrittenBlocks = mapContentBlocksToPartialBlocks(data.resultData.ai_rewritten_content_blocks);
-            setRewrittenContentBlocks(mappedRewrittenBlocks);
-            // setShowSideBySideView(true) should already be true from handleRewriteContent call earlier
-            toast({
-              title: 'Content Rewritten Successfully',
-              description: 'AI has completed rewriting the content.',
-              status: 'success',
-              duration: 3000,
-              isClosable: true,
-            });
-          } else {
-            // This case indicates a problem with the backend result even if status is COMPLETED
-            throw new Error('Rewrite completed, but no content was returned.');
-          }
-        } else if (data.status === 'FAILED') {
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0);
-          setTaskId(null);
-          setCurrentProgressMessage(null); // ADDED: Clear progress
-          const errorMessage = data.errorMessage || 'Rewrite task failed with no specific error message.';
-          setRewriteError(errorMessage);
-          toast({
-            title: 'Rewrite Task Failed',
-            description: errorMessage,
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
-          });
-          setShowSideBySideView(false); // Hide SBS view on failure
-          setOriginalContentForComparison(null); // Clear original content for comparison too
-        } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
-          setCurrentProgressMessage(data.progressStage || 'Processing...'); // ADDED: Update progress
-          if (pollingAttempts + 1 >= MAX_POLLING_ATTEMPTS) {
-            clearInterval(intervalId);
-            setPollingIntervalId(null);
-            setIsRewritingContent(false);
-            setPollingAttempts(0);
-            setTaskId(null);
-            setCurrentProgressMessage(null); // ADDED: Clear progress
-            const timeoutMessage = 'Rewrite task timed out after several attempts.';
-            setRewriteError(timeoutMessage);
-            toast({
-              title: 'Rewrite Timeout',
-              description: timeoutMessage,
-              status: 'error',
-              duration: 5000,
-              isClosable: true,
-            });
-            setShowSideBySideView(false); // Hide SBS view on timeout
-            setOriginalContentForComparison(null);
-          }
-        } else {
-          // Unknown status from backend
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0);
-          setTaskId(null);
-          setCurrentProgressMessage(null); // ADDED: Clear progress
-          const unknownStatusMessage = `Received an unknown task status: ${data.status}`;
-          setRewriteError(unknownStatusMessage);
-          toast({
-            title: 'Unknown Task Status',
-            description: unknownStatusMessage,
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
-          });
-          setShowSideBySideView(false);
-          setOriginalContentForComparison(null);
-        }
-      } catch (error) {
-        // Catch all errors from fetch or data processing within the interval
+      if (attemptToLog > MAX_POLLING_ATTEMPTS_CARD_DETAIL) {
+        console.warn(`[CardDetailPage] Polling for task ${taskId} reached max attempts (${MAX_POLLING_ATTEMPTS_CARD_DETAIL}). Timing out.`);
         clearInterval(intervalId);
         setPollingIntervalId(null);
         setIsRewritingContent(false);
-        setPollingAttempts(0);
-        setTaskId(null);
-        setCurrentProgressMessage(null); // ADDED: Clear progress
-        const errorMessage =
-          error instanceof Error ? error.message : 'An unknown error occurred during polling';
-        setRewriteError(errorMessage);
+        const timeoutMessage = `Rewrite process timed out after ${MAX_POLLING_ATTEMPTS_CARD_DETAIL} attempts. Please try again later.`;
+        setRewriteError(timeoutMessage);
         toast({
-          title: 'Polling Error',
-          description: errorMessage,
+          title: 'Rewrite Timed Out',
+          description: timeoutMessage,
           status: 'error',
-          duration: 5000,
+          duration: 7000,
           isClosable: true,
         });
-        setShowSideBySideView(false); // Hide SBS on polling error
-        setOriginalContentForComparison(null);
+        setCurrentProgressMessage("Polling timed out.");
+        setPollingAttemptsRewrite(0);
+        return; // Stop this interval callback
       }
-    }, POLLING_INTERVAL_MS);
 
-    setPollingIntervalId(intervalId); // Store the interval ID so it can be cleared
+      try {
+        const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+          throw new Error(errorData.message || `Failed to poll task status: HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        console.log(`[CardDetailPage] Polling response for ${taskId}, attempt ${attemptToLog}:`, JSON.stringify(data, null, 2));
 
-    // Cleanup function for the useEffect
+        if (data.status === 'COMPLETED') {
+          console.log(`[CardDetailPage] Task ${taskId} COMPLETED.`);
+          if (data.ai_rewritten_content_blocks && Array.isArray(data.ai_rewritten_content_blocks)) {
+            const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(data.ai_rewritten_content_blocks as ContentBlock[]) as AppPartialBlock[];
+            setRewrittenContentBlocks(editorFriendlyBlocks);
+            setCurrentProgressMessage(null);
+            toast({ title: 'Rewrite Complete!', description: 'Content has been rewritten.', status: 'success', duration: 5000, isClosable: true });
+          } else {
+            setRewriteError("Task completed, but rewritten content was not in the expected format.");
+            setCurrentProgressMessage(null);
+            toast({ title: 'Processing Error', description: 'Rewritten content is not in the expected format.', status: 'error', duration: 5000, isClosable: true });
+          }
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttemptsRewrite(0);
+        } else if (data.status === 'FAILED') {
+          console.error(`[CardDetailPage] Task ${taskId} FAILED: ${data.errorMessage}`);
+          setRewriteError(data.errorMessage || 'Rewrite task failed for an unknown reason.');
+          setCurrentProgressMessage(null);
+          toast({ title: 'Rewrite Failed', description: data.errorMessage || 'An unknown error occurred.', status: 'error', duration: 5000, isClosable: true });
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttemptsRewrite(0);
+        } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
+          setCurrentProgressMessage(data.progressStage || `Processing... (Status: ${data.status})`);
+        } else {
+          console.warn(`[CardDetailPage] Task ${taskId} has unknown status: ${data.status}`);
+          setRewriteError(`Unknown status: ${data.status}. Polling...`);
+          setCurrentProgressMessage(null);
+          toast({
+            title: 'Unknown Task Status',
+            description: `Unknown status: ${data.status}. Polling...`,
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
+          clearInterval(intervalId);
+          setPollingIntervalId(null);
+          setIsRewritingContent(false);
+          setPollingAttemptsRewrite(0);
+        }
+      } catch (error) {
+        console.error(`[CardDetailPage] Error polling task ${taskId}:`, error);
+        setRewriteError(error instanceof Error ? error.message : 'An unknown error occurred during polling.');
+        toast({ title: 'Polling Error', description: error instanceof Error ? error.message : 'Could not retrieve rewrite status.', status: 'error', duration: 5000, isClosable: true });
+        clearInterval(intervalId);
+        setPollingIntervalId(null);
+        setIsRewritingContent(false);
+        setPollingAttemptsRewrite(0);
+      }
+    }, POLLING_INTERVAL_MS_CARD_DETAIL);
+
+    setPollingIntervalId(intervalId);
+
     return () => {
       if (intervalId) clearInterval(intervalId);
-      setPollingIntervalId(null); // Clear stored interval ID on cleanup
+      setPollingIntervalId(null);
     };
-  }, [taskId, isRewritingContent, pollingAttempts, toast, pollingIntervalId]); // Added pollingIntervalId to dependencies
+  }, [taskId, isRewritingContent, pollingAttemptsRewrite, toast]); // Removed POLLING_INTERVAL_MS_CARD_DETAIL from deps as it's a const
 
   // ADDED: Handler to accept rewritten content
   const handleAcceptRewrite = () => {
@@ -1048,7 +1024,8 @@ export default function CardDetailPage() {
     // Check if keywords have changed
     const originalTags = card.tags || [];
     const hasKeywordsChanged =
-      JSON.stringify(keywords.sort()) !== JSON.stringify(originalTags.sort());
+      JSON.stringify(keywords.map(kw => kw.replace(/^#/, '')).sort()) !== 
+      JSON.stringify(originalTags.map(tag => tag.name.replace(/^#/, '')).sort());
 
     if (!hasTitleChanged && !hasContentChanged && !hasKeywordsChanged) {
       toast({ title: 'No changes detected.', status: 'info', duration: 3000 });
@@ -1084,7 +1061,7 @@ export default function CardDetailPage() {
       updatePayload.content = currentContentToValidate as AppPartialBlock[];
     }
 
-    if (hasKeywordsChanged) updatePayload.tags = keywords;
+    if (hasKeywordsChanged) updatePayload.tags = keywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`); // Ensure leading #
 
     // console.log('Updating card with payload:', updatePayload); // This was the one we discussed keeping/removing based on preference
 
@@ -1497,107 +1474,41 @@ export default function CardDetailPage() {
               )}
             </FormControl>
 
-            <FormControl>
-              <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-                Key Words{' '}
-                <Text as="span" fontSize="16px" color="gray.500">
-                  (Optional)
+            <FormControl mt={4}>
+              <FormLabel htmlFor='keywords-input' fontFamily="'Open Sans', sans-serif" fontSize="24px">
+                Keywords
+                 <Text as="span" fontSize="16px" color="gray.500" ml={2}>
+                  (Optional, comma-separated)
                 </Text>
               </FormLabel>
+              <Text fontSize="sm" color="gray.500" mb={2}>
+                Enter keywords manually (e.g., tech, ai, productivity) or let AI suggest them.
+              </Text>
               <Input
+                id='keywords-input'
                 type="text"
-                value={currentKeyword}
-                onChange={handleKeywordChange}
-                onKeyDown={handleKeywordKeyDown}
-                placeholder="Type a keyword and press Enter"
-                isDisabled={!isEditing || isSaving}
+                value={keywords.join(', ')}
+                onChange={handleKeywordsInputChange}
+                placeholder="e.g., artificial intelligence, machine learning, productivity"
+                mb={2}
+                isDisabled={isGeneratingKeywords || isSaving || !isEditing}
                 fontFamily="'Open Sans', sans-serif"
                 fontSize="16px"
-                color="#A1824A"
-                _placeholder={{ color: '#A1824A' }}
               />
-              <HStack spacing={2} mt={3} flexWrap="wrap">
-                {keywords.map((keyword) => (
-                  <ChakraTag
-                    key={keyword}
-                    size="lg"
-                    borderRadius="md"
-                    variant="solid"
-                    colorScheme="blue"
-                    boxShadow="md"
-                    sx={{
-                      boxShadow:
-                        '2px 2px 5px rgba(0,0,0,0.2), inset 1px 1px 2px rgba(255,255,255,0.3)',
-                      border: '1px solid rgba(0,0,0,0.1)',
-                    }}
-                  >
-                    <TagLabel>{keyword}</TagLabel>
-                    <TagCloseButton
-                      onClick={() => removeKeyword(keyword)}
-                      isDisabled={!isEditing || isSaving}
-                    />
-                  </ChakraTag>
-                ))}
-                {isEditing && !showSideBySideView && (
-                  <Box mt={3}>
-                    <Button
-                      size="sm"
-                      onClick={handleSuggestKeywords}
-                      isLoading={isSuggestingKeywords}
-                      loadingText="Suggesting..."
-                      colorScheme="purple"
-                    >
-                      Suggest Keywords with AI
-                    </Button>
-                    {suggestedKeywords &&
-                      suggestedKeywords.length > 0 &&
-                      !isSuggestingKeywords && (
-                        <Box mt={2}>
-                          <Text fontSize="sm" mb={1}>
-                            Suggestions:
-                          </Text>
-                          <HStack spacing={2} wrap="wrap" mb={2}>
-                            {suggestedKeywords.map((kw) => (
-                              <ChakraTag
-                                key={kw}
-                                borderRadius="full"
-                                variant="outline"
-                                colorScheme="blue"
-                              >
-                                <TagLabel>{kw}</TagLabel>
-                              </ChakraTag>
-                            ))}
-                          </HStack>
-                          <Button
-                            size="xs"
-                            colorScheme="teal"
-                            onClick={() => {
-                              const newKeywords = [
-                                ...new Set([...keywords, ...suggestedKeywords]),
-                              ];
-                              setKeywords(newKeywords);
-                              setSuggestedKeywords(null);
-                            }}
-                          >
-                            Add these keywords
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            ml={2}
-                            colorScheme="gray"
-                            onClick={() => {
-                              setKeywords(suggestedKeywords);
-                              setSuggestedKeywords(null);
-                            }}
-                          >
-                            Replace with these
-                          </Button>
-                        </Box>
-                      )}
-                  </Box>
-                )}
-              </HStack>
+              <Button
+                onClick={handleGenerateKeywordsAIClick}
+                isLoading={isGeneratingKeywords}
+                loadingText="Generating..."
+                colorScheme='blue'
+                variant='outline'
+                size='sm'
+                isDisabled={isSaving || !isEditing || isGeneratingKeywords}
+              >
+                Suggest Keywords with AI
+              </Button>
+              {keywordError && (
+                <Text color="red.500" mt={1} fontSize="sm">Error: {keywordError}</Text>
+              )}
             </FormControl>
 
             <FormControl isRequired>

@@ -161,6 +161,7 @@ cachetools # For caching
 
 # Logging
 # structlog # Example, if structured logging is adopted
+python-json-logger # Added for structured JSON logging
 
 # Optional for specific database connections if not using an ORM that handles it
 # psycopg2-binary # For PostgreSQL

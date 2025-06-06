@@ -162,20 +162,22 @@ export default function Home() {
         throw new Error(errorMsg);
       }
       
-      const titleToSet = data.extracted_title || data.document_metadata?.title || null; 
+      const titleToSet = data.extracted_title || data.document_metadata?.title || '';
       const keywordsToSet: string[] = [];
 
       setStagedData(titleToSet, data.original_content_blocks, keywordsToSet);
       toast({ title: 'Content Reconstructed!', description: 'Navigating to create card page...', status: 'success', duration: 2000, isClosable: true });
       onCloseUrlModal();
       setReconstructUrl('');
+      console.log('[HomePage] Navigating to /cards/new with staged data.');
       router.push('/cards/new');
 
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : 'An unknown reconstruction error occurred.';
-      console.error('Reconstruction from URL failed:', errMsg);
-      setStagedError(errMsg);
-      toast({ title: 'Reconstruction Failed', description: errMsg, status: 'error', duration: 5000, isClosable: true });
+    } catch (error: any) {
+      console.error("[HomePage] Error in handleReconstructFromUrl:", error);
+      toast({ title: 'Error Reconstructing Content', description: error.message || 'An unknown error occurred.', status: 'error', duration: 5000, isClosable: true });
+    } finally {
+      setIsStaging(false);
+      onCloseUrlModal();
     }
   };
 

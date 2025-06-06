@@ -18,9 +18,6 @@ import {
   Text,
   Container,
   HStack,
-  Tag,
-  TagLabel,
-  TagCloseButton,
   Modal,
   ModalOverlay,
   ModalContent,
@@ -28,6 +25,9 @@ import {
   ModalFooter,
   ModalBody,
   ModalCloseButton,
+  Tag,
+  TagLabel,
+  Checkbox,
 } from '@chakra-ui/react';
 import {
   BlockNoteEditor as BlockNoteEditorType,
@@ -40,6 +40,7 @@ import type {
   ContentBlock as AIServiceContentBlock,
   RewriteContentResponse,
 } from '@/types/api/ai-service';
+import { v4 as uuidv4 } from 'uuid';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
@@ -153,10 +154,13 @@ export default function NewCardPage() {
   const router = useRouter();
   const toast = useToast();
 
+  // Client-side generated document ID for a new card
+  const [clientSideDocumentId] = useState(() => uuidv4());
+
   const {
     stagedTitle,
     stagedContentBlocks,
-    stagedKeywords,
+    stagedKeywords: initialStagedKeywords,
     error: stagingError,
     clearData: clearStagingData,
   } = useStagingCardStore();
@@ -165,18 +169,18 @@ export default function NewCardPage() {
   const [_editor, setEditor] = useState<BlockNoteEditorType | null>(null);
   const [editorContent, setEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
   const [editorKey, setEditorKey] = useState(Date.now());
+  
+  // Keyword states
   const [keywords, setKeywords] = useState<string[]>([]);
-  const [currentKeyword, setCurrentKeyword] = useState('');
+  const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
+  const [keywordError, setKeywordError] = useState<string | null>(null);
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isStagingLoading = useStagingCardStore(state => state.isLoading);
 
-  // State for AI suggestions (adapted from CardDetailPage)
+  // State for AI suggestions (Title only now for this section)
   const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
-  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(
-    null,
-  );
-  const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false);
 
   // New state variables for AI Rewrite functionality
   const [originalEditorContent, setOriginalEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
@@ -194,119 +198,93 @@ export default function NewCardPage() {
   const [hasShownInitialContentReadyToast, setHasShownInitialContentReadyToast] = useState(false);
 
   const POLLING_INTERVAL_MS = 3000; // 3 seconds
-  const MAX_POLLING_ATTEMPTS = 40; // 2 minutes timeout (40 * 3s)
+  const MAX_POLLING_ATTEMPTS = 60; // 60 attempts * 3 seconds = 3 minutes timeout
 
   useEffect(() => {
-    console.log('[NewCardPage useEffect] Running. Initial StagedTitle:', stagedTitle);
-    console.log('[NewCardPage useEffect] Initial StagedContentBlocks present:', !!stagedContentBlocks && stagedContentBlocks.length > 0);
-    console.log('[NewCardPage useEffect] hasShownInitialContentReadyToast state at start:', hasShownInitialContentReadyToast);
+    console.log('[NewCardPage Staging useEffect] Running. Initial StagedTitle:', stagedTitle);
+    console.log('[NewCardPage Staging useEffect] Initial StagedContentBlocks present:', !!stagedContentBlocks && stagedContentBlocks.length > 0);
+    console.log('[NewCardPage Staging useEffect] Initial initialStagedKeywords from store:', initialStagedKeywords);
+    console.log('[NewCardPage Staging useEffect] hasShownInitialContentReadyToast state at start:', hasShownInitialContentReadyToast);
 
-    let processedNewDataInThisRun = false; // Renamed from dataLoadedInEffect
+    let processedNewDataInThisRun = false;
     let titleToUse: string | null = null;
-    let autoExtractedTitleValue: string | null = null; 
+    let autoExtractedTitleValue: string | null = null;
 
-    // Reset toast flag if no data is currently staged, allowing toast for next new data load
-    if (!stagedTitle && !stagedContentBlocks && !stagedKeywords) {
-      if (hasShownInitialContentReadyToast) { // Only log if it's actually changing
-        console.log('[NewCardPage useEffect] No staged data found, resetting hasShownInitialContentReadyToast to false.');
+    if (!stagedTitle && !stagedContentBlocks && (!initialStagedKeywords || initialStagedKeywords.length === 0)) {
+      if (hasShownInitialContentReadyToast) {
+        console.log('[NewCardPage Staging useEffect] No staged data found, resetting hasShownInitialContentReadyToast to false.');
         setHasShownInitialContentReadyToast(false);
       }
     }
 
-    // Step 1: Handle content blocks
-    if (stagedContentBlocks) {
-      const initialContentForEditor = mapContentBlocksToPartialBlocks(stagedContentBlocks) as AppPartialBlock[];
-      setOriginalEditorContent(initialContentForEditor);
-      setEditorContent(initialContentForEditor);
-      setRewrittenEditorContent(undefined);
-      setDisplayMode('original');
-      setShowComparisonView(false);
-      if (_editor) {
-        console.log('[NewCardPage useEffect] Editor instance available, calling replaceBlocks for staged content.');
-        _editor.replaceBlocks(_editor.document, initialContentForEditor);
-      }
-      setEditorKey(Date.now());
-      processedNewDataInThisRun = true; 
+    if (stagedTitle) {
+      titleToUse = stagedTitle;
+      processedNewDataInThisRun = true;
+    }
 
-      // Attempt to auto-extract title from content, will be used if stagedTitle is not suitable
-      const firstTextBlock = stagedContentBlocks.find(block => 
-        block.type === 'text' && 
-        typeof block.content === 'string' && 
-        block.content.trim() !== ''
-      );
-      if (firstTextBlock && typeof firstTextBlock.content === 'string') { 
-        let potentialTitle = firstTextBlock.content.trim();
-        const MAX_TITLE_LENGTH = 150;
-        if (potentialTitle.length > MAX_TITLE_LENGTH) {
-          potentialTitle = potentialTitle.substring(0, MAX_TITLE_LENGTH) + '...';
+    if (stagedContentBlocks && stagedContentBlocks.length > 0) {
+      const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(stagedContentBlocks) as AppPartialBlock[];
+      setOriginalEditorContent(editorFriendlyBlocks); 
+      setEditorContent(editorFriendlyBlocks);
+      setEditorKey(Date.now()); // Force re-render of editor if content changes
+      processedNewDataInThisRun = true;
+      
+      if (!stagedTitle) { // Only auto-extract title if not already provided
+        const firstTextBlock = editorFriendlyBlocks.find(
+          (block) => block.type === 'paragraph' && block.content && block.content.length > 0
+        ) as AppPartialBlock | undefined;
+
+        if (firstTextBlock && firstTextBlock.content) {
+          let extractedText = '';
+          if (typeof firstTextBlock.content === 'string') {
+            extractedText = firstTextBlock.content;
+          } else if (Array.isArray(firstTextBlock.content)) {
+            extractedText = firstTextBlock.content
+              .map(inline => (typeof inline === 'string' ? inline : (inline.type === 'text' ? inline.text : '')))
+              .join('');
+          }
+          autoExtractedTitleValue = extractedText.substring(0, 100); 
+          if (autoExtractedTitleValue) titleToUse = autoExtractedTitleValue;
+          console.log("[NewCardPage Staging useEffect] Auto-extracted title from content:", autoExtractedTitleValue);
+        } else {
+          console.log("[NewCardPage Staging useEffect] No suitable first text block found for auto-title extraction.");
         }
-        autoExtractedTitleValue = potentialTitle;
-        console.log("[NewCardPage useEffect] Auto-extracted title candidate from content:", autoExtractedTitleValue);
-      } else {
-        console.log("[NewCardPage useEffect] No suitable first text block found for auto-title extraction.");
       }
-    } else if (stagedTitle || stagedKeywords) { 
-      // Content blocks are absent, but title or keywords might be staged (e.g. error during content fetch but title came through)
+    } else if (stagedTitle || (initialStagedKeywords && initialStagedKeywords.length > 0)) { 
       setOriginalEditorContent(undefined);
-      setRewrittenEditorContent(undefined);
-      setEditorContent(undefined);
-      setDisplayMode('original');
-      setShowComparisonView(false);
-      if (_editor) {
-        _editor.replaceBlocks(_editor.document, []);
-      }
-      setEditorKey(Date.now());
-    }
-
-    // Step 2: Determine the title to actually use for the input field
-    if (stagedTitle && stagedTitle.trim() !== '') {
-      titleToUse = stagedTitle.trim();
-      console.log('[NewCardPage useEffect] Prioritizing non-empty stagedTitle from metadata:', titleToUse);
-    } else if (autoExtractedTitleValue) {
-      titleToUse = autoExtractedTitleValue;
-      console.log('[NewCardPage useEffect] Using auto-extracted title because stagedTitle was null or empty:', titleToUse);
+      setEditorContent(undefined); 
+      setEditorKey(Date.now()); // Also refresh editor if only title/keywords are staged
+      // titleToUse is already set if stagedTitle exists
+      if (initialStagedKeywords && initialStagedKeywords.length > 0) processedNewDataInThisRun = true;
     } else {
-      console.log('[NewCardPage useEffect] No title found from metadata or auto-extraction from content.');
+      // No content blocks, no title from staging, no keywords from staging
+      // Retain current editor content or clear it if that's desired behavior when staging is empty
+      // For now, doing nothing to local editor content if no new content is staged.
     }
 
-    // Step 3: Set the local state for the title input field if a title was determined
-    if (titleToUse !== null) {
-      console.log('[NewCardPage useEffect] Calling setTitle with:', titleToUse);
+    if (titleToUse) {
       setTitle(titleToUse);
-      setSuggestedTitle(null); // Clear any previous AI suggestion for title
-      // processedNewDataInThisRun is likely true if content was processed or if stagedTitle was present
-      // If only keywords were staged, processedNewDataInThisRun might be false here, but title wouldn't be set anyway.
-    } else {
-      // If titleToUse is null, we might want to ensure the local title is cleared
-      // This is important if a previous card had a title and this one doesn't
-      console.log('[NewCardPage useEffect] No definitive title to use. Ensuring local title state is empty.');
-      setTitle(''); // Explicitly set to empty if no title is derived
-      setSuggestedTitle(null); // Also clear suggestions
     }
     
-    // Handle keywords (can be independent of title/content)
-    if (stagedKeywords) { 
-      setKeywords(stagedKeywords);
-      setSuggestedKeywords(null); 
+    if (initialStagedKeywords && initialStagedKeywords.length > 0) { 
+      setKeywords(initialStagedKeywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`));
       processedNewDataInThisRun = true; 
-    }
+    } 
 
-    // Toast and cleanup logic
     if (processedNewDataInThisRun && !hasShownInitialContentReadyToast) {
-      console.log('[NewCardPage useEffect] Conditions met for showing Content Ready toast.');
       toast({
-        title: 'Content Ready',
-        description: 'Form has been populated with reconstructed content.',
+        title: 'Content Ready for New Card',
+        description: 'Your previously started content (or content from another tab/tool) has been loaded. Review and continue.',
         status: 'info',
-        duration: 3000,
+        duration: 7000,
         isClosable: true,
       });
       setHasShownInitialContentReadyToast(true);
-      console.log('[NewCardPage useEffect] setHasShownInitialContentReadyToast to true.');
+      console.log('[NewCardPage Staging useEffect] setHasShownInitialContentReadyToast to true.');
     } else if (processedNewDataInThisRun && hasShownInitialContentReadyToast) {
-      console.log('[NewCardPage useEffect] Processed new data, but initial content ready toast already shown for this batch.');
+      console.log('[NewCardPage Staging useEffect] Processed new data, but initial content ready toast already shown for this batch.');
     } else if (!processedNewDataInThisRun) {
-      console.log('[NewCardPage useEffect] No new data processed in this run, not showing content ready toast.');
+      console.log('[NewCardPage Staging useEffect] No new data processed in this run, not showing content ready toast.');
     }
 
     if (stagingError) {
@@ -319,7 +297,21 @@ export default function NewCardPage() {
       });
     }
 
-  }, [stagedTitle, stagedContentBlocks, stagedKeywords, stagingError, clearStagingData, toast]);
+  }, [
+    stagedTitle, 
+    stagedContentBlocks, 
+    initialStagedKeywords, 
+    stagingError, 
+    clearStagingData, // From store, include if its identity can change or if effect calls it
+    toast, 
+    setTitle, 
+    setOriginalEditorContent, 
+    setEditorContent, 
+    setEditorKey, 
+    setKeywords,
+    hasShownInitialContentReadyToast, // state variable used in logic
+    setHasShownInitialContentReadyToast // setter for the above
+  ]);
 
   // New useEffect for component unmount cleanup
   useEffect(() => {
@@ -347,28 +339,6 @@ export default function NewCardPage() {
       }
     }
   }, [showComparisonView, rewrittenEditorContent]);
-
-  const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentKeyword(e.target.value);
-  };
-
-  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && currentKeyword.trim() !== '') {
-      e.preventDefault();
-      const newKeyword = currentKeyword.trim().startsWith('#')
-        ? currentKeyword.trim()
-        : `#${currentKeyword.trim()}`;
-      // Ensure keyword uniqueness, case-insensitively for comparison but store with original casing preference
-      if (!keywords.some(kw => kw.toLowerCase() === newKeyword.toLowerCase())) {
-        setKeywords([...keywords, newKeyword]);
-      }
-      setCurrentKeyword('');
-    }
-  };
-
-  const removeKeyword = (keywordToRemove: string) => {
-    setKeywords(keywords.filter(keyword => keyword !== keywordToRemove));
-  };
 
   const handleRewriteContent = async () => {
     if (!editorContent || isEditorEmpty(editorContent)) {
@@ -464,68 +434,60 @@ export default function NewCardPage() {
         clearInterval(pollingIntervalId);
         setPollingIntervalId(null);
       }
-      // Reset attempts when polling stops or doesn't start
-      // setPollingAttempts(0); // Let's reset attempts only when a new task starts or polling ends decisively.
       return;
     }
 
     const intervalId = setInterval(async () => {
-      // Incrementing pollingAttempts via setPollingAttempts directly based on its previous value
-      // can be tricky due to closure. It's often better to pass a function to the setter.
-      // However, for a simple counter in a setInterval, managing it via a local letiable is also an option.
-      // Let's stick to setPollingAttempts with functional update for safety.
-      let currentAttemptForLog = 0;
-      setPollingAttempts(prevAttempts => {
-        currentAttemptForLog = prevAttempts + 1;
-        return currentAttemptForLog;
-      });
+      // Stop polling if max attempts reached
+      if (pollingAttempts >= MAX_POLLING_ATTEMPTS) {
+        console.error(`[NewCardPage] Polling timed out for task ${taskId}. Stopping.`);
+        setRewriteError('Polling timed out. The task may still be running in the background, but the status could not be retrieved in time.');
+        clearInterval(intervalId);
+        setPollingIntervalId(null);
+        setIsRewritingContent(false);
+        setPollingAttempts(0);
+        setCurrentProgressMessage('Task timed out.');
+        return;
+      }
 
-      console.log(`[NewCardPage] Polling task status for ID: ${taskId}, Attempt: ${currentAttemptForLog}`);
-
+      // console.log(`[NewCardPage] Polling task status for ID: ${taskId}, Attempt: ${currentAttemptForLog}`); // REMOVED to reduce console noise
+      setPollingAttempts(prev => prev + 1);
+      
       try {
         const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
-        
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status} ${response.statusText}` }));
-          throw new Error(errorData.message || `Failed to poll task status: ${response.statusText}`);
+          throw new Error(`Polling request failed with status ${response.status}`);
         }
 
         const data = await response.json();
-        // Log the exact data received by the client
-        console.log(`[NewCardPage] Polling response data for task ${taskId}, attempt ${currentAttemptForLog}:`, JSON.stringify(data, null, 2));
+        // The following log is very verbose and appears on every poll. Removing it for a cleaner console.
+        // console.log(`[NewCardPage] Polling response data for task ${taskId}, attempt ${pollingAttempts}:`, JSON.stringify(data, null, 2));
 
         if (data.status === 'COMPLETED') {
           console.log(`[NewCardPage] Task ${taskId} COMPLETED. Full data:`, JSON.stringify(data, null, 2));
-          console.log(`[NewCardPage] Task ${taskId} COMPLETED. ai_rewritten_content_blocks from data:`, JSON.stringify(data.ai_rewritten_content_blocks, null, 2));
-
+          // Original logic for COMPLETED status
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
-          setPollingAttempts(0); // Reset attempts on completion
-          setTaskId(null);
-
+          setPollingAttempts(0); 
+          setTaskId(null); 
           if (data.ai_rewritten_content_blocks) {
-            console.log(`[NewCardPage] Task ${taskId} COMPLETED: data.ai_rewritten_content_blocks is truthy. Content:`, JSON.stringify(data.ai_rewritten_content_blocks, null, 2));
             try {
               const newRewrittenContent = mapContentBlocksToPartialBlocks(
-                data.ai_rewritten_content_blocks, 
+                data.ai_rewritten_content_blocks,
               ) as AppPartialBlock[];
-              console.log(`[NewCardPage] Task ${taskId} COMPLETED: newRewrittenContent after mapping:`, JSON.stringify(newRewrittenContent, null, 2));
-              
-              if (newRewrittenContent) { // Additional check for safety, though mapContentBlocksToPartialBlocks should ideally not return null/undefined if input is array
+              if (newRewrittenContent) {
                 setRewrittenEditorContent(newRewrittenContent);
                 setCurrentProgressMessage(null);
-                console.log(`[NewCardPage] Task ${taskId} COMPLETED: Called setRewrittenEditorContent.`);
-                toast({
+                toast({ 
                   title: 'Content Rewritten Successfully',
                   description: 'AI has completed rewriting the content.',
-                  status: 'success',
-                  duration: 3000,
-                  isClosable: true,
+                  status: 'success', 
+                  duration: 3000, 
+                  isClosable: true 
                 });
               } else {
                 const mappingError = 'Rewrite completed, content was present, but mapping resulted in empty content.';
-                console.error(`[NewCardPage] Task ${taskId} COMPLETED: ${mappingError}`);
                 setRewriteError(mappingError);
                 setCurrentProgressMessage(null);
                 toast({ title: 'Rewrite Mapping Error', description: mappingError, status: 'error', duration: 5000, isClosable: true });
@@ -533,7 +495,6 @@ export default function NewCardPage() {
               }
             } catch (mappingOrSetError) {
                 const processingError = 'Error processing or setting rewritten content.';
-                console.error(`[NewCardPage] Task ${taskId} COMPLETED: ${processingError}`, mappingOrSetError);
                 setRewriteError(processingError + (mappingOrSetError instanceof Error ? `: ${mappingOrSetError.message}`: ''));
                 setCurrentProgressMessage(null);
                 toast({ title: 'Rewrite Processing Error', description: processingError, status: 'error', duration: 5000, isClosable: true });
@@ -541,68 +502,37 @@ export default function NewCardPage() {
             }
           } else {
             const completionError = 'Rewrite completed, but data.ai_rewritten_content_blocks was falsy.';
-            console.warn(`[NewCardPage] Task ${taskId} COMPLETED: ${completionError} Value:`, data.ai_rewritten_content_blocks);
             setRewriteError(completionError);
             setCurrentProgressMessage(null);
             toast({ title: 'Rewrite Data Missing', description: completionError, status: 'error', duration: 5000, isClosable: true });
             setShowComparisonView(false);
           }
         } else if (data.status === 'FAILED') {
+          // Original logic for FAILED status
+          console.error(`[NewCardPage] Task ${taskId} FAILED. Reason:`, data.errorMessage);
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
-          setPollingAttempts(0); // Reset attempts on failure
-          setTaskId(null);
+          setPollingAttempts(0); 
+          setTaskId(null); 
           setCurrentProgressMessage(null);
           const errorMessage = data.errorMessage || 'Rewrite task failed with no specific error message.';
           setRewriteError(errorMessage);
-          toast({
+          toast({ 
             title: 'Rewrite Task Failed',
             description: errorMessage,
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
+            status: 'error', 
+            duration: 5000, 
+            isClosable: true 
           });
-          setShowComparisonView(false); // Hide comparison on failure
+          setShowComparisonView(false); 
         } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
-          // Polling continues, check against MAX_POLLING_ATTEMPTS
-          setCurrentProgressMessage(data.progressStage || 'Processing...');
-          if (currentAttemptForLog >= MAX_POLLING_ATTEMPTS) {
-            clearInterval(intervalId);
-            setPollingIntervalId(null);
-            setIsRewritingContent(false);
-            setPollingAttempts(0); // Reset attempts on timeout
-            setTaskId(null);
-            setCurrentProgressMessage(null);
-            const timeoutMessage = 'Rewrite task timed out after several attempts.';
-            setRewriteError(timeoutMessage);
-            toast({
-              title: 'Rewrite Timeout',
-              description: timeoutMessage,
-              status: 'error',
-              duration: 5000,
-              isClosable: true,
-            });
-            setShowComparisonView(false); // Hide comparison on timeout
-          }
+          // Use progressStage if available, otherwise a generic message
+          setCurrentProgressMessage(data.progressStage || `Processing... (Status: ${data.status})`);
         } else {
-          // Unknown status
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0); // Reset attempts on unknown status
-          setTaskId(null);
-          setCurrentProgressMessage(null);
-          const unknownStatusMessage = `Received an unknown task status: ${data.status}`;
-          setRewriteError(unknownStatusMessage);
-          toast({
-            title: 'Unknown Task Status',
-            description: unknownStatusMessage,
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
-          });
-          setShowComparisonView(false);
+          // Original logic for unknown status or simply continue polling if that was the intent
+          console.warn(`[NewCardPage] Task ${taskId} has unknown status: ${data.status}`);
+          setCurrentProgressMessage(`Unknown status: ${data.status}. Polling...`); // Removed attempt count from UI
         }
       } catch (error) {
         clearInterval(intervalId);
@@ -704,7 +634,7 @@ export default function NewCardPage() {
       const payload = {
         title: title,
         content: contentToProcess, 
-        tags: keywords.map(kw => kw.startsWith('#') ? kw.substring(1) : kw),
+        tags: keywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`),
       };
       
       console.log('[NewCardPage] handleSubmit: Sending payload:', JSON.stringify(payload, null, 2));
@@ -817,17 +747,15 @@ export default function NewCardPage() {
     if (suggestedTitle) {
       setTitle(suggestedTitle);
       setSuggestedTitle(null); // Clear suggestion after applying
-      toast({
-        title: 'Title Updated',
-        description: 'The suggested title has been applied.',
-        status: 'info',
-        duration: 2000,
-        isClosable: true,
-      });
     }
   };
 
-  const handleSuggestKeywords = async () => {
+  const handleKeywordsInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const newKeywords = event.target.value.split(',').map(kw => kw.trim());
+    setKeywords(newKeywords);
+  };
+
+  const handleGenerateKeywordsAIClick = async () => {
     if (sessionStatus !== 'authenticated' || !session?.user?.id) {
       toast({
         title: 'Authentication Required',
@@ -838,99 +766,54 @@ export default function NewCardPage() {
       });
       return;
     }
-    if (!_editor || isEditorEmpty(_editor.document as AppPartialBlock[])) {
+
+    const contentToProcess = displayMode === 'rewritten' && rewrittenEditorContent ? rewrittenEditorContent : editorContent;
+
+    if (!contentToProcess || isEditorEmpty(contentToProcess)) {
+      setKeywordError("Cannot generate keywords: Content is empty.");
       toast({
         title: 'Content Required',
-        description: 'Cannot suggest keywords for empty content.',
+        description: 'Cannot generate keywords for empty content.',
         status: 'warning',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
-    setIsSuggestingKeywords(true);
-    setSuggestedKeywords(null);
+    
+    setIsGeneratingKeywords(true);
+    setKeywordError(null);
+
     try {
-      const currentContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        _editor.document as AppPartialBlock[],
+      const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        contentToProcess,
         session.user.id,
+        clientSideDocumentId,
       );
 
-      if (currentContentBlocks.length === 0) {
-        toast({
-          title: 'Cannot Suggest Keywords',
-          description: 'Failed to prepare content for keyword suggestion.',
-          status: 'warning',
-          duration: 3000,
-          isClosable: true,
-        });
-        setIsSuggestingKeywords(false);
-        return;
+      if (aiServiceBlocks.length === 0) {
+        throw new Error('No processable content found for keyword generation.');
       }
       
-      console.log('[NewCardPage] handleSuggestKeywords: Sending content for keyword suggestion:', JSON.stringify(currentContentBlocks, null, 2));
-
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: currentContentBlocks }),
+        body: JSON.stringify({ content_blocks: aiServiceBlocks }),
       });
+
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(
-          errorData.message || `HTTP error! status: ${response.status}`,
-        );
+        throw new Error(errorData.message || 'Failed to generate keywords from API');
       }
-      const data = await response.json();
-      console.log('[NewCardPage] handleSuggestKeywords: Received suggested keywords:', data.suggested_keywords);
-      setSuggestedKeywords(data.suggested_keywords.map((kw: string) => kw.startsWith('#') ? kw : `#${kw}`));
-      toast({
-        title: 'Keywords Suggested',
-        description: 'New keywords have been suggested.',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      });
-    } catch (error) {
-      console.error('Error suggesting keywords:', error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Unknown error suggesting keywords';
-      toast({
-        title: 'Keyword Suggestion Failed',
-        description: message,
-        status: 'error',
-        duration: 3000,
-        isClosable: true,
-      });
+
+      const result = await response.json();
+      setKeywords(result.suggested_keywords || []);
+      toast({ title: 'Keywords Suggested', description: 'AI has suggested keywords.', status: 'success', duration: 3000, isClosable: true });
+    } catch (error: any) {
+      console.error("Error generating keywords:", error);
+      setKeywordError(error.message || 'An unexpected error occurred while generating keywords.');
     } finally {
-      setIsSuggestingKeywords(false);
-    }
-  };
-
-  const applySuggestedKeyword = (keyword: string) => {
-    const newKeyword = keyword.startsWith('#') ? keyword : `#${keyword}`;
-    if (!keywords.some(kw => kw.toLowerCase() === newKeyword.toLowerCase())) {
-      setKeywords([...keywords, newKeyword]);
-    }
-    // Optionally remove from suggested list or indicate it's been added
-  };
-
-  const applyAllSuggestedKeywords = () => {
-    if (suggestedKeywords) {
-      const keywordsToAdd = suggestedKeywords.filter(
-        sk => !keywords.some(kw => kw.toLowerCase() === sk.toLowerCase())
-      );
-      setKeywords([...keywords, ...keywordsToAdd]);
-      setSuggestedKeywords(null); // Clear suggestions after applying
-      toast({
-        title: 'Keywords Updated',
-        description: 'All new suggested keywords have been added.',
-        status: 'info',
-        duration: 2000,
-        isClosable: true,
-      });
+      setIsGeneratingKeywords(false);
     }
   };
 
@@ -989,40 +872,39 @@ export default function NewCardPage() {
               )}
             </HStack>
           </FormControl>
-          <FormControl>
-            <FormLabel htmlFor="keywords">Keywords (Tags)</FormLabel>
-            <HStack spacing={2} wrap="wrap" mb={2}>
-              {keywords.map((keyword) => (
-                <Tag key={keyword} borderRadius="full" variant="solid" colorScheme="teal">
-                  <TagLabel>{keyword}</TagLabel>
-                  <TagCloseButton onClick={() => removeKeyword(keyword)} />
-                </Tag>
-              ))}
-            </HStack>
+
+          <FormControl mt={4}>
+            <FormLabel htmlFor='keywords-input'>
+              Keywords
+               <Text as="span" fontSize="sm" color="gray.500" ml={2}>
+                (Optional, comma-separated)
+              </Text>
+            </FormLabel>
             <Input
-              id="keywords"
+              id='keywords-input'
               type="text"
-              value={currentKeyword}
-              onChange={handleKeywordChange}
-              onKeyDown={handleKeywordKeyDown}
-              placeholder="Type a keyword and press Enter (e.g., #example)"
-              isDisabled={isSubmitting || isStagingLoading} 
+              value={keywords.join(', ')}
+              onChange={handleKeywordsInputChange}
+              placeholder="e.g., ai, productivity, learning"
+              mb={2}
+              isDisabled={isGeneratingKeywords || isSubmitting}
             />
-          </FormControl>
-          <FormControl>
-            <FormLabel>Suggested Keywords</FormLabel>
-            <Flex wrap="wrap" gap={2}>
-              {suggestedKeywords && suggestedKeywords.map((kw, index) => (
-                <Tag key={index} size="sm" variant="solid" colorScheme="purple">
-                  <TagLabel>{kw}</TagLabel>
-                  <TagCloseButton onClick={() => applySuggestedKeyword(kw)} aria-label={`Add keyword ${kw}`} />
-                </Tag>
-              ))}
-            </Flex>
-            {suggestedKeywords && suggestedKeywords.length > 0 && (
-              <Button size="xs" mt={2} onClick={applyAllSuggestedKeywords} isLoading={isSuggestingKeywords}>Apply All New</Button>
+            <Button
+              onClick={handleGenerateKeywordsAIClick}
+              isLoading={isGeneratingKeywords}
+              loadingText="Generating..."
+              colorScheme='blue'
+              variant='outline'
+              size='sm'
+              isDisabled={isSubmitting || isGeneratingKeywords}
+            >
+              Suggest Keywords with AI
+            </Button>
+            {keywordError && (
+              <Text color="red.500" mt={1} fontSize="sm">Error: {keywordError}</Text>
             )}
           </FormControl>
+
           <FormControl mt={4}>
             <FormLabel>Content</FormLabel>
             <HStack mt={0} mb={2} spacing={2} justify="flex-start">

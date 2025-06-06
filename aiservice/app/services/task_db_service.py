@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 def get_db_connection():
     """Establishes a new database connection."""
     if not settings.database_url:
-        logger.error("DATABASE_URL is not configured in settings.")
+        logger.error("DATABASE_URL is not configured in settings.", extra={'error_type': 'configuration', 'setting_name': 'DATABASE_URL'})
         # Re-raise a specific exception or let the caller handle it.
         # For now, raising ValueError as it's a config issue.
         raise ValueError("Database configuration error: DATABASE_URL not set.")
@@ -21,7 +21,7 @@ def get_db_connection():
         conn = psycopg2.connect(settings.database_url)
         return conn
     except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
+        logger.error("Failed to connect to database", extra={'error_type': 'connection', 'exception_message': str(e)}, exc_info=True)
         raise ConnectionError(f"Database connection error: {e}") # Raise a more specific error
 
 def _execute_update(conn, sql: str, params: tuple, task_id: str, operation_desc: str):
@@ -30,9 +30,9 @@ def _execute_update(conn, sql: str, params: tuple, task_id: str, operation_desc:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             conn.commit()
-        logger.info(f"[Task {task_id}] Successfully {operation_desc}.")
+        logger.info(f"Successfully {operation_desc}", extra={'task_id': task_id, 'db_operation': operation_desc})
     except Exception as e:
-        logger.error(f"[Task {task_id}] Failed to {operation_desc}: {e}", exc_info=True)
+        logger.error(f"Failed to {operation_desc}", extra={'task_id': task_id, 'db_operation': operation_desc, 'error_message': str(e)}, exc_info=True)
         # Consider rolling back if part of a larger transaction not handled by autocommit
         # For single operations, commit failure means the operation didn't complete.
         raise # Re-raise the exception to be handled by the caller
