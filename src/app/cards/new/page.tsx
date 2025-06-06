@@ -25,9 +25,6 @@ import {
   ModalFooter,
   ModalBody,
   ModalCloseButton,
-  Tag,
-  TagLabel,
-  Checkbox,
 } from '@chakra-ui/react';
 import {
   BlockNoteEditor as BlockNoteEditorType,
@@ -35,11 +32,10 @@ import {
 } from '@blocknote/core';
 import { type AppPartialBlock } from '@/lib/blocknote/appSchema';
 import { useStagingCardStore } from '@/stores/stagingCardStore';
-import { mapPartialBlocksToAIServiceContentBlocks, mapContentBlocksToPartialBlocks } from '@/lib/contentUtils';
-import type {
-  ContentBlock as AIServiceContentBlock,
-  RewriteContentResponse,
-} from '@/types/api/ai-service';
+import {
+  mapPartialBlocksToAIServiceContentBlocks,
+  mapContentBlocksToPartialBlocks,
+} from '@/lib/contentUtils';
 import { v4 as uuidv4 } from 'uuid';
 
 // Helper function to check if editor content is effectively empty
@@ -167,52 +163,84 @@ export default function NewCardPage() {
 
   const [title, setTitle] = useState('');
   const [_editor, setEditor] = useState<BlockNoteEditorType | null>(null);
-  const [editorContent, setEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
+  const [editorContent, setEditorContent] = useState<
+    AppPartialBlock[] | undefined
+  >(undefined);
   const [editorKey, setEditorKey] = useState(Date.now());
-  
+
   // Keyword states
   const [keywords, setKeywords] = useState<string[]>([]);
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
   const [keywordError, setKeywordError] = useState<string | null>(null);
-  
+
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const isStagingLoading = useStagingCardStore(state => state.isLoading);
+  const isStagingLoading = useStagingCardStore((state) => state.isLoading);
 
   // State for AI suggestions (Title only now for this section)
   const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
 
   // New state variables for AI Rewrite functionality
-  const [originalEditorContent, setOriginalEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
-  const [rewrittenEditorContent, setRewrittenEditorContent] = useState<AppPartialBlock[] | undefined>(undefined);
+  const [originalEditorContent, setOriginalEditorContent] = useState<
+    AppPartialBlock[] | undefined
+  >(undefined);
+  const [rewrittenEditorContent, setRewrittenEditorContent] = useState<
+    AppPartialBlock[] | undefined
+  >(undefined);
   const [isRewritingContent, setIsRewritingContent] = useState(false);
   const [rewriteError, setRewriteError] = useState<string | null>(null);
-  const [displayMode, setDisplayMode] = useState<'original' | 'rewritten'>('original');
+  const [displayMode, setDisplayMode] = useState<'original' | 'rewritten'>(
+    'original',
+  );
   const [showComparisonView, setShowComparisonView] = useState(false);
 
   // ADDED for asynchronous polling
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [pollingIntervalId, setPollingIntervalId] = useState<NodeJS.Timeout | null>(null);
+  const [pollingIntervalId, setPollingIntervalId] =
+    useState<NodeJS.Timeout | null>(null);
   const [pollingAttempts, setPollingAttempts] = useState(0);
-  const [currentProgressMessage, setCurrentProgressMessage] = useState<string | null>(null);
-  const [hasShownInitialContentReadyToast, setHasShownInitialContentReadyToast] = useState(false);
+  const [currentProgressMessage, setCurrentProgressMessage] = useState<
+    string | null
+  >(null);
+  const [
+    hasShownInitialContentReadyToast,
+    setHasShownInitialContentReadyToast,
+  ] = useState(false);
 
   const POLLING_INTERVAL_MS = 3000; // 3 seconds
   const MAX_POLLING_ATTEMPTS = 60; // 60 attempts * 3 seconds = 3 minutes timeout
 
   useEffect(() => {
-    console.log('[NewCardPage Staging useEffect] Running. Initial StagedTitle:', stagedTitle);
-    console.log('[NewCardPage Staging useEffect] Initial StagedContentBlocks present:', !!stagedContentBlocks && stagedContentBlocks.length > 0);
-    console.log('[NewCardPage Staging useEffect] Initial initialStagedKeywords from store:', initialStagedKeywords);
-    console.log('[NewCardPage Staging useEffect] hasShownInitialContentReadyToast state at start:', hasShownInitialContentReadyToast);
+    console.log(
+      '[NewCardPage Staging useEffect] Running. Initial StagedTitle:',
+      stagedTitle,
+    );
+    console.log(
+      '[NewCardPage Staging useEffect] Initial StagedContentBlocks present:',
+      !!stagedContentBlocks && stagedContentBlocks.length > 0,
+    );
+    console.log(
+      '[NewCardPage Staging useEffect] Initial initialStagedKeywords from store:',
+      initialStagedKeywords,
+    );
+    console.log(
+      '[NewCardPage Staging useEffect] hasShownInitialContentReadyToast state at start:',
+      hasShownInitialContentReadyToast,
+    );
 
     let processedNewDataInThisRun = false;
     let titleToUse: string | null = null;
     let autoExtractedTitleValue: string | null = null;
 
-    if (!stagedTitle && !stagedContentBlocks && (!initialStagedKeywords || initialStagedKeywords.length === 0)) {
+    if (
+      !stagedTitle &&
+      !stagedContentBlocks &&
+      (!initialStagedKeywords || initialStagedKeywords.length === 0)
+    ) {
       if (hasShownInitialContentReadyToast) {
-        console.log('[NewCardPage Staging useEffect] No staged data found, resetting hasShownInitialContentReadyToast to false.');
+        console.log(
+          '[NewCardPage Staging useEffect] No staged data found, resetting hasShownInitialContentReadyToast to false.',
+        );
         setHasShownInitialContentReadyToast(false);
       }
     }
@@ -223,15 +251,21 @@ export default function NewCardPage() {
     }
 
     if (stagedContentBlocks && stagedContentBlocks.length > 0) {
-      const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(stagedContentBlocks) as AppPartialBlock[];
-      setOriginalEditorContent(editorFriendlyBlocks); 
+      const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(
+        stagedContentBlocks,
+      ) as AppPartialBlock[];
+      setOriginalEditorContent(editorFriendlyBlocks);
       setEditorContent(editorFriendlyBlocks);
       setEditorKey(Date.now()); // Force re-render of editor if content changes
       processedNewDataInThisRun = true;
-      
-      if (!stagedTitle) { // Only auto-extract title if not already provided
+
+      if (!stagedTitle) {
+        // Only auto-extract title if not already provided
         const firstTextBlock = editorFriendlyBlocks.find(
-          (block) => block.type === 'paragraph' && block.content && block.content.length > 0
+          (block) =>
+            block.type === 'paragraph' &&
+            block.content &&
+            block.content.length > 0,
         ) as AppPartialBlock | undefined;
 
         if (firstTextBlock && firstTextBlock.content) {
@@ -240,22 +274,37 @@ export default function NewCardPage() {
             extractedText = firstTextBlock.content;
           } else if (Array.isArray(firstTextBlock.content)) {
             extractedText = firstTextBlock.content
-              .map(inline => (typeof inline === 'string' ? inline : (inline.type === 'text' ? inline.text : '')))
+              .map((inline) =>
+                typeof inline === 'string'
+                  ? inline
+                  : inline.type === 'text'
+                    ? inline.text
+                    : '',
+              )
               .join('');
           }
-          autoExtractedTitleValue = extractedText.substring(0, 100); 
+          autoExtractedTitleValue = extractedText.substring(0, 100);
           if (autoExtractedTitleValue) titleToUse = autoExtractedTitleValue;
-          console.log("[NewCardPage Staging useEffect] Auto-extracted title from content:", autoExtractedTitleValue);
+          console.log(
+            '[NewCardPage Staging useEffect] Auto-extracted title from content:',
+            autoExtractedTitleValue,
+          );
         } else {
-          console.log("[NewCardPage Staging useEffect] No suitable first text block found for auto-title extraction.");
+          console.log(
+            '[NewCardPage Staging useEffect] No suitable first text block found for auto-title extraction.',
+          );
         }
       }
-    } else if (stagedTitle || (initialStagedKeywords && initialStagedKeywords.length > 0)) { 
+    } else if (
+      stagedTitle ||
+      (initialStagedKeywords && initialStagedKeywords.length > 0)
+    ) {
       setOriginalEditorContent(undefined);
-      setEditorContent(undefined); 
+      setEditorContent(undefined);
       setEditorKey(Date.now()); // Also refresh editor if only title/keywords are staged
       // titleToUse is already set if stagedTitle exists
-      if (initialStagedKeywords && initialStagedKeywords.length > 0) processedNewDataInThisRun = true;
+      if (initialStagedKeywords && initialStagedKeywords.length > 0)
+        processedNewDataInThisRun = true;
     } else {
       // No content blocks, no title from staging, no keywords from staging
       // Retain current editor content or clear it if that's desired behavior when staging is empty
@@ -265,26 +314,35 @@ export default function NewCardPage() {
     if (titleToUse) {
       setTitle(titleToUse);
     }
-    
-    if (initialStagedKeywords && initialStagedKeywords.length > 0) { 
-      setKeywords(initialStagedKeywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`));
-      processedNewDataInThisRun = true; 
-    } 
+
+    if (initialStagedKeywords && initialStagedKeywords.length > 0) {
+      setKeywords(
+        initialStagedKeywords.map((kw) => (kw.startsWith('#') ? kw : `#${kw}`)),
+      );
+      processedNewDataInThisRun = true;
+    }
 
     if (processedNewDataInThisRun && !hasShownInitialContentReadyToast) {
       toast({
         title: 'Content Ready for New Card',
-        description: 'Your previously started content (or content from another tab/tool) has been loaded. Review and continue.',
+        description:
+          'Your previously started content (or content from another tab/tool) has been loaded. Review and continue.',
         status: 'info',
         duration: 7000,
         isClosable: true,
       });
       setHasShownInitialContentReadyToast(true);
-      console.log('[NewCardPage Staging useEffect] setHasShownInitialContentReadyToast to true.');
+      console.log(
+        '[NewCardPage Staging useEffect] setHasShownInitialContentReadyToast to true.',
+      );
     } else if (processedNewDataInThisRun && hasShownInitialContentReadyToast) {
-      console.log('[NewCardPage Staging useEffect] Processed new data, but initial content ready toast already shown for this batch.');
+      console.log(
+        '[NewCardPage Staging useEffect] Processed new data, but initial content ready toast already shown for this batch.',
+      );
     } else if (!processedNewDataInThisRun) {
-      console.log('[NewCardPage Staging useEffect] No new data processed in this run, not showing content ready toast.');
+      console.log(
+        '[NewCardPage Staging useEffect] No new data processed in this run, not showing content ready toast.',
+      );
     }
 
     if (stagingError) {
@@ -296,30 +354,29 @@ export default function NewCardPage() {
         isClosable: true,
       });
     }
-
   }, [
-    stagedTitle, 
-    stagedContentBlocks, 
-    initialStagedKeywords, 
-    stagingError, 
+    stagedTitle,
+    stagedContentBlocks,
+    initialStagedKeywords,
+    stagingError,
     clearStagingData, // From store, include if its identity can change or if effect calls it
-    toast, 
-    setTitle, 
-    setOriginalEditorContent, 
-    setEditorContent, 
-    setEditorKey, 
+    toast,
+    setTitle,
+    setOriginalEditorContent,
+    setEditorContent,
+    setEditorKey,
     setKeywords,
     hasShownInitialContentReadyToast, // state variable used in logic
-    setHasShownInitialContentReadyToast // setter for the above
+    setHasShownInitialContentReadyToast, // setter for the above
   ]);
 
   // New useEffect for component unmount cleanup
   useEffect(() => {
     return () => {
       console.log('[NewCardPage onTrueUnmount] Clearing staged data.');
-      clearStagingData(); 
+      clearStagingData();
     };
-  }, [clearStagingData]); 
+  }, [clearStagingData]);
 
   const handleEditorInstanceReady = useCallback(
     (editorInstance: BlockNoteEditorType | null) => {
@@ -328,17 +385,22 @@ export default function NewCardPage() {
     [],
   );
 
-  const handleEditorContentUpdate = useCallback((blocks: PartialBlock[]) => {
-    if (!showComparisonView) {
-      const appBlocks = blocks as AppPartialBlock[];
-      setEditorContent(appBlocks);
-      if (JSON.stringify(appBlocks) === JSON.stringify(rewrittenEditorContent)) {
-        setDisplayMode('rewritten');
-      } else {
-        setDisplayMode('original');
+  const handleEditorContentUpdate = useCallback(
+    (blocks: PartialBlock[]) => {
+      if (!showComparisonView) {
+        const appBlocks = blocks as AppPartialBlock[];
+        setEditorContent(appBlocks);
+        if (
+          JSON.stringify(appBlocks) === JSON.stringify(rewrittenEditorContent)
+        ) {
+          setDisplayMode('rewritten');
+        } else {
+          setDisplayMode('original');
+        }
       }
-    }
-  }, [showComparisonView, rewrittenEditorContent]);
+    },
+    [showComparisonView, rewrittenEditorContent],
+  );
 
   const handleRewriteContent = async () => {
     if (!editorContent || isEditorEmpty(editorContent)) {
@@ -359,7 +421,7 @@ export default function NewCardPage() {
     setRewriteError(null);
     setTaskId(null); // Reset task ID
     setPollingAttempts(0); // Reset polling attempts
-    setCurrentProgressMessage("Initiating rewrite process...");
+    setCurrentProgressMessage('Initiating rewrite process...');
     if (pollingIntervalId) clearInterval(pollingIntervalId); // Clear any existing interval
     setPollingIntervalId(null);
 
@@ -368,7 +430,7 @@ export default function NewCardPage() {
 
     try {
       const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        currentAppPartialBlocks as any, // Consider if 'as any' can be more specific
+        currentAppPartialBlocks,
         session?.user.id ?? 'unknown-user',
       );
 
@@ -412,7 +474,9 @@ export default function NewCardPage() {
     } catch (error) {
       console.error('Error submitting rewrite task:', error);
       const errorMessage =
-        error instanceof Error ? error.message : 'An unknown error occurred during submission';
+        error instanceof Error
+          ? error.message
+          : 'An unknown error occurred during submission';
       setRewriteError(errorMessage);
       toast({
         title: 'Submission Error',
@@ -440,8 +504,12 @@ export default function NewCardPage() {
     const intervalId = setInterval(async () => {
       // Stop polling if max attempts reached
       if (pollingAttempts >= MAX_POLLING_ATTEMPTS) {
-        console.error(`[NewCardPage] Polling timed out for task ${taskId}. Stopping.`);
-        setRewriteError('Polling timed out. The task may still be running in the background, but the status could not be retrieved in time.');
+        console.error(
+          `[NewCardPage] Polling timed out for task ${taskId}. Stopping.`,
+        );
+        setRewriteError(
+          'Polling timed out. The task may still be running in the background, but the status could not be retrieved in time.',
+        );
         clearInterval(intervalId);
         setPollingIntervalId(null);
         setIsRewritingContent(false);
@@ -451,12 +519,14 @@ export default function NewCardPage() {
       }
 
       // console.log(`[NewCardPage] Polling task status for ID: ${taskId}, Attempt: ${currentAttemptForLog}`); // REMOVED to reduce console noise
-      setPollingAttempts(prev => prev + 1);
-      
+      setPollingAttempts((prev) => prev + 1);
+
       try {
         const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
         if (!response.ok) {
-          throw new Error(`Polling request failed with status ${response.status}`);
+          throw new Error(
+            `Polling request failed with status ${response.status}`,
+          );
         }
 
         const data = await response.json();
@@ -464,13 +534,16 @@ export default function NewCardPage() {
         // console.log(`[NewCardPage] Polling response data for task ${taskId}, attempt ${pollingAttempts}:`, JSON.stringify(data, null, 2));
 
         if (data.status === 'COMPLETED') {
-          console.log(`[NewCardPage] Task ${taskId} COMPLETED. Full data:`, JSON.stringify(data, null, 2));
+          console.log(
+            `[NewCardPage] Task ${taskId} COMPLETED. Full data:`,
+            JSON.stringify(data, null, 2),
+          );
           // Original logic for COMPLETED status
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
-          setPollingAttempts(0); 
-          setTaskId(null); 
+          setPollingAttempts(0);
+          setTaskId(null);
           if (data.ai_rewritten_content_blocks) {
             try {
               const newRewrittenContent = mapContentBlocksToPartialBlocks(
@@ -479,60 +552,97 @@ export default function NewCardPage() {
               if (newRewrittenContent) {
                 setRewrittenEditorContent(newRewrittenContent);
                 setCurrentProgressMessage(null);
-                toast({ 
+                toast({
                   title: 'Content Rewritten Successfully',
                   description: 'AI has completed rewriting the content.',
-                  status: 'success', 
-                  duration: 3000, 
-                  isClosable: true 
+                  status: 'success',
+                  duration: 3000,
+                  isClosable: true,
                 });
               } else {
-                const mappingError = 'Rewrite completed, content was present, but mapping resulted in empty content.';
+                const mappingError =
+                  'Rewrite completed, content was present, but mapping resulted in empty content.';
                 setRewriteError(mappingError);
                 setCurrentProgressMessage(null);
-                toast({ title: 'Rewrite Mapping Error', description: mappingError, status: 'error', duration: 5000, isClosable: true });
+                toast({
+                  title: 'Rewrite Mapping Error',
+                  description: mappingError,
+                  status: 'error',
+                  duration: 5000,
+                  isClosable: true,
+                });
                 setShowComparisonView(false);
               }
             } catch (mappingOrSetError) {
-                const processingError = 'Error processing or setting rewritten content.';
-                setRewriteError(processingError + (mappingOrSetError instanceof Error ? `: ${mappingOrSetError.message}`: ''));
-                setCurrentProgressMessage(null);
-                toast({ title: 'Rewrite Processing Error', description: processingError, status: 'error', duration: 5000, isClosable: true });
-                setShowComparisonView(false);
+              const processingError =
+                'Error processing or setting rewritten content.';
+              setRewriteError(
+                processingError +
+                  (mappingOrSetError instanceof Error
+                    ? `: ${mappingOrSetError.message}`
+                    : ''),
+              );
+              setCurrentProgressMessage(null);
+              toast({
+                title: 'Rewrite Processing Error',
+                description: processingError,
+                status: 'error',
+                duration: 5000,
+                isClosable: true,
+              });
+              setShowComparisonView(false);
             }
           } else {
-            const completionError = 'Rewrite completed, but data.ai_rewritten_content_blocks was falsy.';
+            const completionError =
+              'Rewrite completed, but data.ai_rewritten_content_blocks was falsy.';
             setRewriteError(completionError);
             setCurrentProgressMessage(null);
-            toast({ title: 'Rewrite Data Missing', description: completionError, status: 'error', duration: 5000, isClosable: true });
+            toast({
+              title: 'Rewrite Data Missing',
+              description: completionError,
+              status: 'error',
+              duration: 5000,
+              isClosable: true,
+            });
             setShowComparisonView(false);
           }
         } else if (data.status === 'FAILED') {
           // Original logic for FAILED status
-          console.error(`[NewCardPage] Task ${taskId} FAILED. Reason:`, data.errorMessage);
+          console.error(
+            `[NewCardPage] Task ${taskId} FAILED. Reason:`,
+            data.errorMessage,
+          );
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
-          setPollingAttempts(0); 
-          setTaskId(null); 
+          setPollingAttempts(0);
+          setTaskId(null);
           setCurrentProgressMessage(null);
-          const errorMessage = data.errorMessage || 'Rewrite task failed with no specific error message.';
+          const errorMessage =
+            data.errorMessage ||
+            'Rewrite task failed with no specific error message.';
           setRewriteError(errorMessage);
-          toast({ 
+          toast({
             title: 'Rewrite Task Failed',
             description: errorMessage,
-            status: 'error', 
-            duration: 5000, 
-            isClosable: true 
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
           });
-          setShowComparisonView(false); 
+          setShowComparisonView(false);
         } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
           // Use progressStage if available, otherwise a generic message
-          setCurrentProgressMessage(data.progressStage || `Processing... (Status: ${data.status})`);
+          setCurrentProgressMessage(
+            data.progressStage || `Processing... (Status: ${data.status})`,
+          );
         } else {
           // Original logic for unknown status or simply continue polling if that was the intent
-          console.warn(`[NewCardPage] Task ${taskId} has unknown status: ${data.status}`);
-          setCurrentProgressMessage(`Unknown status: ${data.status}. Polling...`); // Removed attempt count from UI
+          console.warn(
+            `[NewCardPage] Task ${taskId} has unknown status: ${data.status}`,
+          );
+          setCurrentProgressMessage(
+            `Unknown status: ${data.status}. Polling...`,
+          ); // Removed attempt count from UI
         }
       } catch (error) {
         clearInterval(intervalId);
@@ -542,7 +652,9 @@ export default function NewCardPage() {
         setTaskId(null);
         setCurrentProgressMessage(null);
         const errorMessage =
-          error instanceof Error ? error.message : 'An unknown error occurred during polling';
+          error instanceof Error
+            ? error.message
+            : 'An unknown error occurred during polling';
         setRewriteError(errorMessage);
         toast({
           title: 'Polling Error',
@@ -561,7 +673,7 @@ export default function NewCardPage() {
       if (intervalId) clearInterval(intervalId);
       setPollingIntervalId(null);
     };
-  }, [taskId, isRewritingContent, toast]);
+  }, [taskId, isRewritingContent, toast, pollingAttempts, pollingIntervalId]);
 
   const handleUseOriginalFromComparison = () => {
     if (originalEditorContent) {
@@ -572,7 +684,12 @@ export default function NewCardPage() {
       setDisplayMode('original');
     }
     setShowComparisonView(false);
-    toast({ title: "Original Content Selected", status: "info", duration: 2000, isClosable: true });
+    toast({
+      title: 'Original Content Selected',
+      status: 'info',
+      duration: 2000,
+      isClosable: true,
+    });
   };
 
   const handleUseRewrittenFromComparison = () => {
@@ -584,7 +701,12 @@ export default function NewCardPage() {
       setDisplayMode('rewritten');
     }
     setShowComparisonView(false);
-    toast({ title: "Rewritten Content Selected", status: "success", duration: 2000, isClosable: true });
+    toast({
+      title: 'Rewritten Content Selected',
+      status: 'success',
+      duration: 2000,
+      isClosable: true,
+    });
   };
 
   const handleSubmit = async (event: FormEvent) => {
@@ -600,10 +722,13 @@ export default function NewCardPage() {
       });
       return;
     }
-    
-    const contentToProcess = displayMode === 'rewritten' && rewrittenEditorContent && !isEditorEmpty(rewrittenEditorContent) 
-                             ? rewrittenEditorContent 
-                             : originalEditorContent;
+
+    const contentToProcess =
+      displayMode === 'rewritten' &&
+      rewrittenEditorContent &&
+      !isEditorEmpty(rewrittenEditorContent)
+        ? rewrittenEditorContent
+        : originalEditorContent;
 
     if (isEditorEmpty(contentToProcess)) {
       toast({
@@ -633,29 +758,54 @@ export default function NewCardPage() {
     try {
       const payload = {
         title: title,
-        content: contentToProcess, 
-        tags: keywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`),
+        content: contentToProcess,
+        tags: keywords.map((kw) => (kw.startsWith('#') ? kw : `#${kw}`)),
       };
-      
-      console.log('[NewCardPage] handleSubmit: Sending payload:', JSON.stringify(payload, null, 2));
+
+      console.log(
+        '[NewCardPage] handleSubmit: Sending payload:',
+        JSON.stringify(payload, null, 2),
+      );
 
       const response = await fetch('/api/cards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const responseData = await response.json() as CreateCardSuccessResponse | CreateCardErrorResponse;
+      const responseData = (await response.json()) as
+        | CreateCardSuccessResponse
+        | CreateCardErrorResponse;
 
       if (response.ok && (responseData as CreateCardSuccessResponse).id) {
-        toast({ title: 'Card created successfully!', status: 'success', duration: 3000, isClosable: true });
+        toast({
+          title: 'Card created successfully!',
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        });
         router.push(`/cards/${(responseData as CreateCardSuccessResponse).id}`);
       } else {
         const errorResponse = responseData as CreateCardErrorResponse;
-        const message = errorResponse.error || errorResponse.message || 'Failed to create card';
-        toast({ title: 'Error Creating Card', description: message, status: 'error', duration: 5000, isClosable: true });
+        const message =
+          errorResponse.error ||
+          errorResponse.message ||
+          'Failed to create card';
+        toast({
+          title: 'Error Creating Card',
+          description: message,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
       }
     } catch (error) {
-      toast({ title: 'An unexpected error occurred', description: error instanceof Error ? error.message : String(error), status: 'error', duration: 5000, isClosable: true });
+      toast({
+        title: 'An unexpected error occurred',
+        description: error instanceof Error ? error.message : String(error),
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -702,8 +852,11 @@ export default function NewCardPage() {
         setIsSuggestingTitle(false);
         return;
       }
-      
-      console.log('[NewCardPage] handleSuggestTitle: Sending content for title suggestion:', JSON.stringify(currentContentBlocks, null, 2));
+
+      console.log(
+        '[NewCardPage] handleSuggestTitle: Sending content for title suggestion:',
+        JSON.stringify(currentContentBlocks, null, 2),
+      );
 
       const response = await fetch('/api/ai/generate-title', {
         method: 'POST',
@@ -718,7 +871,10 @@ export default function NewCardPage() {
         );
       }
       const data = await response.json();
-      console.log('[NewCardPage] handleSuggestTitle: Received suggested title:', data.suggested_title);
+      console.log(
+        '[NewCardPage] handleSuggestTitle: Received suggested title:',
+        data.suggested_title,
+      );
       setSuggestedTitle(data.suggested_title);
       toast({
         title: 'Title Suggested',
@@ -730,7 +886,9 @@ export default function NewCardPage() {
     } catch (error) {
       console.error('Error suggesting title:', error);
       const message =
-        error instanceof Error ? error.message : 'Unknown error suggesting title';
+        error instanceof Error
+          ? error.message
+          : 'Unknown error suggesting title';
       toast({
         title: 'Title Suggestion Failed',
         description: message,
@@ -750,8 +908,10 @@ export default function NewCardPage() {
     }
   };
 
-  const handleKeywordsInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newKeywords = event.target.value.split(',').map(kw => kw.trim());
+  const handleKeywordsInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const newKeywords = event.target.value.split(',').map((kw) => kw.trim());
     setKeywords(newKeywords);
   };
 
@@ -767,10 +927,13 @@ export default function NewCardPage() {
       return;
     }
 
-    const contentToProcess = displayMode === 'rewritten' && rewrittenEditorContent ? rewrittenEditorContent : editorContent;
+    const contentToProcess =
+      displayMode === 'rewritten' && rewrittenEditorContent
+        ? rewrittenEditorContent
+        : editorContent;
 
     if (!contentToProcess || isEditorEmpty(contentToProcess)) {
-      setKeywordError("Cannot generate keywords: Content is empty.");
+      setKeywordError('Cannot generate keywords: Content is empty.');
       toast({
         title: 'Content Required',
         description: 'Cannot generate keywords for empty content.',
@@ -780,7 +943,7 @@ export default function NewCardPage() {
       });
       return;
     }
-    
+
     setIsGeneratingKeywords(true);
     setKeywordError(null);
 
@@ -794,7 +957,7 @@ export default function NewCardPage() {
       if (aiServiceBlocks.length === 0) {
         throw new Error('No processable content found for keyword generation.');
       }
-      
+
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -803,15 +966,27 @@ export default function NewCardPage() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to generate keywords from API');
+        throw new Error(
+          errorData.message || 'Failed to generate keywords from API',
+        );
       }
 
       const result = await response.json();
       setKeywords(result.suggested_keywords || []);
-      toast({ title: 'Keywords Suggested', description: 'AI has suggested keywords.', status: 'success', duration: 3000, isClosable: true });
-    } catch (error: any) {
-      console.error("Error generating keywords:", error);
-      setKeywordError(error.message || 'An unexpected error occurred while generating keywords.');
+      toast({
+        title: 'Keywords Suggested',
+        description: 'AI has suggested keywords.',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (error: unknown) {
+      console.error('Error generating keywords:', error);
+      setKeywordError(
+        error instanceof Error
+          ? error.message
+          : 'An unexpected error occurred while generating keywords.',
+      );
     } finally {
       setIsGeneratingKeywords(false);
     }
@@ -833,7 +1008,8 @@ export default function NewCardPage() {
 
   // Display a loading spinner if data is being staged (e.g. if navigation happened before staging store finished an async op)
   // This is a fallback; ideally, navigation only occurs after staging store is not loading.
-  if (isStagingLoading && !stagedTitle && !stagedContentBlocks) { // Only show if not yet populated
+  if (isStagingLoading && !stagedTitle && !stagedContentBlocks) {
+    // Only show if not yet populated
     return (
       <Flex justify="center" align="center" minH="100vh">
         <Spinner size="xl" />
@@ -861,27 +1037,37 @@ export default function NewCardPage() {
                 size="sm"
                 onClick={handleSuggestTitle}
                 isLoading={isSuggestingTitle}
-                disabled={isSuggestingTitle || !_editor || isEditorEmpty(_editor?.document as AppPartialBlock[])}
+                disabled={
+                  isSuggestingTitle ||
+                  !_editor ||
+                  isEditorEmpty(_editor?.document as AppPartialBlock[])
+                }
               >
                 Suggest Title
               </Button>
               {suggestedTitle && (
-                <Button size="sm" colorScheme="teal" variant="outline" onClick={applySuggestedTitle}>
-                  Apply: "{suggestedTitle.substring(0,30)}{suggestedTitle.length > 30 ? '...' : ''}"
+                <Button
+                  size="sm"
+                  colorScheme="teal"
+                  variant="outline"
+                  onClick={applySuggestedTitle}
+                >
+                  Apply: &quot;{suggestedTitle.substring(0, 30)}
+                  {suggestedTitle.length > 30 ? '...' : ''}&quot;
                 </Button>
               )}
             </HStack>
           </FormControl>
 
           <FormControl mt={4}>
-            <FormLabel htmlFor='keywords-input'>
+            <FormLabel htmlFor="keywords-input">
               Keywords
-               <Text as="span" fontSize="sm" color="gray.500" ml={2}>
+              <Text as="span" fontSize="sm" color="gray.500" ml={2}>
                 (Optional, comma-separated)
               </Text>
             </FormLabel>
             <Input
-              id='keywords-input'
+              id="keywords-input"
               type="text"
               value={keywords.join(', ')}
               onChange={handleKeywordsInputChange}
@@ -893,15 +1079,17 @@ export default function NewCardPage() {
               onClick={handleGenerateKeywordsAIClick}
               isLoading={isGeneratingKeywords}
               loadingText="Generating..."
-              colorScheme='blue'
-              variant='outline'
-              size='sm'
+              colorScheme="blue"
+              variant="outline"
+              size="sm"
               isDisabled={isSubmitting || isGeneratingKeywords}
             >
               Suggest Keywords with AI
             </Button>
             {keywordError && (
-              <Text color="red.500" mt={1} fontSize="sm">Error: {keywordError}</Text>
+              <Text color="red.500" mt={1} fontSize="sm">
+                Error: {keywordError}
+              </Text>
             )}
           </FormControl>
 
@@ -918,7 +1106,13 @@ export default function NewCardPage() {
                 AI Rewrite Content (Beta)
               </Button>
             </HStack>
-            <Box border="1px solid" borderColor="gray.200" borderRadius="md" p={1} minH="300px">
+            <Box
+              border="1px solid"
+              borderColor="gray.200"
+              borderRadius="md"
+              p={1}
+              minH="300px"
+            >
               <BlockNoteEditorComponent
                 key={editorKey}
                 initialContent={editorContent}
@@ -940,14 +1134,26 @@ export default function NewCardPage() {
                 </Button>
               </HStack>
             </HStack>
-            {rewriteError && <Text color="red.500" mt={1} fontSize="sm">Rewrite Error: {rewriteError}</Text>}
+            {rewriteError && (
+              <Text color="red.500" mt={1} fontSize="sm">
+                Rewrite Error: {rewriteError}
+              </Text>
+            )}
           </FormControl>
           <Button
             mt={6}
             colorScheme="blue"
             type="submit"
             isLoading={isSubmitting}
-            disabled={isSubmitting || title.trim() === '' || isEditorEmpty(displayMode === 'rewritten' && rewrittenEditorContent ? rewrittenEditorContent : originalEditorContent)}
+            disabled={
+              isSubmitting ||
+              title.trim() === '' ||
+              isEditorEmpty(
+                displayMode === 'rewritten' && rewrittenEditorContent
+                  ? rewrittenEditorContent
+                  : originalEditorContent,
+              )
+            }
           >
             Save Card
           </Button>
@@ -955,15 +1161,29 @@ export default function NewCardPage() {
       </form>
 
       {showComparisonView && originalEditorContent && (
-        <Modal isOpen={showComparisonView} onClose={() => setShowComparisonView(false)} size="6xl" scrollBehavior="inside">
+        <Modal
+          isOpen={showComparisonView}
+          onClose={() => setShowComparisonView(false)}
+          size="6xl"
+          scrollBehavior="inside"
+        >
           <ModalOverlay />
           <ModalContent maxH="90vh">
             <ModalHeader>Compare Original and Rewritten Content</ModalHeader>
             <ModalCloseButton />
             <ModalBody>
-              <Flex direction={{ base: "column", md: "row" }} gap={4}>
-                <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
-                  <Heading size="sm" mb={2}>Original</Heading>
+              <Flex direction={{ base: 'column', md: 'row' }} gap={4}>
+                <Box
+                  flex={1}
+                  p={2}
+                  borderWidth="1px"
+                  borderRadius="md"
+                  overflowY="auto"
+                  maxH="70vh"
+                >
+                  <Heading size="sm" mb={2}>
+                    Original
+                  </Heading>
                   <BlockNoteEditorComponent
                     key={`original-comp-${editorKey}`}
                     initialContent={originalEditorContent}
@@ -972,13 +1192,29 @@ export default function NewCardPage() {
                     onContentUpdate={() => {}}
                   />
                 </Box>
-                <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
-                  <Heading size="sm" mb={2}>AI Rewritten</Heading>
+                <Box
+                  flex={1}
+                  p={2}
+                  borderWidth="1px"
+                  borderRadius="md"
+                  overflowY="auto"
+                  maxH="70vh"
+                >
+                  <Heading size="sm" mb={2}>
+                    AI Rewritten
+                  </Heading>
                   {isRewritingContent && !rewrittenEditorContent ? (
-                    <Flex justify="center" align="center" minH="200px" direction="column">
+                    <Flex
+                      justify="center"
+                      align="center"
+                      minH="200px"
+                      direction="column"
+                    >
                       <Spinner size="xl" />
                       <Text mt={3}>AI Rewriting in progress...</Text>
-                      <Text mt={1} fontSize="sm" color="gray.500">{currentProgressMessage || 'Initializing...'}</Text>
+                      <Text mt={1} fontSize="sm" color="gray.500">
+                        {currentProgressMessage || 'Initializing...'}
+                      </Text>
                     </Flex>
                   ) : rewrittenEditorContent ? (
                     <BlockNoteEditorComponent
@@ -989,26 +1225,48 @@ export default function NewCardPage() {
                       onContentUpdate={() => {}}
                     />
                   ) : rewriteError ? (
-                    <Flex justify="center" align="center" minH="200px" direction="column">
-                        <Text color="red.500">Rewrite Error: {rewriteError}</Text>
-                        <Text fontSize="sm" color="gray.500" mt={2}>You can close this window and try again.</Text>
+                    <Flex
+                      justify="center"
+                      align="center"
+                      minH="200px"
+                      direction="column"
+                    >
+                      <Text color="red.500">Rewrite Error: {rewriteError}</Text>
+                      <Text fontSize="sm" color="gray.500" mt={2}>
+                        You can close this window and try again.
+                      </Text>
                     </Flex>
                   ) : (
                     <Flex justify="center" align="center" minH="200px">
-                      <Text color="gray.500">Waiting for rewritten content...</Text>
+                      <Text color="gray.500">
+                        Waiting for rewritten content...
+                      </Text>
                     </Flex>
                   )}
                 </Box>
               </Flex>
             </ModalBody>
             <ModalFooter>
-              <Button colorScheme="blue" mr={3} onClick={handleUseRewrittenFromComparison}>
+              <Button
+                colorScheme="blue"
+                mr={3}
+                onClick={handleUseRewrittenFromComparison}
+              >
                 Use Rewritten Content
               </Button>
-              <Button variant="ghost" mr={3} onClick={handleUseOriginalFromComparison}>
+              <Button
+                variant="ghost"
+                mr={3}
+                onClick={handleUseOriginalFromComparison}
+              >
                 Use Original Content
               </Button>
-              <Button variant="outline" onClick={() => setShowComparisonView(false)}>Cancel</Button>
+              <Button
+                variant="outline"
+                onClick={() => setShowComparisonView(false)}
+              >
+                Cancel
+              </Button>
             </ModalFooter>
           </ModalContent>
         </Modal>

@@ -25,7 +25,6 @@ export const mapContentBlocksToPartialBlocks = (
     items: (string | AIServiceContentBlock)[],
     ordered: boolean,
     level: number = 0, // Keep track of nesting level for BlockNote
-    parentBlockIdHint?: string, // Optional hint from parent, not strictly used for item IDs yet
   ): PartialBlock[] => {
     console.log(
       `[ContentUtils] mapAIServiceListToPartialBlocks (level ${level}) received items:`,
@@ -64,7 +63,6 @@ export const mapContentBlocksToPartialBlocks = (
           item.items as (string | AIServiceContentBlock)[],
           item.ordered || false,
           level + 1, // Pass incremented level
-          listItemId, // Pass current list item ID as parent hint for nested items
         );
         if (lastListItem) {
           lastListItem.children = nestedListItems;
@@ -112,15 +110,35 @@ export const mapContentBlocksToPartialBlocks = (
       case 'paragraph':
         let paragraphBnContent: AppPartialBlock['content'] = [];
         if (block.content != null) {
-          if (Array.isArray(block.content) && block.content.length > 0 && typeof block.content[0] === 'object' && block.content[0] !== null && 'type' in block.content[0] && 'text' in block.content[0]) {
+          if (
+            Array.isArray(block.content) &&
+            block.content.length > 0 &&
+            typeof block.content[0] === 'object' &&
+            block.content[0] !== null &&
+            'type' in block.content[0] &&
+            'text' in block.content[0]
+          ) {
             // Assume it's already AppInlineContentArray if the first item looks like it
             paragraphBnContent = [...block.content];
-            console.log(`[ContentUtils] Block type '${block.type}' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`);
+            console.log(
+              `[ContentUtils] Block type '${block.type}' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`,
+            );
           } else if (typeof block.content === 'string') {
-            paragraphBnContent = block.content ? [{ type: 'text', text: block.content, styles: {} }] : [];
+            paragraphBnContent = block.content
+              ? [{ type: 'text', text: block.content, styles: {} }]
+              : [];
           } else {
-            console.warn(`[ContentUtils] Block type '${block.type}' (ID: ${blockId}) has unexpected content type. Actual content:`, JSON.stringify(block.content));
-            paragraphBnContent = [{ type: 'text', text: '[Unsupported content format - Check console]', styles: { italic: true} }];
+            console.warn(
+              `[ContentUtils] Block type '${block.type}' (ID: ${blockId}) has unexpected content type. Actual content:`,
+              JSON.stringify(block.content),
+            );
+            paragraphBnContent = [
+              {
+                type: 'text',
+                text: '[Unsupported content format - Check console]',
+                styles: { italic: true },
+              },
+            ];
           }
         }
         partialBlock = {
@@ -132,15 +150,35 @@ export const mapContentBlocksToPartialBlocks = (
       case 'heading':
         let headingBnContent: AppPartialBlock['content'] = [];
         if (block.content != null) {
-          if (Array.isArray(block.content) && block.content.length > 0 && typeof block.content[0] === 'object' && block.content[0] !== null && 'type' in block.content[0] && 'text' in block.content[0]) {
+          if (
+            Array.isArray(block.content) &&
+            block.content.length > 0 &&
+            typeof block.content[0] === 'object' &&
+            block.content[0] !== null &&
+            'type' in block.content[0] &&
+            'text' in block.content[0]
+          ) {
             // Assume it's already AppInlineContentArray
             headingBnContent = [...block.content];
-            console.log(`[ContentUtils] Block type 'heading' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`);
+            console.log(
+              `[ContentUtils] Block type 'heading' (ID: ${blockId}) received pre-formatted AppInlineContentArray.`,
+            );
           } else if (typeof block.content === 'string') {
-            headingBnContent = block.content ? [{ type: 'text', text: block.content, styles: {} }] : [];
+            headingBnContent = block.content
+              ? [{ type: 'text', text: block.content, styles: {} }]
+              : [];
           } else {
-            console.warn(`[ContentUtils] Block type 'heading' (ID: ${blockId}) has unexpected content type. Actual content:`, JSON.stringify(block.content));
-            headingBnContent = [{ type: 'text', text: '[Unsupported content format - Check console]', styles: { italic: true} }];
+            console.warn(
+              `[ContentUtils] Block type 'heading' (ID: ${blockId}) has unexpected content type. Actual content:`,
+              JSON.stringify(block.content),
+            );
+            headingBnContent = [
+              {
+                type: 'text',
+                text: '[Unsupported content format - Check console]',
+                styles: { italic: true },
+              },
+            ];
           }
         }
         partialBlock = {
@@ -164,7 +202,6 @@ export const mapContentBlocksToPartialBlocks = (
             block.items as (string | AIServiceContentBlock)[],
             block.ordered || false,
             0, // Start at level 0 for the main list
-            blockId, // Pass parent block ID for context if needed by list mapper
           );
         } else {
           console.warn(
@@ -186,7 +223,9 @@ export const mapContentBlocksToPartialBlocks = (
             children: [],
           };
         } else {
-          console.warn(`[ContentUtils] Image block (ID: ${blockId}) is missing gcs_url.`);
+          console.warn(
+            `[ContentUtils] Image block (ID: ${blockId}) is missing gcs_url.`,
+          );
           partialBlock = {
             id: blockId,
             type: 'paragraph',
@@ -207,8 +246,11 @@ export const mapContentBlocksToPartialBlocks = (
             codeContent = block.content;
           } else {
             // Code snippets content should ideally always be a string from the AI Service
-            console.warn(`[ContentUtils] Block type 'code_snippet' (ID: ${blockId}) has non-string content. Forcing to string. Actual content:`, JSON.stringify(block.content));
-            codeContent = String(block.content); 
+            console.warn(
+              `[ContentUtils] Block type 'code_snippet' (ID: ${blockId}) has non-string content. Forcing to string. Actual content:`,
+              JSON.stringify(block.content),
+            );
+            codeContent = String(block.content);
           }
         }
         partialBlock = {
@@ -217,7 +259,9 @@ export const mapContentBlocksToPartialBlocks = (
           props: {
             language: block.language || 'plaintext',
           },
-          content: codeContent ? [{ type: 'text', text: codeContent, styles: {} }] : [],
+          content: codeContent
+            ? [{ type: 'text', text: codeContent, styles: {} }]
+            : [],
         };
         break;
       default:
@@ -231,15 +275,21 @@ export const mapContentBlocksToPartialBlocks = (
           if (typeof block.content === 'string') {
             defaultCaseText += ` ${block.content}`;
           } else {
-            defaultCaseText += ' [Content is non-string, see console for details.]';
-            console.warn(`[ContentUtils] Default case for block type '${block.type}' (ID: ${blockId}) has non-string content:`, JSON.parse(JSON.stringify(block.content)));
+            defaultCaseText +=
+              ' [Content is non-string, see console for details.]';
+            console.warn(
+              `[ContentUtils] Default case for block type '${block.type}' (ID: ${blockId}) has non-string content:`,
+              JSON.parse(JSON.stringify(block.content)),
+            );
           }
         }
 
         partialBlock = {
           id: blockId,
           type: 'paragraph',
-          content: [{ type: 'text', text: defaultCaseText, styles: { italic: true } }],
+          content: [
+            { type: 'text', text: defaultCaseText, styles: { italic: true } },
+          ],
         };
     }
     console.log(
@@ -396,12 +446,12 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
 
       // The block.id from BlockNote PartialBlock is the original block_id/tmp_id
       // from the AI Service, which should serve as the image_id_ref.
-      const imageIdRef = block.id; 
+      const imageIdRef = block.id;
 
       if (imageUrl && imageIdRef) {
         aiServiceBlocks.push({
           block_id: imageIdRef, // Use the original block ID as the main identifier
-          tmp_id: imageIdRef,   // Can be the same if no separate temp ID concept here
+          tmp_id: imageIdRef, // Can be the same if no separate temp ID concept here
           user_id: userId,
           document_id: docIdToUse,
           type: 'image',
@@ -416,8 +466,8 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
           list_start_number: null,
           language: null,
           alt_text: null, // Potentially map from props if available, e.g., block.props.alt
-          width: null,    // Potentially map from props if available
-          height: null,   // Potentially map from props if available
+          width: null, // Potentially map from props if available
+          height: null, // Potentially map from props if available
           llm_description: null,
           page_number: null,
           bbox: null,

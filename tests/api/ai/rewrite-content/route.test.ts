@@ -65,23 +65,19 @@ describe('/api/ai/rewrite-content POST', () => {
     process.env = originalProcessEnv;
   });
 
-  it('should successfully rewrite content and return the rewritten blocks', async () => {
-    const mockPythonResponse = {
-      ai_rewritten_content_blocks: mockRewrittenContentBlocks,
-      status_code: 'success',
-      // rewritten_document_id is optional in Python response for this service
-    };
+  it('should successfully submit a rewrite task and return a task_id', async () => {
+    const mockTaskId = 'task-12345';
+    const mockAiserviceResponse = { task_id: mockTaskId };
 
     (global.fetch as Mock).mockResolvedValueOnce({
       ok: true,
-      json: async () => mockPythonResponse,
-      status: 200,
+      json: async () => mockAiserviceResponse,
+      status: 200, // The AI service itself returns 200 on successful task submission
     } as Response);
 
     const requestBody: RewriteContentRequest = {
       content_blocks_to_rewrite: mockOriginalContentBlocks,
       document_metadata: mockDocMetadata,
-      rewrite_instructions: 'Make it more engaging.',
     };
 
     const req = new NextRequest('http://localhost/api/ai/rewrite-content', {
@@ -91,37 +87,31 @@ describe('/api/ai/rewrite-content POST', () => {
     });
 
     const response = await POST(req);
-    const responseBody = (await response.json()) as RewriteContentResponse;
+    const responseBody = await response.json();
 
-    expect(response.status).toBe(200);
+    // The Next.js route should return 202 Accepted
+    expect(response.status).toBe(202);
     expect(global.fetch).toHaveBeenCalledTimes(1);
-    
-    const expectedPythonPayload = {
-        user_id: mockUserId,
-        content_blocks_to_rewrite: mockOriginalContentBlocks,
-        document_metadata: mockDocMetadata,
-        // rewrite_instructions: 'Make it more engaging.', // Removed as it's not sent by the route
-    };
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      `${process.env.AISERVICE_URL}/rewrite-content`, // Ensure this matches actual Python endpoint
-      expect.objectContaining({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // body: JSON.stringify(expectedPythonPayload), // Removed direct string body comparison
-      })
-    );
 
     // Get the actual call arguments to fetch
     const fetchCallArgs = (global.fetch as Mock).mock.calls[0];
-    const fetchOptions = fetchCallArgs[1]; // The options object passed to fetch
+    const fetchUrl = fetchCallArgs[0];
+    const fetchOptions = fetchCallArgs[1];
     const actualBodyObject = JSON.parse(fetchOptions.body as string);
 
-    expect(actualBodyObject).toEqual(expectedPythonPayload);
+    // Verify the endpoint and method
+    expect(fetchUrl).toBe(`${process.env.AISERVICE_URL}/api/v1/ai/submit-rewrite-task`);
+    expect(fetchOptions.method).toBe('POST');
+    expect(fetchOptions.headers['Content-Type']).toBe('application/json');
 
-    expect(responseBody.ai_rewritten_content_blocks).toEqual(mockRewrittenContentBlocks);
-    expect(responseBody.status_code).toBe('success');
-    expect(responseBody.error_message).toBeUndefined();
+    // Verify the payload sent to the AI service
+    expect(actualBodyObject.user_id).toBe(mockUserId);
+    expect(actualBodyObject.content_blocks_to_rewrite).toEqual(mockOriginalContentBlocks);
+    expect(actualBodyObject.document_metadata).toEqual(mockDocMetadata);
+    expect(actualBodyObject.correlation_id).toEqual(expect.any(String)); // Check for correlation_id
+
+    // Verify the response from our Next.js API route
+    expect(responseBody.task_id).toBe(mockTaskId);
   });
 
   // Add other tests: for unauthorized, missing body, Python service error, etc.

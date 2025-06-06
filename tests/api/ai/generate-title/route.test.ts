@@ -122,7 +122,7 @@ describe('/api/ai/generate-title POST', () => {
     expect(response.status).toBe(200);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(global.fetch).toHaveBeenCalledWith(
-      `${process.env.AISERVICE_URL}/generate-title`,
+      `${process.env.AISERVICE_URL}/api/v1/ai/generate-title`,
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -224,7 +224,7 @@ describe('/api/ai/generate-title POST', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     await POST(req);
-    expect(global.fetch).toHaveBeenCalledWith(`${fallbackAIServiceURL}/generate-title`, expect.any(Object));
+    expect(global.fetch).toHaveBeenCalledWith(`${fallbackAIServiceURL}/api/v1/ai/generate-title`, expect.any(Object));
   });
 
   it('should handle Python service error (JSON response from Python)', async () => {

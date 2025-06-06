@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import type {
   RewriteContentRequest,
   // RewriteContentResponse, // This will now be simpler: { task_id: string }
-  ContentBlock, // Keep if needed for request body typing, though RewriteContentRequest covers it
 } from '@/types/api/ai-service';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
@@ -24,14 +23,14 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
-      console.error("Unauthorized access attempt to /ai/rewrite-content", {
+      console.error('Unauthorized access attempt to /ai/rewrite-content', {
         correlationId,
-        reason: "No session or user ID found",
+        reason: 'No session or user ID found',
       });
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userIdFromSession = session.user.id;
-    console.info("POST /ai/rewrite-content request received", {
+    console.info('POST /ai/rewrite-content request received', {
       correlationId,
       userId: userIdFromSession,
     });
@@ -44,17 +43,17 @@ export async function POST(req: NextRequest) {
     } = body;
 
     if (userIdFromRequest && userIdFromRequest !== userIdFromSession) {
-      console.warn("User ID mismatch in /ai/rewrite-content", {
+      console.warn('User ID mismatch in /ai/rewrite-content', {
         correlationId,
         sessionUserId: userIdFromSession,
         requestUserId: userIdFromRequest,
-        message: "Using session user ID.",
+        message: 'Using session user ID.',
       });
     }
     const finalUserId = userIdFromSession;
 
     if (!AISERVICE_URL) {
-      console.error("AISERVICE_URL environment variable is not set.", {
+      console.error('AISERVICE_URL environment variable is not set.', {
         correlationId,
       });
       return NextResponse.json(
@@ -68,10 +67,11 @@ export async function POST(req: NextRequest) {
       !Array.isArray(content_blocks_to_rewrite) ||
       content_blocks_to_rewrite.length === 0
     ) {
-      console.warn("Invalid request body for /ai/rewrite-content", {
+      console.warn('Invalid request body for /ai/rewrite-content', {
         correlationId,
         userId: finalUserId,
-        error: "content_blocks_to_rewrite is required and must be a non-empty array.",
+        error:
+          'content_blocks_to_rewrite is required and must be a non-empty array.',
         bodyReceived: body, // Log received body for debugging (could be large)
       });
       return NextResponse.json(
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.info("Submitting task to aiservice from /ai/rewrite-content", {
+    console.info('Submitting task to aiservice from /ai/rewrite-content', {
       correlationId,
       userId: finalUserId,
       numBlocks: content_blocks_to_rewrite.length,
@@ -97,22 +97,25 @@ export async function POST(req: NextRequest) {
       correlation_id: correlationId,
     };
 
-    const response = await fetch(`${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const response = await fetch(
+      `${AISERVICE_URL}/api/v1/ai/submit-rewrite-task`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(aiservicePayload),
       },
-      body: JSON.stringify(aiservicePayload),
-    });
+    );
 
     if (!response.ok) {
       let errorBody;
       try {
         errorBody = await response.json();
-      } catch (_) {
+      } catch {
         errorBody = { message: await response.text() };
       }
-      console.error("aiservice task submission error", {
+      console.error('aiservice task submission error', {
         correlationId,
         userId: finalUserId,
         aiserviceStatus: response.status,
@@ -131,10 +134,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const aiserviceResponse = (await response.json()) as AIServiceTaskSubmissionResponse;
+    const aiserviceResponse =
+      (await response.json()) as AIServiceTaskSubmissionResponse;
 
     if (!aiserviceResponse.task_id) {
-      console.error("aiservice did not return a task_id", {
+      console.error('aiservice did not return a task_id', {
         correlationId,
         userId: finalUserId,
         aiserviceResponse,
@@ -145,17 +149,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.info("Successfully submitted task to aiservice and received task_id", {
-      correlationId,
-      userId: finalUserId,
-      taskIdFromAiservice: aiserviceResponse.task_id,
-    });
-    return NextResponse.json({ task_id: aiserviceResponse.task_id }, { status: 202 });
-
+    console.info(
+      'Successfully submitted task to aiservice and received task_id',
+      {
+        correlationId,
+        userId: finalUserId,
+        taskIdFromAiservice: aiserviceResponse.task_id,
+      },
+    );
+    return NextResponse.json(
+      { task_id: aiserviceResponse.task_id },
+      { status: 202 },
+    );
   } catch (error) {
-    console.error("Unhandled error in /ai/rewrite-content API route", {
+    console.error('Unhandled error in /ai/rewrite-content API route', {
       correlationId,
-      errorDetails: error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) },
+      errorDetails:
+        error instanceof Error
+          ? { message: error.message, stack: error.stack }
+          : { message: String(error) },
     });
     const errorMessage =
       error instanceof Error ? error.message : 'An unknown error occurred';
@@ -166,7 +178,7 @@ export async function POST(req: NextRequest) {
           details: errorMessage,
           correlationId,
         },
-        { status: 503 }, 
+        { status: 503 },
       );
     }
     return NextResponse.json(

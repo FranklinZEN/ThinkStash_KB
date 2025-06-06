@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useState, useEffect, useCallback, FormEvent } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
@@ -29,7 +29,6 @@ import {
   HStack,
   Tag as ChakraTag,
   TagLabel,
-  TagCloseButton,
   VStack,
   Modal,
   ModalOverlay,
@@ -169,12 +168,14 @@ interface Tag {
 interface KnowledgeCard {
   id: string;
   title: string;
-  content: AppPartialBlock[] | string | null; // Updated type for BlockNote JSON structure
-  tags: Tag[]; // Corrected: expects an array of Tag objects
+  content: AppPartialBlock[] | string | null;
+  tags: Tag[];
   userId: string;
   folderId: string | null;
   createdAt: string;
   updatedAt: string;
+  source_url?: string;
+  source_type?: string;
 }
 
 interface CardUpdatePayload {
@@ -192,7 +193,7 @@ const SideBySideComparisonModal = ({
   onAccept,
   onDiscard,
   isLoadingRewrite, // New prop
-  errorOnRewrite,   // New prop
+  errorOnRewrite, // New prop
   currentProgressMessageForModal, // ADDED prop for modal
   modalEditorKey, // ADDED prop for editor keys
 }: {
@@ -203,7 +204,7 @@ const SideBySideComparisonModal = ({
   onAccept: () => void;
   onDiscard: () => void;
   isLoadingRewrite: boolean; // To show loading spinner on right side
-  errorOnRewrite: string | null;   // To show error on right side
+  errorOnRewrite: string | null; // To show error on right side
   currentProgressMessageForModal: string | null; // ADDED prop for modal
   modalEditorKey: number; // ADDED prop for editor keys
 }) => {
@@ -217,7 +218,14 @@ const SideBySideComparisonModal = ({
         <ModalCloseButton />
         <ModalBody>
           <Flex direction={{ base: 'column', md: 'row' }} gap={4}>
-            <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
+            <Box
+              flex={1}
+              p={2}
+              borderWidth="1px"
+              borderRadius="md"
+              overflowY="auto"
+              maxH="70vh"
+            >
               <Heading size="sm" mb={2}>
                 Original Content
               </Heading>
@@ -229,20 +237,48 @@ const SideBySideComparisonModal = ({
                 onContentUpdate={() => {}}
               />
             </Box>
-            <Box flex={1} p={2} borderWidth="1px" borderRadius="md" overflowY="auto" maxH="70vh">
+            <Box
+              flex={1}
+              p={2}
+              borderWidth="1px"
+              borderRadius="md"
+              overflowY="auto"
+              maxH="70vh"
+            >
               <Heading size="sm" mb={2}>
                 AI Rewritten Content
               </Heading>
               {isLoadingRewrite ? (
-                <Flex justify="center" align="center" minH="200px" direction="column">
+                <Flex
+                  justify="center"
+                  align="center"
+                  minH="200px"
+                  direction="column"
+                >
                   <Spinner size="xl" />
                   <Text mt={3}>AI Rewriting in progress...</Text>
-                  <Text mt={1} fontSize="sm" color="gray.500">{currentProgressMessageForModal || 'Initializing...'}</Text>
+                  <Text mt={1} fontSize="sm" color="gray.500">
+                    {currentProgressMessageForModal || 'Initializing...'}
+                  </Text>
                 </Flex>
               ) : errorOnRewrite ? (
-                <Flex justify="center" align="center" minH="200px" direction="column">
-                  <Text color="red.500" textAlign="center">Rewrite Error: {errorOnRewrite}</Text>
-                  <Text fontSize="sm" color="gray.500" mt={2} textAlign="center">You can close this window and try again.</Text>
+                <Flex
+                  justify="center"
+                  align="center"
+                  minH="200px"
+                  direction="column"
+                >
+                  <Text color="red.500" textAlign="center">
+                    Rewrite Error: {errorOnRewrite}
+                  </Text>
+                  <Text
+                    fontSize="sm"
+                    color="gray.500"
+                    mt={2}
+                    textAlign="center"
+                  >
+                    You can close this window and try again.
+                  </Text>
                 </Flex>
               ) : rewrittenContent ? (
                 <BlockNoteEditorComponent
@@ -267,7 +303,9 @@ const SideBySideComparisonModal = ({
           <Button
             colorScheme="green"
             onClick={onAccept}
-            isDisabled={isLoadingRewrite || !!errorOnRewrite || !rewrittenContent}
+            isDisabled={
+              isLoadingRewrite || !!errorOnRewrite || !rewrittenContent
+            }
           >
             Accept Rewritten Content
           </Button>
@@ -282,9 +320,7 @@ const SideBySideComparisonModal = ({
 const POLLING_INTERVAL_MS_CARD_DETAIL = 3000;
 const MAX_POLLING_ATTEMPTS_CARD_DETAIL = 60; // Approx 3 minutes (60 * 3s)
 
-interface CardDetailPageProps {}
-
-export default function CardDetailPage({}: CardDetailPageProps) {
+export default function CardDetailPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const params = useParams();
@@ -330,21 +366,23 @@ export default function CardDetailPage({}: CardDetailPageProps) {
 
   // ADDED: State for AI Content Rewrite
   const [isRewritingContent, setIsRewritingContent] = useState(false);
-  const [rewrittenContentBlocks, setRewrittenContentBlocks] = useState<AppPartialBlock[] | null>(null);
+  const [rewrittenContentBlocks, setRewrittenContentBlocks] = useState<
+    AppPartialBlock[] | null
+  >(null);
   const [showSideBySideView, setShowSideBySideView] = useState(false);
-  const [originalContentForComparison, setOriginalContentForComparison] = useState<AppPartialBlock[] | null>(null);
+  const [originalContentForComparison, setOriginalContentForComparison] =
+    useState<AppPartialBlock[] | null>(null);
 
   // ADDED for asynchronous polling for AI Rewrite
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [pollingIntervalId, setPollingIntervalId] = useState<NodeJS.Timeout | null>(null);
-  const [pollingAttempts, setPollingAttempts] = useState(0);
+  const [pollingIntervalId, setPollingIntervalId] =
+    useState<NodeJS.Timeout | null>(null);
   const [rewriteError, setRewriteError] = useState<string | null>(null); // Specific error state
-  const [currentProgressMessage, setCurrentProgressMessage] = useState<string | null>(null); // ADDED
+  const [currentProgressMessage, setCurrentProgressMessage] = useState<
+    string | null
+  >(null); // ADDED
 
   const [pollingAttemptsRewrite, setPollingAttemptsRewrite] = useState(0);
-
-  const POLLING_INTERVAL_MS = 3000; // 3 seconds
-  const MAX_POLLING_ATTEMPTS = 40; // 2 minutes timeout (40 * 3s)
 
   // ADD THIS useEffect to synchronize editorContentForInitialLoad with the card state
   useEffect(() => {
@@ -491,8 +529,13 @@ export default function CardDetailPage({}: CardDetailPageProps) {
   // };
 
   // New handler for comma-separated keyword input
-  const handleKeywordsInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newKeywords = event.target.value.split(',').map(kw => kw.trim()).filter(kw => kw !== '');
+  const handleKeywordsInputChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const newKeywords = event.target.value
+      .split(',')
+      .map((kw) => kw.trim())
+      .filter((kw) => kw !== '');
     setKeywords(newKeywords);
   };
 
@@ -606,10 +649,20 @@ export default function CardDetailPage({}: CardDetailPageProps) {
           if (Array.isArray(parsed)) {
             contentToProcess = parsed as AppPartialBlock[];
           } else {
-            contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+            contentToProcess = [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: card.content, styles: {} }],
+              },
+            ];
           }
         } catch {
-          contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+          contentToProcess = [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: card.content, styles: {} }],
+            },
+          ];
         }
       } else {
         contentToProcess = card.content as AppPartialBlock[];
@@ -617,32 +670,34 @@ export default function CardDetailPage({}: CardDetailPageProps) {
     }
 
     if (isEditorEmpty(contentToProcess)) {
-      setKeywordError("Cannot generate keywords: Content is empty.");
+      setKeywordError('Cannot generate keywords: Content is empty.');
       setIsGeneratingKeywords(false);
       return;
     }
 
     const currentUserId = session?.user?.id || card?.userId;
     if (!currentUserId) {
-      setKeywordError("User information not available. Please ensure you are logged in or card data is loaded.");
+      setKeywordError(
+        'User information not available. Please ensure you are logged in or card data is loaded.',
+      );
       setIsGeneratingKeywords(false);
       return;
     }
-    
+
     const currentCardId = cardId || card?.id;
     if (!currentCardId) {
-        setKeywordError("Card ID not available.");
-        setIsGeneratingKeywords(false);
-        return;
+      setKeywordError('Card ID not available.');
+      setIsGeneratingKeywords(false);
+      return;
     }
 
     try {
       const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
         contentToProcess || [],
         currentUserId,
-        currentCardId 
+        currentCardId,
       );
-      
+
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -651,15 +706,27 @@ export default function CardDetailPage({}: CardDetailPageProps) {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to generate keywords from API');
+        throw new Error(
+          errorData.message || 'Failed to generate keywords from API',
+        );
       }
 
       const result = await response.json();
       setKeywords(result.suggested_keywords || []);
-      toast({ title: 'Keywords Suggested', description: 'AI has suggested keywords.', status: 'success', duration: 3000, isClosable: true });
-    } catch (error: any) {
-      console.error("Error generating keywords:", error);
-      setKeywordError(error.message || 'An unexpected error occurred while generating keywords.');
+      toast({
+        title: 'Keywords Suggested',
+        description: 'AI has suggested keywords.',
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      });
+    } catch (error: unknown) {
+      console.error('Error generating keywords:', error);
+      setKeywordError(
+        error instanceof Error
+          ? error.message
+          : 'An unexpected error occurred while generating keywords.',
+      );
       // setKeywords([]); // Decide if keywords should be cleared on error
     } finally {
       setIsGeneratingKeywords(false);
@@ -688,17 +755,31 @@ export default function CardDetailPage({}: CardDetailPageProps) {
           if (Array.isArray(parsedContent)) {
             contentToUseAsOriginal = parsedContent as AppPartialBlock[];
           } else {
-            contentToUseAsOriginal = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+            contentToUseAsOriginal = [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: card.content, styles: {} }],
+              },
+            ];
           }
-        } catch (e) {
-          contentToUseAsOriginal = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+        } catch {
+          contentToUseAsOriginal = [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: card.content, styles: {} }],
+            },
+          ];
         }
       } else {
         contentToUseAsOriginal = card.content as AppPartialBlock[];
       }
     }
 
-    if (!contentToUseAsOriginal || contentToUseAsOriginal.length === 0 || isEditorEmpty(contentToUseAsOriginal)) {
+    if (
+      !contentToUseAsOriginal ||
+      contentToUseAsOriginal.length === 0 ||
+      isEditorEmpty(contentToUseAsOriginal)
+    ) {
       toast({
         title: 'Current content is empty, cannot rewrite.',
         status: 'info',
@@ -715,15 +796,16 @@ export default function CardDetailPage({}: CardDetailPageProps) {
     setShowSideBySideView(true); // Activate side-by-side mode immediately
     setRewriteError(null); // Clear previous rewrite errors
     setTaskId(null); // Reset task ID
-    setPollingAttempts(0); // Reset polling attempts
-    if (pollingIntervalId) { // Clear any existing polling interval
+    setPollingAttemptsRewrite(0); // Reset polling attempts
+    if (pollingIntervalId) {
+      // Clear any existing polling interval
       clearInterval(pollingIntervalId);
       setPollingIntervalId(null);
     }
-    setCurrentProgressMessage("Initiating rewrite process..."); // ADDED initial message
+    setCurrentProgressMessage('Initiating rewrite process...'); // ADDED initial message
 
     const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      contentToUseAsOriginal, 
+      contentToUseAsOriginal,
       card.userId,
       cardId,
     );
@@ -737,7 +819,7 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       });
       // Reset UI states if we bail early
       setIsRewritingContent(false);
-      setShowSideBySideView(false); 
+      setShowSideBySideView(false);
       setOriginalContentForComparison(null);
       return;
     }
@@ -745,11 +827,11 @@ export default function CardDetailPage({}: CardDetailPageProps) {
     try {
       const payload = {
         content_blocks_to_rewrite: aiServiceContentBlocks,
-        document_metadata: { 
+        document_metadata: {
           document_id: cardId,
           user_id: card.userId,
-          source_identifier: (card as any).source_url || cardId, 
-          source_type: (card as any).source_type || 'knowledge_card', 
+          source_identifier: card.source_url || cardId,
+          source_type: card.source_type || 'knowledge_card',
           title: card.title,
         },
         user_id: card.userId,
@@ -766,7 +848,8 @@ export default function CardDetailPage({}: CardDetailPageProps) {
         body: JSON.stringify(payload),
       });
 
-      if (response.status === 202) { // Task submitted successfully
+      if (response.status === 202) {
+        // Task submitted successfully
         const result = await response.json();
         if (result.task_id) {
           setTaskId(result.task_id);
@@ -781,10 +864,15 @@ export default function CardDetailPage({}: CardDetailPageProps) {
           // setIsRewritingContent(true) is already set and polling will turn it off
         } else {
           // This case should ideally not happen if backend sends 202 correctly with task_id
-          throw new Error('Task ID not found in submission response despite 202 status.');
+          throw new Error(
+            'Task ID not found in submission response despite 202 status.',
+          );
         }
-      } else { // Handle other non-202 responses as errors
-        const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
+      } else {
+        // Handle other non-202 responses as errors
+        const errorData = await response
+          .json()
+          .catch(() => ({ message: `HTTP error ${response.status}` }));
         throw new Error(
           errorData.message ||
             `Error submitting rewrite task: ${response.statusText}`,
@@ -792,7 +880,8 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       }
     } catch (err) {
       console.error('Error submitting rewrite task:', err);
-      const message = err instanceof Error ? err.message : 'Could not submit rewrite task.';
+      const message =
+        err instanceof Error ? err.message : 'Could not submit rewrite task.';
       setRewriteError(message);
       toast({
         title: 'Submission Error',
@@ -823,17 +912,21 @@ export default function CardDetailPage({}: CardDetailPageProps) {
 
     const intervalId = setInterval(async () => {
       let currentAttempt;
-      setPollingAttemptsRewrite(prev => {
+      setPollingAttemptsRewrite((prev) => {
         currentAttempt = prev + 1;
         return currentAttempt;
       });
 
       // Ensure currentAttempt is defined for the log, though it should be by the setter logic
-      const attemptToLog = pollingAttemptsRewrite + 1; 
-      console.log(`[CardDetailPage] Polling AI rewrite task ${taskId}, Attempt: ${attemptToLog}`);
+      const attemptToLog = pollingAttemptsRewrite + 1;
+      console.log(
+        `[CardDetailPage] Polling AI rewrite task ${taskId}, Attempt: ${attemptToLog}`,
+      );
 
       if (attemptToLog > MAX_POLLING_ATTEMPTS_CARD_DETAIL) {
-        console.warn(`[CardDetailPage] Polling for task ${taskId} reached max attempts (${MAX_POLLING_ATTEMPTS_CARD_DETAIL}). Timing out.`);
+        console.warn(
+          `[CardDetailPage] Polling for task ${taskId} reached max attempts (${MAX_POLLING_ATTEMPTS_CARD_DETAIL}). Timing out.`,
+        );
         clearInterval(intervalId);
         setPollingIntervalId(null);
         setIsRewritingContent(false);
@@ -846,7 +939,7 @@ export default function CardDetailPage({}: CardDetailPageProps) {
           duration: 7000,
           isClosable: true,
         });
-        setCurrentProgressMessage("Polling timed out.");
+        setCurrentProgressMessage('Polling timed out.');
         setPollingAttemptsRewrite(0);
         return; // Stop this interval callback
       }
@@ -854,41 +947,82 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       try {
         const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ message: `HTTP error ${response.status}` }));
-          throw new Error(errorData.message || `Failed to poll task status: HTTP ${response.status}`);
+          const errorData = await response
+            .json()
+            .catch(() => ({ message: `HTTP error ${response.status}` }));
+          throw new Error(
+            errorData.message ||
+              `Failed to poll task status: HTTP ${response.status}`,
+          );
         }
         const data = await response.json();
-        console.log(`[CardDetailPage] Polling response for ${taskId}, attempt ${attemptToLog}:`, JSON.stringify(data, null, 2));
+        console.log(
+          `[CardDetailPage] Polling response for ${taskId}, attempt ${attemptToLog}:`,
+          JSON.stringify(data, null, 2),
+        );
 
         if (data.status === 'COMPLETED') {
           console.log(`[CardDetailPage] Task ${taskId} COMPLETED.`);
-          if (data.ai_rewritten_content_blocks && Array.isArray(data.ai_rewritten_content_blocks)) {
-            const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(data.ai_rewritten_content_blocks as ContentBlock[]) as AppPartialBlock[];
+          if (
+            data.ai_rewritten_content_blocks &&
+            Array.isArray(data.ai_rewritten_content_blocks)
+          ) {
+            const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(
+              data.ai_rewritten_content_blocks as ContentBlock[],
+            ) as AppPartialBlock[];
             setRewrittenContentBlocks(editorFriendlyBlocks);
             setCurrentProgressMessage(null);
-            toast({ title: 'Rewrite Complete!', description: 'Content has been rewritten.', status: 'success', duration: 5000, isClosable: true });
+            toast({
+              title: 'Rewrite Complete!',
+              description: 'Content has been rewritten.',
+              status: 'success',
+              duration: 5000,
+              isClosable: true,
+            });
           } else {
-            setRewriteError("Task completed, but rewritten content was not in the expected format.");
+            setRewriteError(
+              'Task completed, but rewritten content was not in the expected format.',
+            );
             setCurrentProgressMessage(null);
-            toast({ title: 'Processing Error', description: 'Rewritten content is not in the expected format.', status: 'error', duration: 5000, isClosable: true });
+            toast({
+              title: 'Processing Error',
+              description: 'Rewritten content is not in the expected format.',
+              status: 'error',
+              duration: 5000,
+              isClosable: true,
+            });
           }
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
           setPollingAttemptsRewrite(0);
         } else if (data.status === 'FAILED') {
-          console.error(`[CardDetailPage] Task ${taskId} FAILED: ${data.errorMessage}`);
-          setRewriteError(data.errorMessage || 'Rewrite task failed for an unknown reason.');
+          console.error(
+            `[CardDetailPage] Task ${taskId} FAILED: ${data.errorMessage}`,
+          );
+          setRewriteError(
+            data.errorMessage || 'Rewrite task failed for an unknown reason.',
+          );
           setCurrentProgressMessage(null);
-          toast({ title: 'Rewrite Failed', description: data.errorMessage || 'An unknown error occurred.', status: 'error', duration: 5000, isClosable: true });
+          toast({
+            title: 'Rewrite Failed',
+            description: data.errorMessage || 'An unknown error occurred.',
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
           clearInterval(intervalId);
           setPollingIntervalId(null);
           setIsRewritingContent(false);
           setPollingAttemptsRewrite(0);
         } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
-          setCurrentProgressMessage(data.progressStage || `Processing... (Status: ${data.status})`);
+          setCurrentProgressMessage(
+            data.progressStage || `Processing... (Status: ${data.status})`,
+          );
         } else {
-          console.warn(`[CardDetailPage] Task ${taskId} has unknown status: ${data.status}`);
+          console.warn(
+            `[CardDetailPage] Task ${taskId} has unknown status: ${data.status}`,
+          );
           setRewriteError(`Unknown status: ${data.status}. Polling...`);
           setCurrentProgressMessage(null);
           toast({
@@ -905,8 +1039,21 @@ export default function CardDetailPage({}: CardDetailPageProps) {
         }
       } catch (error) {
         console.error(`[CardDetailPage] Error polling task ${taskId}:`, error);
-        setRewriteError(error instanceof Error ? error.message : 'An unknown error occurred during polling.');
-        toast({ title: 'Polling Error', description: error instanceof Error ? error.message : 'Could not retrieve rewrite status.', status: 'error', duration: 5000, isClosable: true });
+        setRewriteError(
+          error instanceof Error
+            ? error.message
+            : 'An unknown error occurred during polling.',
+        );
+        toast({
+          title: 'Polling Error',
+          description:
+            error instanceof Error
+              ? error.message
+              : 'Could not retrieve rewrite status.',
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
         clearInterval(intervalId);
         setPollingIntervalId(null);
         setIsRewritingContent(false);
@@ -920,11 +1067,18 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       if (intervalId) clearInterval(intervalId);
       setPollingIntervalId(null);
     };
-  }, [taskId, isRewritingContent, pollingAttemptsRewrite, toast]); // Removed POLLING_INTERVAL_MS_CARD_DETAIL from deps as it's a const
+  }, [
+    taskId,
+    isRewritingContent,
+    pollingAttemptsRewrite,
+    toast,
+    pollingIntervalId,
+  ]); // Removed POLLING_INTERVAL_MS_CARD_DETAIL from deps as it's a const
 
   // ADDED: Handler to accept rewritten content
   const handleAcceptRewrite = () => {
-    if (rewrittenContentBlocks && editor) { // Ensure main editor instance is available
+    if (rewrittenContentBlocks && editor) {
+      // Ensure main editor instance is available
       // Update the main editor's content directly
       // This assumes `editor` is the instance of the *main* BlockNote editor
       // We need to ensure `editorContent` and `editorContentForInitialLoad` are updated
@@ -934,7 +1088,7 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       setEditorContentForInitialLoad(rewrittenContentBlocks); // This becomes the new baseline
 
       // Force re-initialization of the main editor when we switch back to single view
-      setEditorKey(prev => prev + 1); 
+      setEditorKey((prev) => prev + 1);
     }
     setShowSideBySideView(false);
     setIsEditing(true); // Ensure we are in edit mode to save the accepted changes
@@ -953,7 +1107,7 @@ export default function CardDetailPage({}: CardDetailPageProps) {
   const handleDiscardRewrite = () => {
     setShowSideBySideView(false);
     // If they were editing before, they remain editing. If not, switch to edit mode.
-    setIsEditing(true); 
+    setIsEditing(true);
     setRewrittenContentBlocks(null);
     setOriginalContentForComparison(null);
     toast({
@@ -1024,8 +1178,10 @@ export default function CardDetailPage({}: CardDetailPageProps) {
     // Check if keywords have changed
     const originalTags = card.tags || [];
     const hasKeywordsChanged =
-      JSON.stringify(keywords.map(kw => kw.replace(/^#/, '')).sort()) !== 
-      JSON.stringify(originalTags.map(tag => tag.name.replace(/^#/, '')).sort());
+      JSON.stringify(keywords.map((kw) => kw.replace(/^#/, '')).sort()) !==
+      JSON.stringify(
+        originalTags.map((tag) => tag.name.replace(/^#/, '')).sort(),
+      );
 
     if (!hasTitleChanged && !hasContentChanged && !hasKeywordsChanged) {
       toast({ title: 'No changes detected.', status: 'info', duration: 3000 });
@@ -1061,7 +1217,10 @@ export default function CardDetailPage({}: CardDetailPageProps) {
       updatePayload.content = currentContentToValidate as AppPartialBlock[];
     }
 
-    if (hasKeywordsChanged) updatePayload.tags = keywords.map(kw => kw.startsWith('#') ? kw : `#${kw}`); // Ensure leading #
+    if (hasKeywordsChanged)
+      updatePayload.tags = keywords.map((kw) =>
+        kw.startsWith('#') ? kw : `#${kw}`,
+      ); // Ensure leading #
 
     // console.log('Updating card with payload:', updatePayload); // This was the one we discussed keeping/removing based on preference
 
@@ -1078,12 +1237,21 @@ export default function CardDetailPage({}: CardDetailPageProps) {
     // or at least their lengths or a hash if direct logging is too much.
     // For now, let's log stringified versions carefully.
     try {
-      console.log('  currentContentToValidate (first 200 chars):', JSON.stringify(currentContentToValidate)?.substring(0, 200));
-      console.log('  originalContentForComparison (first 200 chars):', JSON.stringify(originalContentForComparison)?.substring(0, 200));
+      console.log(
+        '  currentContentToValidate (first 200 chars):',
+        JSON.stringify(currentContentToValidate)?.substring(0, 200),
+      );
+      console.log(
+        '  originalContentForComparison (first 200 chars):',
+        JSON.stringify(originalContentForComparison)?.substring(0, 200),
+      );
     } catch (e) {
       console.warn('Error stringifying content for logging:', e);
     }
-    console.log('  Final updatePayload being sent:', JSON.stringify(updatePayload));
+    console.log(
+      '  Final updatePayload being sent:',
+      JSON.stringify(updatePayload),
+    );
     // ---- END DIAGNOSTIC LOGS ----
 
     try {
@@ -1278,7 +1446,11 @@ export default function CardDetailPage({}: CardDetailPageProps) {
           fontFamily="'Open Sans', sans-serif"
           fontSize="36px"
         >
-          {showSideBySideView ? "AI Content Rewrite Comparison" : (isEditing ? 'Edit Knowledge Card' : (card?.title || 'Card Details'))}
+          {showSideBySideView
+            ? 'AI Content Rewrite Comparison'
+            : isEditing
+              ? 'Edit Knowledge Card'
+              : card?.title || 'Card Details'}
         </Heading>
         <Spacer />
 
@@ -1290,7 +1462,9 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                   colorScheme="green"
                   onClick={handleSaveChanges}
                   isLoading={isSaving}
-                  isDisabled={!canSave || isSaving || isDeleting || isRewritingContent}
+                  isDisabled={
+                    !canSave || isSaving || isDeleting || isRewritingContent
+                  }
                   mr={2}
                 >
                   Save Changes
@@ -1300,24 +1474,54 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                   onClick={() => {
                     setIsEditing(false);
                     if (card) {
-                      setTitle(card.title); 
-                      setKeywords(card.tags ? card.tags.map((tag) => tag.name) : []);
+                      setTitle(card.title);
+                      setKeywords(
+                        card.tags ? card.tags.map((tag) => tag.name) : [],
+                      );
                       if (card.content) {
                         if (typeof card.content === 'string') {
                           try {
                             const parsed = JSON.parse(card.content);
-                            if(Array.isArray(parsed)) setEditorContentForInitialLoad(parsed as AppPartialBlock[]);
-                            else setEditorContentForInitialLoad([{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }]}]);
+                            if (Array.isArray(parsed))
+                              setEditorContentForInitialLoad(
+                                parsed as AppPartialBlock[],
+                              );
+                            else
+                              setEditorContentForInitialLoad([
+                                {
+                                  type: 'paragraph',
+                                  content: [
+                                    {
+                                      type: 'text',
+                                      text: card.content,
+                                      styles: {},
+                                    },
+                                  ],
+                                },
+                              ]);
                           } catch {
-                            setEditorContentForInitialLoad([{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }]}]);
+                            setEditorContentForInitialLoad([
+                              {
+                                type: 'paragraph',
+                                content: [
+                                  {
+                                    type: 'text',
+                                    text: card.content,
+                                    styles: {},
+                                  },
+                                ],
+                              },
+                            ]);
                           }
                         } else {
-                          setEditorContentForInitialLoad(card.content as AppPartialBlock[]);
+                          setEditorContentForInitialLoad(
+                            card.content as AppPartialBlock[],
+                          );
                         }
                       } else {
                         setEditorContentForInitialLoad(undefined);
                       }
-                      setEditorKey(prev => prev + 1);
+                      setEditorKey((prev) => prev + 1);
                     }
                   }}
                   isDisabled={isSaving || isDeleting || isRewritingContent}
@@ -1339,36 +1543,40 @@ export default function CardDetailPage({}: CardDetailPageProps) {
         )}
 
         {!showSideBySideView && card && (
-           <Button
-             size="sm"
-             ml={2}
-             colorScheme="orange"
-             onClick={handleRewriteContent}
-             isLoading={isRewritingContent}
-             loadingText="Preparing Rewrite..."
-             isDisabled={isRewritingContent || isSaving || isDeleting }
-           >
-             Rewrite with AI
-           </Button>
+          <Button
+            size="sm"
+            ml={2}
+            colorScheme="orange"
+            onClick={handleRewriteContent}
+            isLoading={isRewritingContent}
+            loadingText="Preparing Rewrite..."
+            isDisabled={isRewritingContent || isSaving || isDeleting}
+          >
+            Rewrite with AI
+          </Button>
         )}
 
         {!showSideBySideView && (
-            <IconButton
-              aria-label="Delete Card"
-              icon={<DeleteIcon />}
-              colorScheme="red"
-              onClick={onAlertOpen}
-              isLoading={isDeleting}
-              isDisabled={isSaving || isDeleting || isRewritingContent}
-              ml={isEditing ? 0 : 2}
-            />
+          <IconButton
+            aria-label="Delete Card"
+            icon={<DeleteIcon />}
+            colorScheme="red"
+            onClick={onAlertOpen}
+            isLoading={isDeleting}
+            isDisabled={isSaving || isDeleting || isRewritingContent}
+            ml={isEditing ? 0 : 2}
+          />
         )}
       </Flex>
 
       {showSideBySideView && card && originalContentForComparison ? (
         <Box>
           <Flex mb={4} justifyContent="center" gap={3}>
-            <Button colorScheme="teal" onClick={handleAcceptRewrite} isLoading={isSaving}>
+            <Button
+              colorScheme="teal"
+              onClick={handleAcceptRewrite}
+              isLoading={isSaving}
+            >
               Use This Rewrite
             </Button>
             <Button variant="outline" onClick={handleDiscardRewrite}>
@@ -1376,10 +1584,18 @@ export default function CardDetailPage({}: CardDetailPageProps) {
             </Button>
           </Flex>
 
-          <Flex direction={{ base: "column", md: "row" }} gap={6}>
+          <Flex direction={{ base: 'column', md: 'row' }} gap={6}>
             <Box flex={1}>
-              <Heading size="md" mb={2} textAlign="center">Original Content</Heading>
-              <Box borderWidth="1px" borderRadius="md" p={1} minH={{ base: "300px", md: "500px" }} bg="gray.50">
+              <Heading size="md" mb={2} textAlign="center">
+                Original Content
+              </Heading>
+              <Box
+                borderWidth="1px"
+                borderRadius="md"
+                p={1}
+                minH={{ base: '300px', md: '500px' }}
+                bg="gray.50"
+              >
                 <BlockNoteEditorComponent
                   key={`editor-original-sbs-${editorKey}`}
                   editable={false}
@@ -1390,10 +1606,27 @@ export default function CardDetailPage({}: CardDetailPageProps) {
             </Box>
 
             <Box flex={1}>
-              <Heading size="md" mb={2} textAlign="center">AI Rewritten Suggestion</Heading>
-              <Box borderWidth="1px" borderRadius="md" p={1} minH={{ base: "300px", md: "500px" }} display="flex" flexDirection="column" justifyContent="center" alignItems="center" bg="gray.50">
+              <Heading size="md" mb={2} textAlign="center">
+                AI Rewritten Suggestion
+              </Heading>
+              <Box
+                borderWidth="1px"
+                borderRadius="md"
+                p={1}
+                minH={{ base: '300px', md: '500px' }}
+                display="flex"
+                flexDirection="column"
+                justifyContent="center"
+                alignItems="center"
+                bg="gray.50"
+              >
                 {isRewritingContent ? (
-                  <Flex direction="column" align="center" justify="center" h="100%">
+                  <Flex
+                    direction="column"
+                    align="center"
+                    justify="center"
+                    h="100%"
+                  >
                     <Spinner size="xl" />
                     <Text mt={4}>Rewriting content...</Text>
                   </Flex>
@@ -1405,13 +1638,19 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                     onEditorChange={() => {}}
                   />
                 ) : (
-                  <Text color="gray.500">Rewritten content will appear here.</Text>
+                  <Text color="gray.500">
+                    Rewritten content will appear here.
+                  </Text>
                 )}
               </Box>
             </Box>
           </Flex>
-           <Flex mt={4} justifyContent="center" gap={3}>
-             <Button colorScheme="teal" onClick={handleAcceptRewrite} isLoading={isSaving}>
+          <Flex mt={4} justifyContent="center" gap={3}>
+            <Button
+              colorScheme="teal"
+              onClick={handleAcceptRewrite}
+              isLoading={isSaving}
+            >
               Use This Rewrite
             </Button>
             <Button variant="outline" onClick={handleDiscardRewrite}>
@@ -1452,7 +1691,12 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                     size="sm"
                     onClick={handleSuggestTitle}
                     isLoading={isSuggestingTitle}
-                    isDisabled={isSuggestingTitle || !isEditing || isSaving || showSideBySideView}
+                    isDisabled={
+                      isSuggestingTitle ||
+                      !isEditing ||
+                      isSaving ||
+                      showSideBySideView
+                    }
                   >
                     Suggest Title
                   </Button>
@@ -1467,7 +1711,8 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                       }}
                       isDisabled={!isEditing || isSaving}
                     >
-                      Apply: "{suggestedTitle.substring(0,30)}{suggestedTitle.length > 30 ? '...' : ''}"
+                      Apply: &quot;{suggestedTitle.substring(0, 30)}
+                      {suggestedTitle.length > 30 ? '...' : ''}&quot;
                     </Button>
                   )}
                 </HStack>
@@ -1475,17 +1720,22 @@ export default function CardDetailPage({}: CardDetailPageProps) {
             </FormControl>
 
             <FormControl mt={4}>
-              <FormLabel htmlFor='keywords-input' fontFamily="'Open Sans', sans-serif" fontSize="24px">
+              <FormLabel
+                htmlFor="keywords-input"
+                fontFamily="'Open Sans', sans-serif"
+                fontSize="24px"
+              >
                 Keywords
-                 <Text as="span" fontSize="16px" color="gray.500" ml={2}>
+                <Text as="span" fontSize="16px" color="gray.500" ml={2}>
                   (Optional, comma-separated)
                 </Text>
               </FormLabel>
               <Text fontSize="sm" color="gray.500" mb={2}>
-                Enter keywords manually (e.g., tech, ai, productivity) or let AI suggest them.
+                Enter keywords manually (e.g., tech, ai, productivity) or let AI
+                suggest them.
               </Text>
               <Input
-                id='keywords-input'
+                id="keywords-input"
                 type="text"
                 value={keywords.join(', ')}
                 onChange={handleKeywordsInputChange}
@@ -1499,15 +1749,17 @@ export default function CardDetailPage({}: CardDetailPageProps) {
                 onClick={handleGenerateKeywordsAIClick}
                 isLoading={isGeneratingKeywords}
                 loadingText="Generating..."
-                colorScheme='blue'
-                variant='outline'
-                size='sm'
+                colorScheme="blue"
+                variant="outline"
+                size="sm"
                 isDisabled={isSaving || !isEditing || isGeneratingKeywords}
               >
                 Suggest Keywords with AI
               </Button>
               {keywordError && (
-                <Text color="red.500" mt={1} fontSize="sm">Error: {keywordError}</Text>
+                <Text color="red.500" mt={1} fontSize="sm">
+                  Error: {keywordError}
+                </Text>
               )}
             </FormControl>
 

@@ -48,7 +48,6 @@ import {
 import { SearchIcon } from '@chakra-ui/icons';
 
 import { useStagingCardStore } from '@/stores/stagingCardStore';
-import { mapContentBlocksToPartialBlocks } from '@/lib/contentUtils';
 import type { OrchestrationOutput } from '@/types/api/ai-service';
 import type { AppPartialBlock } from '@/lib/blocknote/appSchema';
 
@@ -70,15 +69,28 @@ export default function Home() {
     fetchCards,
   } = useCardStore();
 
-  const { startLoading, setData: setStagedData, setError: setStagedError, isLoading: isStaging } = useStagingCardStore();
+  const {
+    startLoading,
+    setData: setStagedData,
+    setError: setStagedError,
+    isLoading: isStaging,
+  } = useStagingCardStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResultCard[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  const { isOpen: isUrlModalOpen, onOpen: onOpenUrlModal, onClose: onCloseUrlModal } = useDisclosure();
-  const { isOpen: isFileModalOpen, onOpen: onOpenFileModal, onClose: onCloseFileModal } = useDisclosure();
+  const {
+    isOpen: isUrlModalOpen,
+    onOpen: onOpenUrlModal,
+    onClose: onCloseUrlModal,
+  } = useDisclosure();
+  const {
+    isOpen: isFileModalOpen,
+    onOpen: onOpenFileModal,
+    onClose: onCloseFileModal,
+  } = useDisclosure();
 
   const [reconstructUrl, setReconstructUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -142,13 +154,18 @@ export default function Home() {
 
   const handleReconstructFromUrl = async () => {
     if (!reconstructUrl.trim()) {
-      toast({ title: 'URL is required', status: 'error', duration: 3000, isClosable: true });
+      toast({
+        title: 'URL is required',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
       return;
     }
     startLoading();
     try {
       const normalizedUrl = normalizeUrlInput(reconstructUrl.trim());
-      console.log("Normalized URL for reconstruction:", normalizedUrl); // Added for debugging
+      console.log('Normalized URL for reconstruction:', normalizedUrl); // Added for debugging
 
       const response = await fetch('/api/ai/reconstruct-and-analyze', {
         method: 'POST',
@@ -157,26 +174,43 @@ export default function Home() {
       });
       const data: OrchestrationOutput = await response.json();
 
-      if (!response.ok || data.error_message || !data.status_code.startsWith('success')) {
-        const errorMsg = data.error_message || 'Failed to reconstruct from URL.';
+      if (
+        !response.ok ||
+        data.error_message ||
+        !data.status_code.startsWith('success')
+      ) {
+        const errorMsg =
+          data.error_message || 'Failed to reconstruct from URL.';
         throw new Error(errorMsg);
       }
-      
-      const titleToSet = data.extracted_title || data.document_metadata?.title || '';
+
+      const titleToSet =
+        data.extracted_title || data.document_metadata?.title || '';
       const keywordsToSet: string[] = [];
 
       setStagedData(titleToSet, data.original_content_blocks, keywordsToSet);
-      toast({ title: 'Content Reconstructed!', description: 'Navigating to create card page...', status: 'success', duration: 2000, isClosable: true });
+      toast({
+        title: 'Content Reconstructed!',
+        description: 'Navigating to create card page...',
+        status: 'success',
+        duration: 2000,
+        isClosable: true,
+      });
       onCloseUrlModal();
       setReconstructUrl('');
       console.log('[HomePage] Navigating to /cards/new with staged data.');
       router.push('/cards/new');
-
-    } catch (error: any) {
-      console.error("[HomePage] Error in handleReconstructFromUrl:", error);
-      toast({ title: 'Error Reconstructing Content', description: error.message || 'An unknown error occurred.', status: 'error', duration: 5000, isClosable: true });
+    } catch (error: unknown) {
+      console.error('[HomePage] Error in handleReconstructFromUrl:', error);
+      toast({
+        title: 'Error Reconstructing Content',
+        description:
+          error instanceof Error ? error.message : 'An unknown error occurred.',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
     } finally {
-      setIsStaging(false);
       onCloseUrlModal();
     }
   };
@@ -191,11 +225,16 @@ export default function Home() {
 
   const handleReconstructFromFile = async () => {
     if (!selectedFile) {
-      toast({ title: 'Please select a file.', status: 'warning', duration: 3000, isClosable: true });
+      toast({
+        title: 'Please select a file.',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      });
       return;
     }
     startLoading();
-    
+
     try {
       // Step 1: Upload the file to GCS
       const formData = new FormData();
@@ -209,7 +248,10 @@ export default function Home() {
 
       if (!uploadResponse.ok) {
         const uploadErrorData = await uploadResponse.json();
-        throw new Error(uploadErrorData.error || `File upload failed with status: ${uploadResponse.status}`);
+        throw new Error(
+          uploadErrorData.error ||
+            `File upload failed with status: ${uploadResponse.status}`,
+        );
       }
 
       const uploadResult = await uploadResponse.json();
@@ -219,36 +261,73 @@ export default function Home() {
         throw new Error('File ID not received from upload service.');
       }
 
-      toast({ title: 'File Uploaded!', description: 'Now reconstructing content...', status: 'info', duration: 2000, isClosable: true });
-
-      // Step 2: Call reconstruct-and-analyze with the file_id
-      const reconstructResponse = await fetch('/api/ai/reconstruct-and-analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: fileId }), // Sending file_id instead of source_url
+      toast({
+        title: 'File Uploaded!',
+        description: 'Now reconstructing content...',
+        status: 'info',
+        duration: 2000,
+        isClosable: true,
       });
 
-      const reconstructData: OrchestrationOutput = await reconstructResponse.json();
+      // Step 2: Call reconstruct-and-analyze with the file_id
+      const reconstructResponse = await fetch(
+        '/api/ai/reconstruct-and-analyze',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_id: fileId }), // Sending file_id instead of source_url
+        },
+      );
 
-      if (!reconstructResponse.ok || reconstructData.error_message || !reconstructData.status_code.startsWith('success')) {
-        const errorMsg = reconstructData.error_message || 'Failed to reconstruct from file.';
+      const reconstructData: OrchestrationOutput =
+        await reconstructResponse.json();
+
+      if (
+        !reconstructResponse.ok ||
+        reconstructData.error_message ||
+        !reconstructData.status_code.startsWith('success')
+      ) {
+        const errorMsg =
+          reconstructData.error_message || 'Failed to reconstruct from file.';
         throw new Error(errorMsg);
       }
-      
-      const titleToSet = reconstructData.extracted_title || reconstructData.document_metadata?.title || selectedFile.name.split('.')[0].replace(/_/g, ' ') || 'Untitled Card'; 
+
+      const titleToSet =
+        reconstructData.extracted_title ||
+        reconstructData.document_metadata?.title ||
+        selectedFile.name.split('.')[0].replace(/_/g, ' ') ||
+        'Untitled Card';
       const keywordsToSet: string[] = []; // Keywords are not auto-generated at this stage
 
-      setStagedData(titleToSet, reconstructData.original_content_blocks, keywordsToSet);
-      toast({ title: 'Content Reconstructed!', description: 'Navigating to create card page...', status: 'success', duration: 2000, isClosable: true });
+      setStagedData(
+        titleToSet,
+        reconstructData.original_content_blocks,
+        keywordsToSet,
+      );
+      toast({
+        title: 'Content Reconstructed!',
+        description: 'Navigating to create card page...',
+        status: 'success',
+        duration: 2000,
+        isClosable: true,
+      });
       onCloseFileModal();
       setSelectedFile(null);
       router.push('/cards/new');
-
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : 'An unknown error occurred during file processing.';
+      const errMsg =
+        error instanceof Error
+          ? error.message
+          : 'An unknown error occurred during file processing.';
       console.error('Reconstruction from file failed:', errMsg);
       setStagedError(errMsg);
-      toast({ title: 'Processing Failed', description: errMsg, status: 'error', duration: 5000, isClosable: true });
+      toast({
+        title: 'Processing Failed',
+        description: errMsg,
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
     }
   };
 
@@ -266,11 +345,7 @@ export default function Home() {
 
   if (status === 'loading') {
     return (
-      <Flex
-        justify="center"
-        align="center"
-        height="calc(100vh - 64px)"
-      >
+      <Flex justify="center" align="center" height="calc(100vh - 64px)">
         <Spinner size="xl" />
       </Flex>
     );
@@ -278,7 +353,7 @@ export default function Home() {
 
   if (status === 'unauthenticated') {
     return (
-      <Center height="calc(100vh - 64px)" >
+      <Center height="calc(100vh - 64px)">
         <VStack spacing={4}>
           <Heading fontFamily="'Open Sans', sans-serif">
             Welcome to ThinkStash!
@@ -314,10 +389,7 @@ export default function Home() {
       minHeight="calc(100vh - 64px)"
       bg="#F5F5F5"
     >
-      <Box
-        width="100%"
-        maxWidth="1280px"
-      >
+      <Box width="100%" maxWidth="1280px">
         <Flex
           px={{ base: '20px', md: '40px' }}
           py="12px"
@@ -338,13 +410,8 @@ export default function Home() {
             Knowledge Card Exhibition
           </Heading>
 
-          <HStack
-            spacing="16px"
-          >
-            <InputGroup
-              width={{ base: '150px', md: '256px' }}
-              size="md"
-            >
+          <HStack spacing="16px">
+            <InputGroup width={{ base: '150px', md: '256px' }} size="md">
               <InputLeftElement pointerEvents="none">
                 <Icon as={SearchIcon} color="#707070" />
               </InputLeftElement>
@@ -399,9 +466,7 @@ export default function Home() {
           gap="16px"
           flex="1"
         >
-          <Box
-            flex="1"
-          >
+          <Box flex="1">
             {searchQuery && (
               <SearchResults
                 results={searchResults}
@@ -494,7 +559,13 @@ export default function Home() {
 
       <Modal isOpen={isUrlModalOpen} onClose={onCloseUrlModal} isCentered>
         <ModalOverlay />
-        <ModalContent as="form" onSubmit={(e) => { e.preventDefault(); handleReconstructFromUrl(); }}>
+        <ModalContent
+          as="form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleReconstructFromUrl();
+          }}
+        >
           <ModalHeader>Create Card from URL</ModalHeader>
           <ModalCloseButton />
           <ModalBody pb={6}>
@@ -509,17 +580,35 @@ export default function Home() {
             </FormControl>
           </ModalBody>
           <ModalFooter>
-            <Button colorScheme="blue" mr={3} type="submit" isLoading={isStaging} loadingText="Reconstructing...">
+            <Button
+              colorScheme="blue"
+              mr={3}
+              type="submit"
+              isLoading={isStaging}
+              loadingText="Reconstructing..."
+            >
               Reconstruct
             </Button>
-            <Button variant="ghost" onClick={onCloseUrlModal} isDisabled={isStaging}>Cancel</Button>
+            <Button
+              variant="ghost"
+              onClick={onCloseUrlModal}
+              isDisabled={isStaging}
+            >
+              Cancel
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
 
       <Modal isOpen={isFileModalOpen} onClose={onCloseFileModal} isCentered>
         <ModalOverlay />
-        <ModalContent as="form" onSubmit={(e) => { e.preventDefault(); handleReconstructFromFile(); }}>
+        <ModalContent
+          as="form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleReconstructFromFile();
+          }}
+        >
           <ModalHeader>Create Card from Document</ModalHeader>
           <ModalCloseButton />
           <ModalBody pb={6}>
@@ -532,24 +621,47 @@ export default function Home() {
                 accept=".pdf,.doc,.docx,.txt,.md"
                 sx={{
                   '::file-selector-button': {
-                    border: 'none', outline: 'none', mr: 2, py: 2, px: 3,
-                    borderRadius: 'md', bg: 'gray.100', color: 'gray.700',
-                    cursor: 'pointer', _hover: { bg: 'gray.200' },
+                    border: 'none',
+                    outline: 'none',
+                    mr: 2,
+                    py: 2,
+                    px: 3,
+                    borderRadius: 'md',
+                    bg: 'gray.100',
+                    color: 'gray.700',
+                    cursor: 'pointer',
+                    _hover: { bg: 'gray.200' },
                   },
                 }}
               />
             </FormControl>
-            {selectedFile && <Text mt={2} fontSize="sm">Selected: {selectedFile.name}</Text>}
+            {selectedFile && (
+              <Text mt={2} fontSize="sm">
+                Selected: {selectedFile.name}
+              </Text>
+            )}
           </ModalBody>
           <ModalFooter>
-            <Button colorScheme="blue" mr={3} type="submit" isLoading={isStaging} loadingText="Processing..." isDisabled={!selectedFile}>
+            <Button
+              colorScheme="blue"
+              mr={3}
+              type="submit"
+              isLoading={isStaging}
+              loadingText="Processing..."
+              isDisabled={!selectedFile}
+            >
               Import from File
             </Button>
-            <Button variant="ghost" onClick={onCloseFileModal} isDisabled={isStaging}>Cancel</Button>
+            <Button
+              variant="ghost"
+              onClick={onCloseFileModal}
+              isDisabled={isStaging}
+            >
+              Cancel
+            </Button>
           </ModalFooter>
         </ModalContent>
       </Modal>
-
     </Flex>
   );
 }
