@@ -29,12 +29,15 @@ class RewriteContentInput(BaseModel):
 
 class RewriteContentOutput(BaseModel):
     """Output model for the /rewrite-content endpoint."""
-    ai_rewritten_content_blocks: List[ContentBlock] = Field(..., description="The list of AI-generated rewritten content blocks.")
+    rewritten_content_blocks: List[ContentBlock] = Field(..., description="The list of AI-generated rewritten content blocks.")
+    new_rewritten_document_id: Optional[str] = Field(None, description="The new document ID assigned to the set of rewritten blocks.")
     status_code: str = Field(default="success", description="Status of the rewrite operation (e.g., 'success', 'error_rewriting').")
     error_message: Optional[str] = Field(None, description="Error message if the operation failed.")
-    token_usage: Optional[Dict[str, Any]] = Field(None, description="Token usage metrics from the AI models, as reported by crewAI.")
+    usage_metrics: Optional[Dict[str, Any]] = Field(None, description="Token usage metrics from the AI models, as reported by crewAI.")
     processing_time_ms: Optional[float] = Field(None, description="Total processing time for the rewrite operation in milliseconds.")
-    trace_id: Optional[str] = Field(None, description="A unique identifier for tracing the request through the system.")
+    correlation_id: Optional[str] = Field(None, description="A unique identifier for tracing the request through the system.")
+    # Renamed token_usage to usage_metrics for consistency with crewAI output
+    # Renamed trace_id to correlation_id
 
 # --- Title Generation Models ---
 

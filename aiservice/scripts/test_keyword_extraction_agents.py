@@ -1,41 +1,49 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Unit tests for KeywordIdentificationAgent.
+Unit tests for the Keyword Identifier Agent.
 """
 
 import pytest
 from unittest.mock import MagicMock, patch
 from typing import List
+import sys
+from pathlib import Path
+
+# Adjust sys.path to include the project root directory
+project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 from aiservice.app.models.orchestration_models import ContentBlock
-from aiservice.app.agents.keyword_extraction_agents import KeywordIdentificationAgent
-from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool
-from aiservice.app.tools.llm_interaction_tools import OptimizedLLMInteractionTool
+from aiservice.app.agents.keyword_extraction_agents import KeywordExtractionAgents
+from aiservice.app.tools.formatting_tools import KeywordToTagFormatterTool
+from crewai import Agent
 
 @pytest.fixture
-def keyword_agent() -> KeywordIdentificationAgent:
-    """Fixture to provide a KeywordIdentificationAgent instance for testing."""
-    # We can mock the tools used by the agent if we only want to test agent logic itself
-    # For now, let's use real tools but expect their internal calls (e.g., LLM API) to be mocked in specific tests.
-    return KeywordIdentificationAgent()
+def keyword_agent() -> Agent:
+    """Fixture to provide a keyword_identifier_agent instance for testing."""
+    # We can mock the llm_client used by the agent factory
+    agent_factory = KeywordExtractionAgents(llm_client=MagicMock())
+    return agent_factory.keyword_identifier_agent()
 
 @pytest.fixture
 def sample_content_blocks() -> list[ContentBlock]:
     """Provides a sample list of ContentBlock objects for testing."""
     return [
-        ContentBlock(block_id="cb1", type="text", text_content="Deep learning is a powerful AI technique."),
-        ContentBlock(block_id="cb2", type="text", text_content="It enables computers to learn from large datasets.")
+        ContentBlock(type="text", content="Deep learning is a powerful AI technique."),
+        ContentBlock(type="text", content="It enables computers to learn from large datasets.")
     ]
 
 # Test the agent's initialization (basic test)
-def test_keyword_agent_initialization(keyword_agent: KeywordIdentificationAgent):
-    assert keyword_agent.role == "Keyword Extraction Specialist"
-    assert keyword_agent.goal == "Identify and extract 5-7 key terms or concepts that represent the core topics of the provided content. Keywords should be concise and relevant."
-    assert len(keyword_agent.tools) == 2
-    assert isinstance(keyword_agent.tools[0], FullTextContentExtractorTool)
-    assert isinstance(keyword_agent.tools[1], OptimizedLLMInteractionTool)
+def test_keyword_agent_initialization(keyword_agent: Agent):
+    """Tests the initialization of the keyword agent, checking its configuration."""
+    assert keyword_agent.role == "Expert Keyword Analyst and Subject Matter Specialist"
+    assert "deeply understand its core concepts" in keyword_agent.goal
+    assert len(keyword_agent.tools) == 1
+    assert isinstance(keyword_agent.tools[0], KeywordToTagFormatterTool)
 
+# The comments below are kept for context, as they correctly state that
+# full testing is best done at the crew level.
 # To test the agent's execution, we would typically mock the `kickoff` method of a Crew
 # that uses this agent, or mock the tools' `_run` methods if testing the agent directly.
 # Since an agent's primary execution happens within a Task in a Crew, testing it in isolation

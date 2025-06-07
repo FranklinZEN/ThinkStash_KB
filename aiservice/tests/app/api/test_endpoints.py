@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock, ANY # AsyncMock for async functions
 from fastapi import HTTPException, BackgroundTasks
+from aiservice.app.models.orchestration_models import OrchestrationStatusCodeEnum
 
 # Modules to test
 from aiservice.app.api import endpoints
@@ -31,7 +32,7 @@ async def test_submit_rewrite_task_success(mock_json_dumps, mock_get_db_conn, mo
             "type": "text",
             "user_id": "user123",
             "document_id": "doc_id_from_payload",
-            "data": {"text": "test"}
+            "content": "test"
         }],
         "user_id": "user123"
     }
@@ -48,24 +49,27 @@ async def test_submit_rewrite_task_success(mock_json_dumps, mock_get_db_conn, mo
     mock_cursor.execute.assert_called_once() 
     mock_background_tasks.add_task.assert_called_once() # Check if add_task was called
 
-    assert response == {"task_id": "test-uuid-123"}
+    assert response["task_id"] == "test-uuid-123"
+    assert "accepted for processing" in response["message"]
+    
     args, kwargs = mock_cursor.execute.call_args
     assert "INSERT INTO \"AITask\"" in args[0]
     assert args[1][0] == "test-uuid-123" 
-    assert args[1][3] == TaskStatus.PENDING.value
+    assert args[1][2] == TaskStatus.PENDING.value
 
 @pytest.mark.asyncio
 @patch('aiservice.app.api.endpoints.get_db_connection')
 async def test_submit_rewrite_task_db_connection_fails(mock_get_db_conn):
     mock_get_db_conn.side_effect = ConnectionError("Failed to connect")
     payload = RewriteContentInput(content_blocks_to_rewrite=[
-        ContentBlock(block_id="1", type="text", user_id="test_user", document_id="test_doc", data={"text":"t"})
+        ContentBlock(block_id="1", type="text", user_id="test_user", document_id="test_doc", content="t")
     ])
     background_tasks = MagicMock(spec=BackgroundTasks)
 
     with pytest.raises(HTTPException) as exc_info:
         await endpoints.submit_rewrite_task(payload, background_tasks)
     assert exc_info.value.status_code == 503 # Service Unavailable due to ConnectionError
+    assert "Database service is unavailable" in exc_info.value.detail
 
 @pytest.mark.asyncio
 @patch('aiservice.app.api.endpoints.get_db_connection')
@@ -77,14 +81,15 @@ async def test_submit_rewrite_task_db_insert_fails(mock_get_db_conn):
     mock_cursor.execute.side_effect = Exception("Insert failed") # Simulate INSERT failure
 
     payload = RewriteContentInput(content_blocks_to_rewrite=[
-        ContentBlock(block_id="1", type="text", user_id="test_user", document_id="test_doc", data={"text":"t"})
+        ContentBlock(block_id="1", type="text", user_id="test_user", document_id="test_doc", content="t")
     ])
     background_tasks = MagicMock(spec=BackgroundTasks)
 
     with pytest.raises(HTTPException) as exc_info:
         await endpoints.submit_rewrite_task(payload, background_tasks)
     assert exc_info.value.status_code == 500
-    assert "Failed to submit rewrite task: Insert failed" in exc_info.value.detail
+    assert "Failed to submit rewrite task" in exc_info.value.detail
+    assert "Insert failed" in exc_info.value.detail
 
 
 # --- Test process_rewrite_task_in_background ---
@@ -110,13 +115,16 @@ async def test_process_rewrite_task_success(
         "type":"text", 
         "user_id": "user_bg",
         "document_id": "doc_rewritten_placeholder",
-        "data":{"text": "rewritten"}
+        "content": "rewritten"
     }
     mock_rewritten_block = ContentBlock(**mock_rewritten_block_data)
+    
+    # This now needs to match the real RewriteContentOutput model
     crew_output = RewriteContentOutput(
-        ai_rewritten_content_blocks=[mock_rewritten_block],
-        status_code="success",
-        usage_metrics={"tokens": 100}
+        status_code=OrchestrationStatusCodeEnum.SUCCESS.value,
+        rewritten_content_blocks=[mock_rewritten_block],
+        usage_metrics={"tokens": 100},
+        new_rewritten_document_id="doc_rewritten_placeholder"
     )
     mock_crew_instance.run.return_value = crew_output
 
@@ -132,7 +140,7 @@ async def test_process_rewrite_task_success(
     doc_meta_dict = None
 
     await endpoints.process_rewrite_task_in_background(
-        task_id, user_id, content_blocks_dict, doc_meta_dict
+        task_id, user_id, content_blocks_dict, doc_meta_dict, correlation_id=None
     )
 
     mock_get_db_conn.assert_called_once()
@@ -146,13 +154,7 @@ async def test_process_rewrite_task_success(
 
     mock_crew_instance.run.assert_called_once()
     
-    expected_result_payload = {
-        "ai_rewritten_content_blocks": [mock_rewritten_block.model_dump()],
-        "usage_metrics": {"tokens": 100},
-        "processing_time_ms": None, 
-        "trace_id": None 
-    }
-    mock_update_completed.assert_called_once_with(task_id, expected_result_payload, mock_conn_obj)
+    mock_update_completed.assert_called_once_with(task_id, crew_output.model_dump(), mock_conn_obj)
     mock_update_failed.assert_not_called()
     mock_conn_obj.close.assert_called_once()
 
@@ -173,9 +175,10 @@ async def test_process_rewrite_task_crew_fails(
     mock_crew_instance = MagicMock()
     mock_crew_manager_class.return_value = mock_crew_instance
     crew_output = RewriteContentOutput(
-        ai_rewritten_content_blocks=[], 
-        status_code="error",
-        error_message="Crew processing failed badly"
+        status_code="error_crew_execution_failed",
+        error_message="Crew processing failed badly",
+        rewritten_content_blocks=[],
+        usage_metrics={}
     )
     mock_crew_instance.run.return_value = crew_output
 
@@ -191,7 +194,7 @@ async def test_process_rewrite_task_crew_fails(
     doc_meta_dict = None
 
     await endpoints.process_rewrite_task_in_background(
-        task_id, user_id, content_blocks_dict, doc_meta_dict
+        task_id, user_id, content_blocks_dict, doc_meta_dict, correlation_id=None
     )
 
     mock_update_processing.assert_called_once_with(task_id, mock_conn_obj)
@@ -223,12 +226,12 @@ async def test_process_rewrite_task_generic_exception(
         "type":"text",
         "user_id": user_id,
         "document_id": "doc_bg_task_3",
-        "data":{"text":"t"}
+        "content":"t"
     }]
     doc_meta_dict = None
 
     await endpoints.process_rewrite_task_in_background(
-        task_id, user_id, content_blocks_dict, doc_meta_dict
+        task_id, user_id, content_blocks_dict, doc_meta_dict, correlation_id=None
     )
 
     mock_update_processing.assert_called_once_with(task_id, mock_conn_obj)

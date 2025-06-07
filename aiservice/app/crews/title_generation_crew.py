@@ -24,10 +24,6 @@ from crewai.tools import BaseTool # Corrected import
 
 logger = get_logger(__name__)
 
-class TitleOutput(BaseModel):
-    """Pydantic model for the expected output of the title generation task."""
-    generated_title: str = Field(description="The AI-generated title for the content.")
-
 class GeneralPurposeTitleGenerationCrew:
     """Creates and runs a CrewAI crew for generating titles from content blocks."""
 
@@ -76,103 +72,48 @@ class GeneralPurposeTitleGenerationCrew:
                 "the specific error message 'Error: No valid content provided for title generation.' if title generation is not possible."
             ),
             agent=self.title_crafting_agent,
-            # No context needed as text is in description
-            # No async_execution, keep it simple for now
-            # output_json / output_pydantic can be considered later if complex structured output is needed beyond a string
-            # output_file for very long outputs, not applicable here
+            output_pydantic=TitleGenerationOutput
         )
 
     def run(self, content_block_dicts: List[Dict[str, Any]]) -> TitleGenerationOutput:
+        """
+        Runs the title generation crew.
+        This method now expects the crew to return a TitleGenerationOutput Pydantic object.
+        """
         print(f"GeneralPurposeTitleGenerationCrew running with {len(content_block_dicts)} content block(s).")
 
-        # Step 1: Extract full text directly using the tool
-        # The FullTextContentExtractorTool's _run method expects List[Dict[str, Any]]
-        # Ensure the input format matches what the tool expects.
         try:
-            print("[TitleGenerationCrew] Attempting to extract text using FullTextContentExtractorTool...")
-            # The tool's _run method needs to be called correctly. 
-            # If it's a BaseTool, it's usually agent.invoke(tool_input)
-            # If we are using it directly, we call its _run method.
+            # Step 1: Extract full text.
             extracted_text = self.full_text_extractor_tool._run(content_block_dicts=content_block_dicts)
-            print(f"[TitleGenerationCrew] Extracted text (first 300 chars): {extracted_text[:300]}...")
         except Exception as e:
-            print(f"[TitleGenerationCrew ERROR] Error during direct text extraction: {e}")
-            extracted_text = "Error: Failed to extract text content for title generation."
+            logger.error(f"Error during text extraction: {e}", exc_info=True)
+            return TitleGenerationOutput(suggested_title="Error: Failed to extract text content.")
 
-        # Prepare task for the agent with the extracted text
+        # Step 2: Create and run the crew.
         title_task = self._create_title_generation_task(extracted_text=extracted_text)
-
-        # Setup Crew
         title_crew = Crew(
             agents=[self.title_crafting_agent],
             tasks=[title_task],
             process=Process.sequential,
-            verbose=True, # Changed from 2 to True for Pydantic boolean validation
-            # memory=False, # Default, appropriate for stateless title generation
-            # embedder configuration for Crew AI >= 0.28.0 if memory is True & using specific embeddings
-            # manager_llm can be set if using hierarchical agent structure, not for this simple crew
+            verbose=True,
         )
 
-        print("Kicking off Title Generation Crew...")
-        # The result from crew.kickoff() is the raw output from the last task.
-        # We expect this to be the string containing the title or an error message.
-        crew_result = title_crew.kickoff() 
+        try:
+            print("Kicking off Title Generation Crew...")
+            crew_result = title_crew.kickoff()
+            print(f"Title Generation Crew execution finished. Result: {crew_result}")
 
-        print(f"Title Generation Crew execution finished. Raw result: {crew_result}")
-
-        # Ensure the result is a string, as expected by TitleGenerationOutput
-        final_title = ""
-        if hasattr(crew_result, 'raw') and isinstance(getattr(crew_result, 'raw', None), str):
-            raw_output_str = crew_result.raw
-            print(f"Extracted raw output from CrewOutput.raw: '{raw_output_str}'")
-            if raw_output_str.startswith("Error:"):
-                final_title = raw_output_str  # Propagate agent's specific error
-            elif not raw_output_str.strip():
-                final_title = "Error: Title generation resulted in an empty string from crew."
+            if isinstance(crew_result, TitleGenerationOutput):
+                return crew_result
             else:
-                final_title = raw_output_str
-        elif isinstance(crew_result, str):
-            # Fallback for older CrewAI versions or if a raw string is somehow returned
-            print(f"Crew result is already a string: '{crew_result}'")
-            if crew_result.startswith("Error:"):
-                final_title = crew_result
-            elif not crew_result.strip():
-                final_title = "Error: Title generation resulted in an empty string."
-            else:
-                final_title = crew_result
-        else:
-            print(f"[TitleGenerationCrew WARNING] Unexpected crew_result type: {type(crew_result)}. Full CrewOutput: {crew_result}")
-            # Attempt to get a meaningful string from the tasks_output if possible
-            tasks_output_str = ""
-            if hasattr(crew_result, 'tasks_output') and crew_result.tasks_output:
-                # Get the output of the last task
-                last_task_output = crew_result.tasks_output[-1]
-                if hasattr(last_task_output, 'raw_output') and isinstance(last_task_output.raw_output, str):
-                    tasks_output_str = last_task_output.raw_output
-                    print(f"Extracted raw output from last task's output: '{tasks_output_str}'")
+                # This is a fallback if the crew output is not the expected Pydantic model.
+                logger.warning(f"Unexpected output type from crew: {type(crew_result)}")
+                raw_str_output = str(crew_result.raw) if hasattr(crew_result, 'raw') else str(crew_result)
+                return TitleGenerationOutput(suggested_title=f"Error: Unexpected output format from crew: {raw_str_output}")
 
-
-            if tasks_output_str and not tasks_output_str.startswith("Error:") and tasks_output_str.strip():
-                 final_title = tasks_output_str # Use last task output if it seems valid
-            elif tasks_output_str and tasks_output_str.startswith("Error:"):
-                 final_title = tasks_output_str # Propagate error from last task
-            else:
-                 final_title = "Error: Title generation failed due to an unexpected crew output format."
-
-        # If text extraction itself failed, that error should take precedence
-        # unless the agent produced a more specific error (which final_title would already hold).
-        if extracted_text.startswith("Error:"):
-            if final_title.startswith("Error:"):
-                # If both extraction and agent processing resulted in errors,
-                # prioritize the extraction error as it's earlier in the process.
-                print(f"Text extraction failed ('{extracted_text}') and agent also produced an error ('{final_title}'). Using extraction error.")
-                final_title = extracted_text
-            else:
-                # If extraction failed but agent somehow produced a non-error title (unlikely with current agent prompts)
-                print(f"Text extraction failed ('{extracted_text}'), but crew generated a title ('{final_title}'). Overriding with extraction error as it's a prerequisite.")
-                final_title = extracted_text
-        
-        return TitleGenerationOutput(suggested_title=final_title)
+        except Exception as e:
+            logger.error(f"An exception occurred during crew execution: {e}", exc_info=True)
+            return TitleGenerationOutput(suggested_title=f"Error: An exception occurred during title generation: {e}")
 
 # Example Usage (for testing purposes, if you run this file directly):
 if __name__ == '__main__':

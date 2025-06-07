@@ -311,87 +311,54 @@ async def process_rewrite_task_in_background(
     document_metadata_dict: Optional[Dict],
     correlation_id: Optional[str]
 ):
-    logger.info("Background processing starting for rewrite task", extra={
-        'task_id': task_id, 
-        'user_id': user_id, 
-        'correlation_id': correlation_id
-    })
+    """
+    Background task to process a rewrite request.
+    This function should not raise exceptions directly but handle them
+    and update the task status in the database.
+    """
     db_conn = None
     try:
         db_conn = get_db_connection()
-        if not db_conn:
-            logger.error("Failed to get DB connection in background task", extra={'task_id': task_id, 'correlation_id': correlation_id})
-            return
-
         update_task_status_processing(task_id, db_conn)
-        logger.info("Updated task status to PROCESSING", extra={'task_id': task_id, 'correlation_id': correlation_id})
 
-        rewrite_input_data = {
-            "user_id": user_id,
-            "content_blocks_to_rewrite": content_blocks_to_rewrite_dict,
-            "document_metadata": document_metadata_dict,
-            "correlation_id": correlation_id
-        }
-        try:
-            current_rewrite_input = RewriteContentInput(**rewrite_input_data)
-        except Exception as pydantic_exc:
-            logger.error("Failed to reconstruct RewriteContentInput in background task", 
-                         extra={'task_id': task_id, 'correlation_id': correlation_id, 'error': str(pydantic_exc), 'data': rewrite_input_data}, exc_info=True)
-            update_task_status_failed_background_error(
-                task_id, 
-                f"Input data validation error: {str(pydantic_exc)}", 
-                db_conn
-            )
-            return
+        # Re-construct Pydantic models from dictionaries
+        content_blocks = [ContentBlock(**cb) for cb in content_blocks_to_rewrite_dict]
+        doc_meta = DocumentMetadata(**document_metadata_dict) if document_metadata_dict else None
+        
+        rewrite_input = RewriteContentInput(
+            content_blocks_to_rewrite=content_blocks,
+            document_metadata=doc_meta,
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
 
         manager = ContentRewriteCrewManager(
-            rewrite_input=current_rewrite_input, 
-            task_id=task_id, 
+            rewrite_input=rewrite_input,
+            task_id=task_id,
             db_connection=db_conn,
             correlation_id=correlation_id
         )
         
-        logger.info("ContentRewriteCrewManager instantiated, starting run()", extra={'task_id': task_id, 'correlation_id': correlation_id})
-        result: RewriteContentOutput = await run_in_threadpool(manager.run)
-        logger.info("ContentRewriteCrewManager run finished", extra={'task_id': task_id, 'correlation_id': correlation_id, 'status_code': result.status_code})
+        # The run method is synchronous, so it's okay in a background task
+        result_output = manager.run()
 
-        if result.status_code == OrchestrationStatusCodeEnum.REWRITE_SUCCESS.value:
-            logger.info("Rewrite successful. Storing results.", extra={'task_id': task_id, 'correlation_id': correlation_id})
-            update_task_status_completed(
-                task_id, 
-                result.model_dump_json(),
-                db_conn
-            )
+        if result_output.status_code == OrchestrationStatusCodeEnum.SUCCESS.value:
+            # On success, result_output is the payload for the completed task
+            update_task_status_completed(task_id, result_output.model_dump(), db_conn)
         else:
-            error_message = result.error_message or "Rewrite failed with no specific error message."
-            # The status code from the result is the most specific error we have.
-            status_code_for_log = result.status_code or "unknown_failure_status"
-            logger.error(f"Rewrite failed by manager: {error_message}", 
-                         extra={'task_id': task_id, 'correlation_id': correlation_id, 'status_code': status_code_for_log, 'error_details': result.model_dump_json()})
-            update_task_status_failed(task_id, error_message, db_conn)
-        
-        logger.info("Database updated with final status via db_service.", extra={'task_id': task_id, 'correlation_id': correlation_id})
+            # On failure, the error message is in the result object
+            update_task_status_failed(task_id, result_output.error_message, db_conn)
 
     except Exception as e:
-        logger.error(f"Unexpected error in background rewrite task: {str(e)}", extra={'task_id': task_id, 'correlation_id': correlation_id}, exc_info=True)
+        # This catches errors in this background function itself (e.g., DB connection, model parsing)
+        logger.error(f"Background task {task_id} failed unexpectedly: {e}", exc_info=True)
+        # Use a specific function to log background errors if it exists
         if db_conn:
-            try:
-                update_task_status_failed_background_error(
-                    task_id, 
-                    f"Unexpected background processing error: {str(e)}", 
-                    db_conn
-                )
-            except Exception as db_err:
-                logger.error(f"Failed to update task status to FAILED after unexpected error: {str(db_err)}", extra={'task_id': task_id, 'correlation_id': correlation_id}, exc_info=True)
+            update_task_status_failed_background_error(task_id, f"Background processing error: {e}", db_conn)
     finally:
         if db_conn:
             db_conn.close()
-            logger.debug("DB connection closed in background task", extra={'task_id': task_id, 'correlation_id': correlation_id})
-    
-    logger.info("Background processing finished for rewrite task", extra={'task_id': task_id, 'correlation_id': correlation_id})
 
-
-# --- New Asynchronous Task Submission Endpoint (Uses its own get_db_connection for initial insert) ---
 @router.post("/submit-rewrite-task", 
               status_code=202, 
               response_model=dict, 
@@ -401,60 +368,50 @@ async def submit_rewrite_task(
     payload: RewriteContentInput, 
     background_tasks: BackgroundTasks
 ):
-    db_task_id = str(uuid.uuid4()) 
-    user_id_to_store = payload.user_id
-    correlation_id_from_payload = payload.correlation_id
-
-    logger.info("Submit rewrite task request received", extra={
-        'generated_task_id': db_task_id, 
-        'user_id': user_id_to_store, 
-        'correlation_id': correlation_id_from_payload,
-        'input_payload_preview': payload.model_dump_json(indent=2)[:200] + "..."
-    })
-
+    """
+    Submits a rewrite task to be processed in the background.
+    """
+    task_id = str(uuid.uuid4())
     db_conn = None
     try:
         db_conn = get_db_connection()
-        if not db_conn:
-            logger.error("Failed to get DB connection for task submission", extra={'generated_task_id': db_task_id, 'correlation_id': correlation_id_from_payload})
-            raise HTTPException(status_code=503, detail="Database connection unavailable. Please try again later.")
+        with db_conn.cursor() as cur:
+            # The payload for the task can be large, so we store it as a JSON string.
+            # Using model_dump_json is efficient.
+            task_payload_json = payload.model_dump_json(exclude={'user_id', 'correlation_id'})
 
-        with db_conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            input_data_json = payload.model_dump_json() 
-            
             cur.execute(
-                """INSERT INTO \"AITask\" (id, \"userId\", \"taskType\", status, \"inputData\", \"createdAt\", \"updatedAt\")
-                   VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                (db_task_id, user_id_to_store, 'REWRITE_CONTENT', TaskStatus.PENDING.value, input_data_json, datetime.datetime.utcnow(), datetime.datetime.utcnow())
+                """
+                INSERT INTO "AITask" (id, type, status, payload, user_id, correlation_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (task_id, 'rewrite', TaskStatus.PENDING.value, task_payload_json, payload.user_id, payload.correlation_id, datetime.datetime.now(datetime.timezone.utc), datetime.datetime.now(datetime.timezone.utc))
             )
-            db_conn.commit()
-            logger.info("New rewrite task created in DB with PENDING status", extra={'task_id': db_task_id, 'correlation_id': correlation_id_from_payload})
+        db_conn.commit()
 
+        # Add the long-running job to the background
         background_tasks.add_task(
-            process_rewrite_task_in_background, 
-            task_id=db_task_id,
-            user_id=user_id_to_store,
-            content_blocks_to_rewrite_dict=[block.model_dump() for block in payload.content_blocks_to_rewrite],
-            document_metadata_dict=payload.document_metadata.model_dump() if payload.document_metadata else None,
-            correlation_id=correlation_id_from_payload
+            process_rewrite_task_in_background,
+            task_id,
+            payload.user_id,
+            [block.model_dump() for block in payload.content_blocks_to_rewrite],
+            payload.document_metadata.model_dump() if payload.document_metadata else None,
+            payload.correlation_id
         )
-        logger.info("Rewrite task added to background processing queue", extra={'task_id': db_task_id, 'correlation_id': correlation_id_from_payload})
         
-        return {"task_id": db_task_id, "message": "Rewrite task accepted and is being processed."}
-
-    except psycopg2.Error as db_err:
-        logger.error(f"Database error during task submission: {str(db_err)}", extra={'generated_task_id': db_task_id, 'correlation_id': correlation_id_from_payload}, exc_info=True)
-        if db_conn: db_conn.rollback() 
-        raise HTTPException(status_code=500, detail=f"Database error during task submission: {str(db_err)}")
+        return {"task_id": task_id, "message": f"Rewrite task {task_id} accepted for processing."}
+    
+    except (psycopg2.OperationalError, ConnectionError) as e:
+        logger.error(f"Database connection error: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Database service is unavailable.")
     except Exception as e:
-        logger.error(f"Unexpected error during task submission: {str(e)}", extra={'generated_task_id': db_task_id, 'correlation_id': correlation_id_from_payload}, exc_info=True)
-        if db_conn: db_conn.rollback()
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        logger.error(f"Failed to submit rewrite task: {e}", exc_info=True)
+        if db_conn:
+            db_conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to submit rewrite task: {e}")
     finally:
         if db_conn:
             db_conn.close()
-            logger.debug("DB connection closed after task submission attempt", extra={'generated_task_id': db_task_id, 'correlation_id': correlation_id_from_payload})
-
 
 # Ensure this new endpoint is registered with the main FastAPI app
 # This is usually done by including this router in aiservice/main.py

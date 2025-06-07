@@ -36,7 +36,7 @@ class ContentStructuringService(BaseService):
         try: 
             if not service_input:
                 self.logger.error("Service input is None.")
-                return ServiceResult.failure(data=[], error_message="Service input is None.")
+                return ServiceResult.failure(error_message="Service input is None.")
 
             current_user_id = service_input.user_id
             current_document_id = service_input.document_metadata.document_id if service_input.document_metadata else None
@@ -50,7 +50,7 @@ class ContentStructuringService(BaseService):
 
             if service_input.preliminary_blocks is None:
                 self.logger.error("service_input.preliminary_blocks is None.")
-                return ServiceResult.failure(data=[], error_message="Preliminary blocks list is None.")
+                return ServiceResult.failure(error_message="Preliminary blocks list is None.")
 
             enriched_images_map: Dict[str, EnrichedImageMetadata] = {}
             if service_input.enriched_images:
@@ -213,7 +213,10 @@ class ContentStructuringService(BaseService):
                 
                 error_msg = f"Error during content structuring loop. Last processed/problematic p_block (approx): {problematic_block_details}. Exception: {type(e_structuring_loop).__name__}: {str(e_structuring_loop)}"
                 self.logger.critical(f"{error_msg}", exc_info=True)
-                return ServiceResult.failure(data=final_content_blocks, error_message=error_msg if error_msg else "Unknown error in structuring loop")
+                return ServiceResult.failure(
+                    error_message=error_msg if error_msg else "Unknown error in structuring loop",
+                    error_details={"partial_blocks": [block.model_dump() for block in final_content_blocks]}
+                )
             
             duration = time.time() - start_time
             self.logger.info(f"ContentStructuringService finished successfully in {duration:.2f}s. Blocks created: {len(final_content_blocks)}.")
@@ -230,7 +233,10 @@ class ContentStructuringService(BaseService):
             
             full_error_message = f"{error_message if error_message else 'Outer exception with no specific message'}. Input summary: {input_summary}"
             self.logger.critical(f"FATAL ERROR in ContentStructuringService: {full_error_message}", exc_info=True)
-            return ServiceResult.failure(data=final_content_blocks, error_message=full_error_message if full_error_message else "Outer unknown error in CSS")
+            return ServiceResult.failure(
+                error_message=full_error_message if full_error_message else "Outer unknown error in CSS",
+                error_details={"partial_blocks": [block.model_dump() for block in final_content_blocks]}
+            )
 
 # Example usage (conceptual, not run as part of the service file)
 # if __name__ == '__main__':

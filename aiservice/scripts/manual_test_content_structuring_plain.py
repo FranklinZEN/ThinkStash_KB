@@ -47,9 +47,10 @@ def create_mock_enriched_image(
         width=width, height=height
     )
 
-def create_mock_document_metadata(doc_id: str, source_id: str, source_type: str) -> DocumentMetadata:
+def create_mock_document_metadata(doc_id: str, source_id: str, source_type: str, user_id: str = "test_user_id") -> DocumentMetadata:
     return DocumentMetadata(
         document_id=doc_id, source_identifier=source_id, source_type=source_type,
+        user_id=user_id,
         extracted_at=datetime.utcnow()
     )
 
@@ -158,4 +159,5 @@ async def main():
     ]
     await run_structuring_test("List Items Only", case5_prelim_blocks, [], case5_doc_meta, f"{job_id_base}_c5")
 
-asyncio.run(main()) 
+if __name__ == "__main__":
+    asyncio.run(main()) 

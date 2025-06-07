@@ -28,7 +28,7 @@ class TitleGenerationAgents:
 
         # Initialize tools
         self.full_text_extractor_tool = FullTextContentExtractorTool()
-        self.optimized_llm_interaction_tool = OptimizedLLMInteractionTool(llm=self.llm)
+        self.optimized_llm_interaction_tool = OptimizedLLMInteractionTool(llm_client=self.llm)
         
         # Configuration for the agent - can be externalized
         self.title_crafter_model_name = "gemini-2.5-flash" # As per plan
