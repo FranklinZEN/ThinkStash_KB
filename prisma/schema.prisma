@@ -31,6 +31,7 @@ model User {
   // Application-specific relations
   folders        Folder[]
   knowledgeCards KnowledgeCard[]
+  imageRecords   ImageRecord[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -102,6 +103,7 @@ model KnowledgeCard {
   folderId  String?
   folder    Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull) // SetNull on folder deletion
   tags      Tag[]    @relation("CardTags")
+  imageRecords ImageRecord[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   isStarred Boolean  @default(false)
@@ -121,3 +123,49 @@ model Tag {
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
 }
+
+model ImageRecord {
+  id        String   @id @default(cuid())
+  userId    String   // User who uploaded it
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  gcsPath         String   @unique // e.g., "userid/uuid.jpg" - actual path in GCS
+  contentType     String   // e.g., "image/jpeg"
+  originalFilename String
+  size            Int      // File size in bytes
+
+  // This will be the URL used by the BlockNote editor and for application-wide display
+  // Format: /api/images/serve/{id} (referencing this ImageRecord's ID)
+  appServedUrl    String   @unique
+
+  // Link to KnowledgeCard.
+  // An image is uploaded in the context of a card. If the card is deleted, the image record is deleted.
+  knowledgeCardId String?
+  knowledgeCard   KnowledgeCard? @relation(fields: [knowledgeCardId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([knowledgeCardId])
+}
+
+// --- AI Task Management Model ---
+
+model AITask {
+  id           String   @id @default(uuid())
+  userId       String? // Optional: if tasks are user-specific
+  taskType     String // e.g., "CONTENT_REWRITE"
+  status       String // PENDING, PROCESSING, COMPLETED, FAILED
+  progressStage String?  // ADDED: To store messages like "Summarizing...", "Rewriting..."
+  inputData    Json? // Store original_content_blocks or a reference
+  resultData   Json? // Store ai_rewritten_content_blocks
+  errorMessage String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Optional: Index for querying by status or userId
+  @@index([status])
+  @@index([userId]) // Only if userId field is consistently used
+}
+

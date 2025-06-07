@@ -22,8 +22,7 @@ COPY . .
 # ENV NEXT_TELEMETRY_DISABLED 1 # Optional: Disable Next.js telemetry
 
 # Generate Prisma client if you use Prisma
-# RUN npx prisma generate 
-# Or (if in package.json scripts): npm run prisma:generate
+RUN npm run prisma:generate
 
 RUN npm run build
 
@@ -32,20 +31,18 @@ FROM node:18-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV production
-# ENV NEXT_TELEMETRY_DISABLED 1 # Optional: Disable Next.js telemetry
+ENV NEXT_TELEMETRY_DISABLED 1
 
-# Create a non-root user 'nextjs' and group 'nodejs'
-# RUN addgroup --system --gid 1001 nodejs
-# RUN adduser --system --uid 1001 nextjs
-# USER nextjs 
-# The above user creation might vary based on base image. 
-# Alpine's 'node' user (ID 1000) is often used by default if USER not specified.
+# Create a non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+USER nextjs
 
 # Copy standalone output
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=node:node /app/.next/standalone ./ 
-COPY --from=builder --chown=node:node /app/.next/static ./.next/static
-COPY --from=builder /app/prisma ./prisma
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
 # If you have a custom server.js for standalone mode, ensure it's copied and used in CMD
 # COPY --from=builder /app/server.js ./server.js

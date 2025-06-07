@@ -1,8 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
-import prisma from '@/lib/prisma'; // Use default import
-import { Prisma } from '@prisma/client'; // Import Prisma
+import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client'; // Import Prisma directly from @prisma/client
+import { z } from 'zod'; // Re-add Zod import
+import { CardContentSchema } from '@/lib/validators/editorValidators'; // Re-add CardContentSchema import
+// import { Prisma } from '@prisma/client'; // Removed
+// import { handleCardImageAssociations } from '@/lib/services/cardImageService'; // Removed
+// import { CardContentSchema } from '@/lib/validators/editorValidators'; // Removed unused import
+import type {
+  // CreateCardRequest, // Removed unused import
+  KnowledgeCardResponse,
+  // ContentBlock, // Removed unused import
+} from '@/types/api/ai-service';
+
+// Zod schema for validating the POST request body
+const CreateCardBodySchema = z.object({
+  title: z.string().min(1, { message: 'Title cannot be empty' }).trim(),
+  content: CardContentSchema, // Use the imported schema for BlockNote content
+  folderId: z
+    .string()
+    .cuid({ message: 'Invalid folder ID format.' })
+    .nullable()
+    .optional(),
+  tags: z
+    .array(z.string().trim().min(1, { message: 'Tag name cannot be empty.' }))
+    .optional(),
+  isStarred: z.boolean().optional(),
+});
 
 // --- GET Handler (List Cards) ---
 export async function GET(req: NextRequest) {
@@ -107,132 +132,180 @@ export async function GET(req: NextRequest) {
 
 // --- POST Handler (Create Card) ---
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions); // --- REVERTED: Session check enabled ---
-
-  if (!session || !session.user?.id) {
-    // --- REVERTED: Session check enabled ---
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); // --- REVERTED: Session check enabled ---
-  }
-
   try {
-    const body = await req.json();
-    const { title, tags, content, folderId } = body;
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = session.user.id;
 
-    // Basic validation for title and content
-    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+    const rawBody = await req.json();
+    const validationResult = CreateCardBodySchema.safeParse(rawBody);
+
+    if (!validationResult.success) {
       return NextResponse.json(
-        { error: 'Title is required and must be a non-empty string.' },
-        { status: 400 },
-      );
-    }
-    if (!content) {
-      // Assuming content can be an empty JSON object/array but must be present
-      return NextResponse.json(
-        { error: 'Content is required.' },
-        { status: 400 },
-      );
-    }
-    if (typeof content !== 'object') {
-      // Basic check for JSON structure
-      return NextResponse.json(
-        { error: 'Content must be a valid JSON object or array.' },
+        {
+          error: 'Invalid request body',
+          details: validationResult.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
 
-    // Validate tags: must be an array of non-empty strings if provided
-    let validTags: string[] = [];
-    if (tags !== undefined) {
-      if (
-        !Array.isArray(tags) ||
-        !tags.every((tag) => typeof tag === 'string' && tag.trim().length > 0)
-      ) {
-        return NextResponse.json(
-          { error: 'Tags must be an array of non-empty strings.' },
-          { status: 400 },
-        );
+    const { title, content, folderId, tags, isStarred } = validationResult.data;
+
+    // console.log('API /cards (POST) called to create card with title:', title); // Keep for debugging if needed
+
+    const newCardId = await prisma.$transaction(async (tx) => {
+      const tagConnections: { id: string }[] = [];
+      if (tags && tags.length > 0) {
+        for (const tagName of tags) {
+          const tag = await tx.tag.upsert({
+            where: { name: tagName },
+            update: { name: tagName },
+            create: { name: tagName },
+          });
+          tagConnections.push({ id: tag.id });
+        }
       }
-      validTags = tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0);
-    }
 
-    // Validate folderId if provided
-    if (
-      folderId !== undefined &&
-      (typeof folderId !== 'string' || folderId.trim().length === 0)
-    ) {
-      return NextResponse.json(
-        { error: 'folderId must be a non-empty string if provided.' },
-        { status: 400 },
-      );
-    }
-
-    const createData: Prisma.KnowledgeCardCreateInput = {
-      title: title.trim(),
-      content,
-      user: {
-        connect: { id: session.user.id }, // --- REVERTED: Use session.user.id ---
-      },
-    };
-
-    if (validTags.length > 0) {
-      createData.tags = {
-        connectOrCreate: validTags.map((tagName) => ({
-          where: { name: tagName },
-          create: { name: tagName },
-        })),
+      const cardData: Prisma.KnowledgeCardCreateInput = {
+        user: { connect: { id: userId } },
+        title,
+        content: content as Prisma.InputJsonValue,
+        isStarred: isStarred || false,
       };
-    }
 
-    if (folderId) {
-      const folder = await prisma.folder.findFirst({
-        where: { id: folderId, userId: session.user.id }, // --- REVERTED: Use session.user.id ---
-      });
-      if (!folder) {
-        return NextResponse.json(
-          { error: 'Folder not found or access denied.' },
-          { status: 404 },
-        ); // Message updated
+      if (folderId) {
+        cardData.folder = { connect: { id: folderId } };
       }
-      createData.folder = { connect: { id: folderId } };
-    }
 
-    const newCard = await prisma.knowledgeCard.create({
-      data: createData,
+      if (tagConnections.length > 0) {
+        cardData.tags = { connect: tagConnections };
+      }
+
+      const createdCard = await tx.knowledgeCard.create({
+        data: cardData,
+      });
+
+      // Image association logic
+      if (content && Array.isArray(content)) {
+        for (const block of content as {
+          type: string;
+          props?: { url?: string };
+        }[]) {
+          if (block.type === 'image' && block.props?.url) {
+            const imageUrl = block.props.url as string;
+            const parts = imageUrl.split('/');
+            const imageRecordId = parts.pop();
+
+            if (imageRecordId) {
+              try {
+                await tx.imageRecord.updateMany({
+                  where: {
+                    id: imageRecordId,
+                    userId: userId,
+                    knowledgeCardId: null,
+                  },
+                  data: { knowledgeCardId: createdCard.id },
+                });
+              } catch (imgError) {
+                console.error(
+                  `Failed to associate imageRecord ${imageRecordId} with card ${createdCard.id}:`,
+                  imgError,
+                );
+              }
+            }
+          }
+        }
+      }
+      return createdCard.id; // Return only the ID from the transaction
+    });
+
+    // After transaction, fetch the full card with all relations
+    const fullyPopulatedCard = await prisma.knowledgeCard.findUnique({
+      where: { id: newCardId },
       include: {
-        // Optionally include relations in the response
-        tags: true,
         folder: true,
+        tags: true,
+        imageRecords: true, // This should now pick up the linked records
       },
     });
 
-    return NextResponse.json(newCard, { status: 201 });
-  } catch (error) {
-    console.error('Error creating card:', error);
-    if (error instanceof SyntaxError) {
+    if (!fullyPopulatedCard) {
+      console.error(`Failed to re-fetch created card with id: ${newCardId}`);
       return NextResponse.json(
-        { error: 'Invalid JSON in request body' },
+        { error: 'Failed to retrieve created card after creation.' },
+        { status: 500 },
+      );
+    }
+
+    const responsePayload: KnowledgeCardResponse = {
+      id: fullyPopulatedCard.id,
+      title: fullyPopulatedCard.title,
+      content: fullyPopulatedCard.content as Record<string, unknown>[],
+      userId: fullyPopulatedCard.userId,
+      folderId: fullyPopulatedCard.folderId,
+      tags: fullyPopulatedCard.tags.map((tag) => ({
+        id: tag.id,
+        name: tag.name,
+      })),
+      createdAt: fullyPopulatedCard.createdAt.toISOString(),
+      updatedAt: fullyPopulatedCard.updatedAt.toISOString(),
+      isStarred: fullyPopulatedCard.isStarred,
+      imageRecords: fullyPopulatedCard.imageRecords
+        ? fullyPopulatedCard.imageRecords.map((ir) => ({
+            id: ir.id,
+            appServedUrl: ir.appServedUrl || '',
+            gcsPath: ir.gcsPath || '',
+            contentType: ir.contentType || '',
+            originalFilename: ir.originalFilename || '',
+            size: ir.size || 0,
+          }))
+        : [],
+    };
+
+    return NextResponse.json(responsePayload, { status: 201 });
+  } catch (error) {
+    console.error('Error in /cards (POST):', error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'An unknown error occurred';
+    // Handle Prisma-specific errors if needed, e.g., unique constraint violations
+    if (error instanceof z.ZodError) {
+      // Should be caught by safeParse, but as a fallback
+      return NextResponse.json(
+        {
+          error: 'Validation error in POST.',
+          details: error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
-    // Check if the error is an instance of Prisma's known request error
-    // This is a more robust way to check than error.code directly on an unknown type
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === 'P2002') {
-        return NextResponse.json(
-          {
-            error:
-              'A database error occurred (e.g., unique constraint failed).',
-          },
-          { status: 409 },
-        );
-      }
-      // You could add more specific Prisma error codes here if needed
-    }
     return NextResponse.json(
-      { error: 'Failed to create card' },
+      { error: 'Failed to create card.', details: errorMessage },
       { status: 500 },
     );
-  } finally {
-    // await prisma.$disconnect(); // Singleton pattern
   }
 }
+
+// Optional: GET /api/cards (to list cards for a user)
+// export async function GET(req: NextRequest) {
+//   try {
+//     // const session = await auth();
+//     // if (!session?.user?.id) {
+//     //   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+//     // }
+//     // const userId = session.user.id;
+
+//     // TODO: Implement logic to fetch and return a list of cards for the user.
+//     // (Consider pagination, filtering, sorting)
+
+//     console.log('API /cards (GET) called');
+//     const mockListResponse: KnowledgeCardResponse[] = [];
+//     return NextResponse.json(mockListResponse);
+//   } catch (error) {
+//     console.error('Error in /cards (GET):', error);
+//     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+//     return NextResponse.json({ error: 'Failed to fetch cards.', details: errorMessage }, { status: 500 });
+//   }
+// }

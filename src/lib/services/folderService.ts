@@ -1,0 +1,133 @@
+import { Prisma } from '@prisma/client';
+import prisma from '@/lib/prisma';
+
+// Define the shape of the Prisma subset needed by this service
+// export interface FolderPrismaSubset { ... }
+
+export interface FolderBasicDetails {
+  id: string;
+  name: string;
+  parentId: string | null;
+  updatedAt: Date;
+  _count?: {
+    cards: number;
+  };
+}
+
+export interface CreateFolderInput {
+  userId: string;
+  name: string;
+  parentId?: string | null;
+}
+
+export interface ServiceResult<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  details?: unknown; // Changed from any to unknown
+  status?: number;
+}
+
+// --- GET Folders Logic ---
+export async function getFoldersLogic(
+  userId: string,
+): Promise<ServiceResult<FolderBasicDetails[]>> {
+  try {
+    const folders = await prisma.folder.findMany({
+      where: { userId: userId },
+      select: {
+        id: true,
+        name: true,
+        parentId: true,
+        updatedAt: true,
+        _count: {
+          select: {
+            cards: true,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+    return { success: true, data: folders, status: 200 };
+  } catch (error) {
+    console.error('[folderService] Failed to fetch folders:', error);
+    return {
+      success: false,
+      error: 'Failed to retrieve folders.',
+      status: 500,
+    };
+  }
+}
+
+// --- POST (Create) Folder Logic ---
+export async function createFolderLogic(input: CreateFolderInput): Promise<
+  ServiceResult<
+    Prisma.FolderGetPayload<{
+      select: { id: true; name: true; parentId: true; userId: true };
+    }>
+  >
+> {
+  const { userId, name, parentId } = input;
+  try {
+    // Validate parentId ownership if provided
+    if (parentId) {
+      const parentFolder = await prisma.folder.findUnique({
+        where: { id: parentId, userId: userId }, // Ensure user owns the parent
+        select: { id: true },
+      });
+      if (!parentFolder) {
+        return {
+          success: false,
+          error: 'Parent folder not found or not owned by user.',
+          status: 400,
+        };
+      }
+    }
+
+    const newFolder = await prisma.folder.create({
+      data: {
+        name,
+        parentId,
+        userId,
+      },
+      select: {
+        // Select only necessary fields for the response
+        id: true,
+        name: true,
+        parentId: true,
+        userId: true, // Confirming ownership in response might be useful
+      },
+    });
+
+    return { success: true, data: newFolder, status: 201 };
+  } catch (error) {
+    // Use duck-typing for P2002 check to be more resilient to mocked errors
+    if (
+      error &&
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error
+    ) {
+      // Now that we've checked for 'code', we can cast more safely if needed,
+      // or directly use (error as { code: unknown }).code
+      const errorCode = (error as { code: unknown }).code;
+      if (errorCode === 'P2002') {
+        return {
+          success: false,
+          error: 'A folder with this name already exists at this level.',
+          status: 409,
+        };
+      }
+    }
+
+    console.error('[folderService] Failed to create folder:', error);
+    return {
+      success: false,
+      error: 'Failed to create folder.',
+      details: error instanceof Error ? error.message : String(error), // Safer message access
+      status: 500,
+    };
+  }
+}

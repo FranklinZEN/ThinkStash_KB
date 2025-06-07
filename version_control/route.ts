@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Adjust path as necessary
 import { Prisma } from '@prisma/client'; // Import Prisma namespace from @prisma/client
-import type { BlockNoteDocument } from '@/types/blocknote'; // Import the type
+import type { AppPartialBlock } from '@/lib/blocknote/appSchema'; // Import the new type
 
 // --- GET Handler (List Cards) ---
 export async function GET(_req: NextRequest) {
@@ -91,14 +91,14 @@ export async function POST(req: NextRequest) {
     // Prepare data for Prisma create
     const prismaData: { 
       title: string;
-      content: BlockNoteDocument | typeof Prisma.JsonNull;
+      content: Prisma.InputJsonValue | typeof Prisma.JsonNull;
       userId: string;
       folderId?: string;
     } = {
       title: title.trim(),
       // If content from body is null, use Prisma.JsonNull, otherwise use the content directly.
-      // The validation above should ensure content is either an object (BlockNoteDocument) or was explicitly null.
-      content: content === null ? Prisma.JsonNull : content as BlockNoteDocument,
+      // The validation above should ensure content is either an object (AppPartialBlock[]) or was explicitly null.
+      content: content === null ? Prisma.JsonNull : content as unknown as Prisma.InputJsonValue,
       userId: userId,
     };
 

@@ -1,0 +1,14 @@
+{
+  "status_code": "failure_acquisition",
+  "user_id": "default_e2e_user",
+  "document_id": "c3e81012-a408-5431-8b7f-cae37e0fce6b",
+  "source_identifier": "E:\\ThinkStash\\aiservice\\app\\services\\acquisition\\pdf_service.py",
+  "source_type": "file_ext_py",
+  "processing_level_used": "full_content",
+  "extracted_title": "E:\\ThinkStash\\aiservice\\app\\services\\acquisition\\pdf_service.py",
+  "is_long_article": false,
+  "original_content_blocks": [],
+  "processed_images_data": {},
+  "document_metadata": null,
+  "error_message": "FileAcquisitionService failed: Unsupported file type: file_ext_py"
+}

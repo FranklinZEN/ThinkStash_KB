@@ -2,6 +2,12 @@ import {
   BlockNoteSchema,
   defaultBlockSpecs,
   defaultStyleSpecs,
+  // The following types were moved to src/types/editorTypes.ts
+  // Block,
+  // DefaultBlockSchema,
+  // InlineContentSchema,
+  // StyleSchema,
+  // BlockNoteSchemaDefinition
 } from '@blocknote/core';
 // import { ImageBlock } from '@/components/blocks/ImageBlock';
 
@@ -27,3 +33,10 @@ export const customBlockComponents = {
 
 // The React import is no longer needed if we are not defining React components here.
 // import React from 'react'; // Commented out or removed
+
+// The following type definitions have been moved to src/types/editorTypes.ts:
+// - MyAppImageBlockProps
+// - MyAppImageBlock
+// - MyAppBlockSchemaDefinition
+// - MyAppDocument
+// - isMyAppImageBlock
