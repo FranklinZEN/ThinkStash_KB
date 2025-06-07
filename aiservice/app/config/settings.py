@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, List, Set, Any
 from pydantic import Field
 import os
+from app.utils.gcp import get_secret
 
 # --- Determine the path to the .env file relative to this settings.py file ---
 # Directory where settings.py is located (aiservice/app/config)
@@ -53,44 +54,36 @@ class Settings(BaseSettings):
     app_name: str = "ThinkStash AI Service"
     debug_mode: bool = Field(default=False, description="Enable debug mode for more verbose logging.")
 
-    # Database URL (for PostgreSQL)
-    database_url: Optional[str] = Field(None, env="DATABASE_URL", description="PostgreSQL database connection URL.")
+    # Database URL - This will be loaded from the environment.
+    # In Cloud Run, it will be injected from Secret Manager.
+    # For local dev, it will be loaded from the .env file.
+    database_url: str = Field(..., env="DATABASE_URL")
 
     # LLM Configuration - Focused on Gemini via OpenAI Compatibility Layer
-    # This will load GEMINI_API_KEY from the .env file
-    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY", description="API key for Gemini models (used by OpenAI compatibility layer).")
+    gemini_api_key: str = Field(..., env="GEMINI_API_KEY", description="API key for Gemini models.")
     
     # Flag to explicitly use the Gemini via OpenAI compatibility layer
-    use_gemini_via_openai_compatibility: bool = Field(default=True, env="USE_GEMINI_VIA_OPENAI_COMPATIBILITY", description="Flag to enable Gemini via OpenAI compatibility layer.")
+    use_gemini_via_openai_compatibility: bool = Field(default=True, env="USE_GEMINI_VIA_OPENAI_COMPATIBILITY")
     
-    # Model name for the text generation, as used by the OpenAI compatibility layer
-    # This will load GEMINI_TEXT_MODEL_COMPAT from the .env file
-    gemini_text_model_compat: str = Field(default="models/gemini-2.5-flash", env="GEMINI_TEXT_MODEL_COMPAT", description="Gemini text model for OpenAI compatibility layer.")
+    gemini_text_model_compat: str = Field(default="models/gemini-1.5-flash", env="GEMINI_TEXT_MODEL_COMPAT")
     
-    # Base URL for the Gemini OpenAI compatibility endpoint
-    # This will load GEMINI_COMPATIBILITY_BASE_URL from the .env file
-    gemini_compatibility_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta/openai/", env="GEMINI_COMPATIBILITY_BASE_URL", description="Base URL for Gemini OpenAI compatibility.")
+    gemini_compatibility_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta/", env="GEMINI_COMPATIBILITY_BASE_URL")
 
-    # Fallback/general default LLM model (can be the same as gemini_text_model_compat if only using that)
-    default_llm_model: str = Field(default="models/gemini-2.5-flash", env="DEFAULT_LLM_MODEL", description="Default LLM model name if not using compatibility layer or for other purposes. Ensure .env defines this if used differently.")
+    # Fallback/general default LLM model
+    default_llm_model: str = Field(default="models/gemini-1.5-flash", env="DEFAULT_LLM_MODEL")
     
-    # Multimodal model - align with your .env or set a sensible default
-    default_multimodal_llm_model: str = Field(default="models/gemini-2.5-flash", env="DEFAULT_MULTIMODAL_MODEL_NAME", description="Default LLM for multimodal tasks.")
+    # Multimodal model
+    default_multimodal_llm_model: str = Field(default="models/gemini-1.5-pro", env="DEFAULT_MULTIMODAL_LLM_MODEL")
 
     # Optional: Keep OpenAI API key if you plan to use OpenAI models directly for some tasks
-    openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY", description="Direct OpenAI API Key, if needed for other models.")
-
-    # --- Commented out fields related to direct Google GenAI integration to avoid confusion ---
-    # google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY", description="API key for Google AI services (Gemini).")
-    # default_llm_model: str = Field(default="gemini-1.5-flash-latest", env="DEFAULT_LLM_MODEL", description="Default LLM model for text generation/analysis. Ensure .env matches desired model.") 
-    # default_multimodal_llm_model: str = Field(default="gemini-1.5-pro-latest", env="DEFAULT_MULTIMODAL_LLM_MODEL", description="Default LLM for multimodal tasks (e.g., vision).")
+    openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
 
     # Service Behavior Flags
-    use_llm_for_routing: bool = Field(default=False, description="Use LLM for routing (V2.4 style, should be False for V2.5 deterministic). Set to False for V2.5.")
-    use_llm_for_image_analysis: bool = Field(default=False, env="USE_LLM_FOR_IMAGE_ANALYSIS", description="Enable LLM-based analysis (description, caption) for images in ImageProcessingService.")
+    use_llm_for_routing: bool = Field(default=False)
+    use_llm_for_image_analysis: bool = Field(default=False, env="USE_LLM_FOR_IMAGE_ANALYSIS")
     
     # GCS Configuration
-    gcs_bucket_name: Optional[str] = Field(None, env="GCS_BUCKET_NAME", description="Google Cloud Storage bucket for storing images.")
+    gcs_bucket_name: str = Field(..., env="GCS_BUCKET_NAME")
     
     # Caching Configuration
     redis_host: Optional[str] = Field(default="localhost", env="REDIS_HOST")

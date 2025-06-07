@@ -1,46 +1,50 @@
-import { PrismaClient } from '@prisma/client';
+// some/api/route.ts
+import prisma, { prismaReady } from '@/lib/prisma';
+import { getSecret } from './gcp';
 
-// Read individual environment variables
-const dbUser = process.env.DB_USER;
-const dbPassword = process.env.DB_PASSWORD;
-const dbName = process.env.DB_NAME;
-const dbHostPath = process.env.DB_HOST_PATH; // e.g., /cloudsql/project:region:instance
-
-// Construct the DATABASE_URL
-let databaseURL;
-if (dbUser && dbPassword && dbName && dbHostPath) {
-  databaseURL = `postgresql://${dbUser}:${dbPassword}@localhost/${dbName}?host=${dbHostPath}`;
-} else {
-  console.error("!!!!!!!!!!!!!!!!! Missing one or more database environment variables for constructing DATABASE_URL: DB_USER, DB_PASSWORD, DB_NAME, DB_HOST_PATH. Check Cloud Run secret configuration.");
-  // Set to a value that will cause Prisma to fail clearly if construction fails, as schema expects env("DATABASE_URL")
-  databaseURL = "prisma_url_construction_failed_due_to_missing_parts";
-}
-
-console.log("!!!!!!!!!!!!!!!!! Constructed DATABASE_URL for Prisma:", databaseURL);
-
-// Set the constructed URL as an environment variable for Prisma to pick up,
-// as schema.prisma likely uses `url = env("DATABASE_URL")`
-process.env.DATABASE_URL = databaseURL;
-
+// Add prisma to the NodeJS global type
 declare global {
-  // allow global `var` declarations
-  // eslint-disable-next-line no-var
   var prisma: PrismaClient | undefined;
 }
 
-const prisma =
-  global.prisma ||
-  new PrismaClient({
-    // Datasource override can be done here if not relying on process.env.DATABASE_URL set above
-    // datasources: {
-    //   db: {
-    //     url: databaseURL,
-    //   },
-    // },
-  });
+// Function to initialize the database URL.
+// In production, it fetches from Secret Manager.
+// In development, it uses the environment variable.
+const initializeDatabaseUrl = async () => {
+  if (process.env.NODE_ENV === 'production') {
+    console.log("Production environment detected. Fetching DATABASE_URL from Secret Manager...");
+    const secretValue = await getSecret('DATABASE_URL');
+    if (secretValue) {
+      console.log("Successfully fetched DATABASE_URL from Secret Manager.");
+      process.env.DATABASE_URL = secretValue;
+    } else {
+      console.error("CRITICAL: Failed to fetch DATABASE_URL from Secret Manager. Prisma will fail to initialize.");
+      // This will cause Prisma to throw a clear error because the env var is missing.
+    }
+  } else {
+    // In development, we expect DATABASE_URL to be in .env.local
+    console.log("Development environment detected. Using DATABASE_URL from environment.");
+    if (!process.env.DATABASE_URL) {
+        console.error("CRITICAL: DATABASE_URL not found in environment for development. Please set it in your .env.local file.");
+    }
+  }
+};
+
+// Initialize the URL asynchronously. This promise is awaited before the client is created.
+const dbUrlPromise = initializeDatabaseUrl();
+
+// PrismaClient is attached to the `global` object in development to prevent
+// exhausting your database connection limit.
+// See https://pris.ly/d/help/next-js-best-practices
+const prisma = global.prisma || new PrismaClient({
+    log: ['warn', 'error'],
+});
 
 if (process.env.NODE_ENV !== 'production') {
   global.prisma = prisma;
 }
 
-export default prisma; 
+// We export the promise to ensure that any part of the app can wait for
+// the DB URL to be loaded before trying to use Prisma.
+export const prismaReady = dbUrlPromise;
+export default prisma;

@@ -1,20 +1,15 @@
-import { Prisma, KnowledgeCard } from '@prisma/client';
-import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import prisma, { prismaReady } from '@/lib/prisma';
 import {
   StandardDocument,
   isImageBlock,
-  // MyAppImageBlockProps, // Removed unused import
 } from '@/types/editorTypes';
 import {
   uploadFile as uploadFileToGCS,
   deleteFile as deleteFileFromGCS,
 } from '@/lib/gcs';
-import { v4 as uuidv4 } from 'uuid'; // For generating filenames
+import { v4 as uuidv4 } from 'uuid';
 
-// --- Interfaces for Prisma Subset ---
-// export interface CardServicePrismaSubset { ... }
-
-// --- Service Result Interface (can be shared) ---
 export interface ServiceResult<T> {
   success: boolean;
   data?: T;
@@ -23,12 +18,9 @@ export interface ServiceResult<T> {
   status?: number;
 }
 
-// --- Input DTOs ---
-// Using Prisma.KnowledgeCardUpdateInput directly for updateData might be too broad if we want to control fields.
-// For now, let's define a more specific one based on UpdateCardSchema from the route.
 export interface UpdateCardData {
   title?: string;
-  content?: Prisma.JsonValue; // Assuming content is Json
+  content?: Prisma.JsonValue;
   folderId?: string | null;
   tags?: string[];
 }
@@ -39,14 +31,14 @@ const GCS_ALLOWED_MIME_TYPES = [
   'image/gif',
   'image/webp',
 ];
-const GCS_MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+const GCS_MAX_SIZE_BYTES = 5 * 1024 * 1024;
 
-// Renamed to _processAndLinkImages and logic significantly updated
 async function _processAndLinkImages(
   blocks: StandardDocument,
   cardId: string,
   userId: string,
 ): Promise<string[]> {
+  await prismaReady;
   const activeImageRecordIds: string[] = [];
 
   for (let i = 0; i < blocks.length; i++) {
@@ -197,7 +189,6 @@ async function _processAndLinkImages(
   return activeImageRecordIds;
 }
 
-// New exported function to handle image associations
 export async function handleCardImageAssociations(
   content: Prisma.JsonValue | undefined | null,
   cardId: string,
@@ -233,7 +224,6 @@ export async function handleCardImageAssociations(
   };
 }
 
-// --- GET Card Logic ---
 export async function getCardLogic(
   cardId: string,
   userId: string,
@@ -243,6 +233,7 @@ export async function getCardLogic(
   >
 > {
   try {
+    await prismaReady;
     const card = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       include: { folder: true, tags: true },
@@ -262,22 +253,21 @@ export async function getCardLogic(
   }
 }
 
-// --- PUT (Update) Card Logic ---
 export async function updateCardLogic(
   cardId: string,
   userId: string,
-  data: UpdateCardData, // This is validatedBody from the route
+  data: UpdateCardData,
 ): Promise<
   ServiceResult<
     Prisma.KnowledgeCardGetPayload<{ include: { folder: true; tags: true } }>
   >
 > {
   try {
-    // 1. Verify card ownership and fetch existing card (needed for pre-update state)
+    await prismaReady;
     const existingCardForOwnershipCheck = await prisma.knowledgeCard.findUnique(
       {
         where: { id: cardId, userId: userId },
-        select: { id: true }, // Only need ID for ownership check initially
+        select: { id: true },
       },
     );
     if (!existingCardForOwnershipCheck) {
@@ -288,23 +278,19 @@ export async function updateCardLogic(
       };
     }
 
-    // Fetch all ImageRecords currently linked to this card by this user
-    // These are candidates for becoming orphans if not present in the updated content
     const imageRecordsInitiallyLinkedToCard = await prisma.imageRecord.findMany(
       {
         where: {
           knowledgeCardId: cardId,
-          userId: userId, // Ensure we only consider images owned by the user associated with this card
+          userId: userId,
         },
         select: { id: true, gcsPath: true },
       },
     );
-    // Defensively handle if findMany could somehow not return an array
     const initialImageRecordIds = imageRecordsInitiallyLinkedToCard
       ? imageRecordsInitiallyLinkedToCard.map((img) => img.id)
       : [];
 
-    // 2. Validate folderId ownership if provided and not null
     if (data.folderId) {
       const targetFolder = await prisma.folder.findUnique({
         where: { id: data.folderId, userId: userId },
@@ -319,11 +305,6 @@ export async function updateCardLogic(
       }
     }
 
-    // Process content:
-    // - new data: URLs are converted to ImageRecords (unlinked initially)
-    // - existing /api/images/serve/ URLs are identified
-    // - The content JSON is updated with appServedUrls
-    // - Returns a list of ImageRecord IDs that are present in the *new* content
     let processedContent = data.content;
     const contentWasActuallyInRequest = data.content !== undefined;
     let activeImageRecordIdsInNewContent: string[] = [];
@@ -341,14 +322,12 @@ export async function updateCardLogic(
         `[cardService] (updateCardLogic) Content processed. Found ${activeImageRecordIdsInNewContent.length} active image IDs in new content for card ${cardId}.`,
       );
     } else if (!contentWasActuallyInRequest) {
-      // If content is not part of the request, then all initially linked images are still considered active for this card
       activeImageRecordIdsInNewContent = [...initialImageRecordIds];
       console.log(
         `[cardService] (updateCardLogic) Content not in update request. Assuming all ${initialImageRecordIds.length} initially linked images are still active for card ${cardId}.`,
       );
     }
 
-    // 3. Construct Prisma update payload for the KnowledgeCard itself
     const updatePayload: Prisma.KnowledgeCardUpdateInput = {};
     if (data.title !== undefined) updatePayload.title = data.title;
 
@@ -383,34 +362,25 @@ export async function updateCardLogic(
       };
     }
 
-    // Perform the actual KnowledgeCard update
-    // Do this before orphan processing to ensure the card update itself is successful
     if (Object.keys(updatePayload).length > 0) {
       await prisma.knowledgeCard.update({
-        where: { id: cardId, userId: userId }, // Ensure userId for security
+        where: { id: cardId, userId: userId },
         data: updatePayload,
       });
       console.log(
         `[cardService] (updateCardLogic) KnowledgeCard ${cardId} main fields updated.`,
       );
     } else if (!contentWasActuallyInRequest) {
-      // No direct card fields to update, and content wasn't in request, so no further image processing needed here
-      // The card state regarding images effectively remains unchanged.
       console.log(
         `[cardService] (updateCardLogic) No direct card fields to update for card ${cardId} and content not in request.`,
       );
     }
 
-    // 4. Manage ImageRecord associations and orphan cleanup
-    // This section runs regardless of whether content was in the request,
-    // as activeImageRecordIdsInNewContent is populated based on that.
-
-    // Link all ImageRecords that are active in the new content to this card
     if (activeImageRecordIdsInNewContent.length > 0) {
       await prisma.imageRecord.updateMany({
         where: {
           id: { in: activeImageRecordIdsInNewContent },
-          userId: userId, // Ensure user owns these image records
+          userId: userId,
         },
         data: { knowledgeCardId: cardId },
       });
@@ -419,7 +389,6 @@ export async function updateCardLogic(
       );
     }
 
-    // Identify ImageRecords that were linked before but are NOT in the new active set for this card
     const potentiallyOrphanedIds = initialImageRecordIds.filter(
       (id) => !activeImageRecordIdsInNewContent.includes(id),
     );
@@ -429,14 +398,11 @@ export async function updateCardLogic(
         `[cardService] (updateCardLogic) Card ${cardId} has ${potentiallyOrphanedIds.length} potentially orphaned ImageRecords. IDs: ${potentiallyOrphanedIds.join(', ')}`,
       );
 
-      // First, ensure these images are unlinked from the *current* card
-      // This is crucial if an image was moved from this card to another by the user in a complex operation.
-      // We only set knowledgeCardId to null if it's currently this cardId.
       await prisma.imageRecord.updateMany({
         where: {
           id: { in: potentiallyOrphanedIds },
           userId: userId,
-          knowledgeCardId: cardId, // Important: only update if still linked to THIS card
+          knowledgeCardId: cardId,
         },
         data: { knowledgeCardId: null },
       });
@@ -448,21 +414,19 @@ export async function updateCardLogic(
         const imageRecordDetails = imageRecordsInitiallyLinkedToCard.find(
           (img) => img.id === orphanId,
         );
-        if (!imageRecordDetails) continue; // Should not happen
+        if (!imageRecordDetails) continue;
 
-        // Check if this ImageRecord is now linked to ANY KnowledgeCard by this user
         const isStillLinkedToAnyCardByOwner =
           await prisma.imageRecord.findFirst({
             where: {
               id: orphanId,
               userId: userId,
-              knowledgeCardId: { not: null }, // Check if it's linked to *any* card
+              knowledgeCardId: { not: null },
             },
             select: { id: true, knowledgeCardId: true },
           });
 
         if (!isStillLinkedToAnyCardByOwner) {
-          // Truly orphaned: Delete GCS file and then the ImageRecord
           console.log(
             `[cardService] (updateCardLogic) ImageRecord ${orphanId} is truly orphaned. Deleting GCS file and DB record for card ${cardId} context.`,
           );
@@ -477,11 +441,10 @@ export async function updateCardLogic(
                 `[cardService] (updateCardLogic) Failed to delete GCS file: ${imageRecordDetails.gcsPath} for orphaned ImageRecord: ${orphanId}. Error:`,
                 gcsError,
               );
-              // Log and continue, as per robust handling principle. DB record will still be deleted.
             }
           }
           await prisma.imageRecord.delete({
-            where: { id: orphanId, userId: userId }, // Ensure user ownership for delete
+            where: { id: orphanId, userId: userId },
           });
           console.log(
             `[cardService] (updateCardLogic) Successfully deleted orphaned ImageRecord ${orphanId} from DB.`,
@@ -498,14 +461,12 @@ export async function updateCardLogic(
       );
     }
 
-    // 5. Re-fetch the card to return the latest state with all associations
     const fullyUpdatedCard = await prisma.knowledgeCard.findUnique({
-      where: { id: cardId, userId: userId }, // Re-check userId for security on final fetch
+      where: { id: cardId, userId: userId },
       include: { tags: true, folder: true },
     });
 
     if (!fullyUpdatedCard) {
-      // This case should ideally not be reached if update was successful
       console.error(
         `[cardService] (updateCardLogic) CRITICAL: Failed to re-fetch card ${cardId} after update and orphan processing.`,
       );
@@ -520,7 +481,6 @@ export async function updateCardLogic(
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2003' || error.code === 'P2025') {
-        // Foreign key constraint or record not found
         return {
           success: false,
           error:
@@ -543,13 +503,12 @@ export async function updateCardLogic(
   }
 }
 
-// --- DELETE Card Logic ---
 export async function deleteCardLogic(
   cardId: string,
   userId: string,
-): Promise<ServiceResult<KnowledgeCard>> {
+): Promise<ServiceResult<Prisma.KnowledgeCardGetPayload<{}>>> {
   try {
-    // 1. Verify card ownership
+    await prismaReady;
     const existingCard = await prisma.knowledgeCard.findUnique({
       where: { id: cardId, userId: userId },
       select: { id: true },
@@ -563,14 +522,11 @@ export async function deleteCardLogic(
       };
     }
 
-    // 2. Get ImageRecords associated with the card to delete their GCS files
     const imageRecordsToDelete = await prisma.imageRecord.findMany({
       where: { knowledgeCardId: cardId },
       select: { gcsPath: true, id: true },
     });
 
-    // 3. Delete files from GCS
-    // Defensively handle if findMany could somehow not return an array
     if (imageRecordsToDelete && imageRecordsToDelete.length > 0) {
       console.log(
         `[cardService] Found ${imageRecordsToDelete.length} image(s) in GCS to delete for card ${cardId}.`,
@@ -596,13 +552,9 @@ export async function deleteCardLogic(
       }
     }
 
-    // 4. Delete the card (onDelete: Cascade for ImageRecord is handled by Prisma schema)
     const deletedCard = await prisma.knowledgeCard.delete({
       where: { id: cardId },
     });
-
-    // Note: Deletion of GCS files for ImageRecords associated with this card
-    // is now handled above.
 
     return { success: true, data: deletedCard, status: 200 };
   } catch (error) {
