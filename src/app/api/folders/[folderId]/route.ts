@@ -1,17 +1,10 @@
-console.log(
-  '[[FOLDERID ROUTE MODULE LOAD]] src/app/api/folders/[folderId]/route.ts loaded',
-);
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth'; // Adjust path as necessary
 import prisma from '@/lib/prisma'; // Adjust path as necessary
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-// import { getCurrentUserId } from '@/lib/sessionUtils';
-// import {
-// findFolderForUpdateOrDelete, // This seems to be an internal detail of the service now
-// } from '@/lib/services/folderService';
+import { getCurrentUserId } from '@/lib/sessionUtils';
 
 // Schema for validating the request body
 const UpdateFolderSchema = z.object({
@@ -23,30 +16,27 @@ const RouteParamsSchema = z.object({
   folderId: z.string().cuid({ message: 'Invalid folder ID format' }),
 });
 
-// Helper function for test authentication
-async function getRouteHandlerUserId(
-  request: NextRequest,
-): Promise<string | null> {
-  // console.log(`[[FOLDERID DEBUG]] APP_ENV: ${process.env.APP_ENV}`);
-  if (process.env.APP_ENV === 'test') {
-    const testUserId = request.headers.get('X-Test-User-Id');
-    // console.log(`[[FOLDERID DEBUG]] Test mode. X-Test-User-Id header: "${testUserId}"`);
-    if (testUserId && testUserId !== 'undefined' && testUserId !== 'null') {
-      // console.log(`[[FOLDERID DEBUG]] Test override: Returning User ID: "${testUserId}".`);
-      return testUserId;
-    } else if (testUserId === 'null') {
-      // console.log('[[FOLDERID DEBUG]] Test override: X-Test-User-Id is \'null\', returning null.');
-      return null;
-    } else {
-      // console.log(`[[FOLDERID DEBUG]] Test override: X-Test-User-Id is "${testUserId}" (falsy or undefined string). Returning null from test path.`);
-      return null;
-    }
+// Helper function to verify folder ownership
+async function verifyFolderOwnership(userId: string, folderId: string) {
+  const folder = await prisma.folder.findUnique({
+    where: { id: folderId },
+  });
+  if (!folder) {
+    return {
+      error: NextResponse.json(
+        { message: 'Folder not found' },
+        { status: 404 },
+      ),
+      folder: null,
+    };
   }
-  // console.log('[[FOLDERID DEBUG]] Not in test mode or fell through. Attempting real session.');
-  const session = await getServerSession(authOptions);
-  const finalUserId = session?.user?.id ?? null;
-  // console.log(`[[FOLDERID DEBUG]] Real session result, returning User ID: "${finalUserId}".`);
-  return finalUserId;
+  if (folder.userId !== userId) {
+    return {
+      error: NextResponse.json({ message: 'Forbidden' }, { status: 403 }),
+      folder: null,
+    };
+  }
+  return { error: null, folder: folder };
 }
 
 // --- PATCH Handler (Update/Rename Specific Folder) ---
@@ -54,125 +44,116 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ folderId: string }> },
 ) {
-  // console.log('[[FOLDERID DEBUG]] PATCH handler entered');
-  const userId = await getRouteHandlerUserId(req);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const session = await getServerSession(authOptions);
+
+  const routeParams = await context.params; // Await context.params
+  const folderId = routeParams.folderId; // Get folderId from resolved params
+
+  if (!session || !session.user?.id) {
+    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 
-  const routeParams = await context.params;
-  const paramsValidation = RouteParamsSchema.safeParse(routeParams);
-  if (!paramsValidation.success) {
-    return NextResponse.json(
-      {
-        error: 'Invalid folder ID format',
-        details: paramsValidation.error.format(),
-      },
-      { status: 400 },
-    );
-  }
-  const { folderId } = paramsValidation.data;
+  const userId = session.user.id;
 
-  let validatedBody;
   try {
+    // Verify ownership first
+    const { error: ownershipError } = await verifyFolderOwnership(
+      userId,
+      folderId,
+    );
+    if (ownershipError) return ownershipError;
+
     const body = await req.json();
-    const validation = UpdateFolderSchema.safeParse(body);
-    if (!validation.success) {
+    const { name } = body;
+
+    // Validate new name
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return NextResponse.json(
         {
-          error: 'Validation failed',
-          details: validation.error.flatten().fieldErrors,
+          message: 'New folder name is required and must be a non-empty string',
         },
         { status: 400 },
       );
     }
-    validatedBody = validation.data;
-  } catch {
-    return NextResponse.json(
-      { error: 'Invalid request body' },
-      { status: 400 },
-    );
-  }
+    const trimmedName = name.trim();
 
-  try {
-    const folderToUpdate = await prisma.folder.findUnique({
-      where: { id: folderId, userId: userId },
-    });
-
-    if (!folderToUpdate) {
-      return NextResponse.json(
-        { error: 'Folder not found or not owned by user' },
-        { status: 404 },
-      );
-    }
-
-    const updatedFolder = await prisma.folder.update({
+    // Check if another folder with the same name already exists for this user (excluding the current one)
+    const existingFolder = await prisma.folder.findFirst({
       where: {
-        id: folderId,
+        userId: userId,
+        name: trimmedName,
+        id: { not: folderId }, // Exclude the folder being renamed
       },
-      data: {
-        name: validatedBody.name,
-      },
-      select: {
-        id: true,
-        name: true,
-        parentId: true,
-        userId: true,
-        updatedAt: true,
-      }, // Match expected return shape
     });
-    return NextResponse.json(updatedFolder, { status: 200 });
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
+
+    if (existingFolder) {
       return NextResponse.json(
-        { error: 'A folder with this name already exists at this level.' },
+        { message: `Another folder named "${trimmedName}" already exists` },
         { status: 409 },
       );
     }
-    console.error('Failed to update folder:', error);
+
+    // Update the folder name
+    const updatedFolder = await prisma.folder.update({
+      where: { id: folderId },
+      data: { name: trimmedName },
+    });
+
+    return NextResponse.json(updatedFolder, { status: 200 });
+  } catch (err) {
+    console.error('Update Folder [id] Error:', err);
     return NextResponse.json(
-      { error: 'Failed to update folder' },
+      { message: 'Internal Server Error' },
       { status: 500 },
     );
   }
 }
 
-// --- DELETE Handler (Delete Specific Folder) ---
+// --- DELETE Handler (Delete Specific Folder - updated with content handling) ---
 export async function DELETE(
-  request: NextRequest,
+  request: Request,
   context: { params: Promise<{ folderId: string }> },
 ) {
-  // console.log('[[FOLDERID DEBUG]] DELETE handler entered');
-  const userId = await getRouteHandlerUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   const resolvedParams = await context.params;
+  console.log(
+    '[DELETE /api/folders/[folderId]] Resolved params:',
+    resolvedParams,
+  );
+
+  // Validate route parameters using resolvedParams
   const paramsValidation = RouteParamsSchema.safeParse(resolvedParams);
   if (!paramsValidation.success) {
+    console.error(
+      '[DELETE /api/folders/[folderId]] Zod validation failed:',
+      paramsValidation.error.format(),
+    );
     return NextResponse.json(
-      {
-        error: 'Invalid folder ID format',
-        details: paramsValidation.error.format(),
-      },
+      { errors: paramsValidation.error.format() },
       { status: 400 },
     );
   }
   const { folderId } = paramsValidation.data;
+  console.log(
+    `[DELETE /api/folders/[folderId]] Validated folderId: ${folderId}`,
+  );
+
+  // Check authentication
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   try {
+    // Find the folder to get its parentId and verify ownership
     const folderToDelete = await prisma.folder.findUnique({
-      where: { id: folderId, userId: userId },
-      select: {
-        parentId: true,
-        _count: { select: { children: true, cards: true } },
-      }, // Select for service logic
+      where: {
+        id: folderId,
+        userId: userId, // Ensure user owns the folder
+      },
+      select: { parentId: true }, // Need parentId for promoting children
     });
 
+    // Handle folder not found or not owned
     if (!folderToDelete) {
       return NextResponse.json(
         { error: 'Folder not found or not owned by user' },
@@ -180,60 +161,67 @@ export async function DELETE(
       );
     }
 
-    // Transaction to move children and cards, then delete folder
+    // Perform updates and delete within a transaction
     await prisma.$transaction(async (tx) => {
+      // 1. Uncategorize cards within the folder
       await tx.knowledgeCard.updateMany({
         where: { folderId: folderId },
-        data: { folderId: null }, // Or folderToDelete.parentId based on desired behavior
+        data: { folderId: null },
       });
+
+      // 2. Promote direct subfolders
       await tx.folder.updateMany({
         where: { parentId: folderId },
-        data: { parentId: folderToDelete.parentId },
+        data: { parentId: folderToDelete.parentId }, // Move children to grandparent
       });
+
+      // 3. Delete the folder itself
       await tx.folder.delete({
         where: { id: folderId },
       });
     });
 
+    // Return success response
     return NextResponse.json(
       { message: 'Folder deleted successfully' },
       { status: 200 },
     );
   } catch (error) {
+    // Log unexpected errors
     console.error('Failed to delete folder:', error);
+    // Consider more specific error handling if needed
     return NextResponse.json(
-      { error: 'Failed to delete folder' },
+      { error: 'Internal Server Error' },
       { status: 500 },
     );
   }
 }
 
 export async function PUT(
-  req: NextRequest,
+  request: Request,
   context: { params: Promise<{ folderId: string }> },
 ) {
-  console.log('[[FOLDERID DEBUG]] PUT handler entered (now using PATCH logic)');
-  const userId = await getRouteHandlerUserId(req);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const routeParams = await context.params;
-  const paramsValidation = RouteParamsSchema.safeParse(routeParams);
+  const routeParams = await context.params; // Await context.params
+  // Validate route parameters
+  const paramsValidation = RouteParamsSchema.safeParse(routeParams); // Use awaited params
   if (!paramsValidation.success) {
     return NextResponse.json(
-      {
-        error: 'Invalid folder ID format',
-        details: paramsValidation.error.format(),
-      },
+      { errors: paramsValidation.error.format() },
       { status: 400 },
     );
   }
   const { folderId } = paramsValidation.data;
 
-  let validatedBody;
+  // Check authentication
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Validate request body
+  let validatedData;
   try {
-    const body = await req.json();
+    const body = await request.json();
     const validation = UpdateFolderSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json(
@@ -244,8 +232,8 @@ export async function PUT(
         { status: 400 },
       );
     }
-    validatedBody = validation.data;
-  } catch {
+    validatedData = validation.data;
+  } catch /* _error */ {
     return NextResponse.json(
       { error: 'Invalid request body' },
       { status: 400 },
@@ -253,46 +241,46 @@ export async function PUT(
   }
 
   try {
-    const folderToUpdate = await prisma.folder.findUnique({
+    // Verify user owns the folder they are trying to update
+    const existingFolder = await prisma.folder.findUnique({
       where: { id: folderId, userId: userId },
+      select: { id: true }, // Only select necessary field
     });
 
-    if (!folderToUpdate) {
+    if (!existingFolder) {
       return NextResponse.json(
         { error: 'Folder not found or not owned by user' },
         { status: 404 },
       );
     }
 
+    // Attempt to update the folder
     const updatedFolder = await prisma.folder.update({
       where: {
         id: folderId,
+        // No need to re-check userId here, checked above
       },
       data: {
-        name: validatedBody.name,
+        name: validatedData.name,
       },
-      select: {
-        id: true,
-        name: true,
-        parentId: true,
-        userId: true,
-        updatedAt: true,
-      }, // Match expected return shape
     });
-    return NextResponse.json(updatedFolder, { status: 200 });
+
+    return NextResponse.json(updatedFolder);
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
-      return NextResponse.json(
-        { error: 'A folder with this name already exists at this level.' },
-        { status: 409 },
-      );
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      // Handle unique constraint violation (duplicate name at the same level)
+      if (error.code === 'P2002') {
+        return NextResponse.json(
+          { error: 'A folder with this name already exists at this level.' },
+          { status: 409 }, // 409 Conflict
+        );
+      }
     }
-    console.error('Failed to update folder (PUT handler):', error);
+
+    // Log unexpected errors
+    console.error('Failed to update folder:', error);
     return NextResponse.json(
-      { error: 'Failed to update folder' },
+      { error: 'Internal Server Error' },
       { status: 500 },
     );
   }

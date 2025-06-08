@@ -1,1 +1,0 @@
-# This file makes 'manual_tests' a Python sub-package 

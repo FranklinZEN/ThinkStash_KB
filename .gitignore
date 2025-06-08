@@ -38,7 +38,6 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
-.env.test
 
 # Prisma
 # Ignore generated client directory (it is generated on postinstall)
@@ -220,5 +219,3 @@ thinkstash-knowledge-base-94ace76cab03.json
 
 # AIService specific .env
 aiservice/.env
-migration.sql
-

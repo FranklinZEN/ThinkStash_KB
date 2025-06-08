@@ -2,15 +2,14 @@ import { Block } from '@blocknote/core';
 import { useBlockNote } from '@blocknote/react';
 import { Box, Button, Image, useToast } from '@chakra-ui/react';
 import { useCallback } from 'react';
-import { Resizable } from 're-resizable';
 
 interface ImageBlockProps {
-  block: Block<{ width?: number | string }>;
+  block: Block;
 }
 
 export function ImageBlock({ block }: ImageBlockProps) {
   const toast = useToast();
-  const { editor } = useBlockNote();
+  const { updateBlock } = useBlockNote();
 
   const handleImageUpload = useCallback(async () => {
     try {
@@ -40,12 +39,11 @@ export function ImageBlock({ block }: ImageBlockProps) {
         const data = await response.json();
 
         // Update the block with the image URL
-        editor.updateBlock(block, {
+        updateBlock(block, {
           type: 'image',
           props: {
             url: data.url,
             caption: file.name,
-            width: '100%', // Default width on upload
           },
         });
       };
@@ -61,80 +59,19 @@ export function ImageBlock({ block }: ImageBlockProps) {
         isClosable: true,
       });
     }
-  }, [block, editor, toast]);
+  }, [block, toast, updateBlock]);
 
   // If the block is an image block and has a URL, display it
   if (block.type === 'image' && block.props.url) {
     return (
-      <Box position="relative" contentEditable={false}>
-        <Resizable
-          defaultSize={{
-            width: block.props.width || '100%',
-            height: 'auto',
-          }}
-          onResizeStop={(e, direction, ref, d) => {
-            const newWidth = ref.style.width;
-            editor.updateBlock(block, {
-              props: { width: newWidth },
-            });
-          }}
-          enable={{
-            top: false,
-            right: true,
-            bottom: false,
-            left: true,
-            topRight: false,
-            bottomRight: true,
-            bottomLeft: true,
-            topLeft: false,
-          }}
-          handleStyles={{
-            right: {
-              width: '10px',
-              right: '-5px',
-              height: '100%',
-              cursor: 'col-resize',
-              backgroundColor: 'rgba(0, 123, 255, 0.5)',
-              borderRadius: '5px',
-            },
-            left: {
-              width: '10px',
-              left: '-5px',
-              height: '100%',
-              cursor: 'col-resize',
-              backgroundColor: 'rgba(0, 123, 255, 0.5)',
-              borderRadius: '5px',
-            },
-            bottomRight: {
-              width: '20px',
-              height: '20px',
-              right: '-10px',
-              bottom: '-10px',
-              cursor: 'nwse-resize',
-              backgroundColor: 'rgba(0, 123, 255, 0.5)',
-              borderRadius: '50%',
-              border: '2px solid white',
-            },
-            bottomLeft: {
-              width: '20px',
-              height: '20px',
-              left: '-10px',
-              bottom: '-10px',
-              cursor: 'nesw-resize',
-              backgroundColor: 'rgba(0, 123, 255, 0.5)',
-              borderRadius: '50%',
-              border: '2px solid white',
-            },
-          }}
-        >
-          <Image
-            src={block.props.url}
-            alt={block.props.caption || 'Uploaded image'}
-            width="100%"
-            height="100%"
-            objectFit="contain"
-          />
-        </Resizable>
+      <Box position="relative" width="100%" maxWidth="800px" margin="0 auto">
+        <Image
+          src={block.props.url}
+          alt={block.props.caption || 'Uploaded image'}
+          width="100%"
+          height="auto"
+          objectFit="contain"
+        />
       </Box>
     );
   }
@@ -148,7 +85,6 @@ export function ImageBlock({ block }: ImageBlockProps) {
         borderRadius="md"
         p={4}
         textAlign="center"
-        contentEditable={false}
       >
         <Button onClick={handleImageUpload} colorScheme="blue">
           Upload Image

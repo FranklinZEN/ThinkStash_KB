@@ -1,5 +1,0 @@
-{
-  "error": "E2E test script crashed",
-  "exception_type": "<class 'UnboundLocalError'>",
-  "message": "cannot access local variable 'document_metadata_obj' where it is not associated with a value"
-}

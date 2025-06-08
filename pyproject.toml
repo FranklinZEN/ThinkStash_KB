@@ -1,8 +1,0 @@
-[tool.pytest.ini_options]
-pythonpath = [
-  ".",
-  "aiservice"
-]
-markers = [
-    "e2e: marks tests as end-to-end tests (requires real services/LLM calls)"
-] 

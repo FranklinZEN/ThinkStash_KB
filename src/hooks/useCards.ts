@@ -2,13 +2,12 @@
 
 import { useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
-// import type { BlockNoteDocument } from '@/types/blocknote';
-import type { AppPartialBlock } from '@/lib/blocknote/appSchema';
+import type { BlockNoteDocument } from '@/types/blocknote';
 
 interface Card {
   id: string;
   title: string;
-  content: AppPartialBlock[] | null;
+  content: BlockNoteDocument | null;
   userId: string;
   folderId: string | null;
   createdAt: string;

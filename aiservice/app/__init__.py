@@ -1,1 +1,1 @@
-# This file makes 'app' a Python sub-package 
+# This file makes 'app' a Python package 

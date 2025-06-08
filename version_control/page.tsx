@@ -29,18 +29,15 @@ import { DeleteIcon } from '@chakra-ui/icons';
 // Import BlockNote components
 import { useBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
+import { BlockNoteEditor } from "@blocknote/core";
 import "@blocknote/mantine/style.css";
-import { 
-  appSchema,
-  type AppEditor,
-  type AppPartialBlock
-} from '@/lib/blocknote/appSchema';
+import type { BlockNoteDocument } from '@/types/blocknote';
 
 // Define type for Knowledge Card data
 interface KnowledgeCard {
   id: string;
   title: string;
-  content: AppPartialBlock[] | string | null;
+  content: BlockNoteDocument | string | null; // Updated to include string
   userId: string;
   folderId: string | null;
   createdAt: string;
@@ -50,7 +47,7 @@ interface KnowledgeCard {
 // Define type for card update payload
 interface CardUpdatePayload {
   title?: string;
-  content?: AppPartialBlock[] | null;
+  content?: BlockNoteDocument | null;
 }
 
 export default function CardDetailPage() {
@@ -71,8 +68,7 @@ export default function CardDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
 
   // --- BlockNote Editor Setup ---
-  const editor: AppEditor | null = useBlockNote({
-    schema: appSchema,
+  const editor: BlockNoteEditor | null = useBlockNote({
     // Set editable based on isEditing state - MOVED TO BlockNoteView props
     // editable: isEditing, // This was causing the error
     // Define the initial content (will be loaded from fetched data)
@@ -105,7 +101,7 @@ export default function CardDetailPage() {
       // Load content into editor once fetched
       if (editor && data.content !== null) { // Ensure data.content is not null
         try {
-          let contentToLoad: AppPartialBlock[] | undefined = undefined;
+          let contentToLoad: import("@blocknote/core").PartialBlock[] | undefined = undefined;
 
           if (typeof data.content === 'string') {
             console.warn("Received string content from API, attempting to parse or treat as plain text.");
@@ -115,7 +111,7 @@ export default function CardDetailPage() {
                 const parsedContent = JSON.parse(trimmedContent);
                 // Add further validation if parsedContent is actually PartialBlock[]
                 if (Array.isArray(parsedContent)) {
-                  contentToLoad = parsedContent as AppPartialBlock[];
+                  contentToLoad = parsedContent as import("@blocknote/core").PartialBlock[];
                 } else {
                   console.warn("Parsed string content was not an array, treating as single paragraph.");
                   contentToLoad = [{ type: 'paragraph', content: trimmedContent }];
@@ -133,7 +129,7 @@ export default function CardDetailPage() {
           } else if (Array.isArray(data.content)) { // If it's not a string, it should be BlockNoteDocument (Block[])
             // Assuming BlockNoteDocument is compatible with PartialBlock[]
             // This might need as import("@blocknote/core").PartialBlock[] if BlockNoteDocument is Block[]
-            contentToLoad = data.content as AppPartialBlock[];
+            contentToLoad = data.content as import("@blocknote/core").PartialBlock[];
           }
 
           if (contentToLoad) {
@@ -199,10 +195,10 @@ export default function CardDetailPage() {
     try {
       const updatePayload: CardUpdatePayload = {}; // Now strongly typed
       if (hasTitleChanged) updatePayload.title = title.trim();
-      if (hasContentChanged) updatePayload.content = currentContent as AppPartialBlock[]; // Use AppPartialBlock[]
+      if (hasContentChanged) updatePayload.content = currentContent as BlockNoteDocument; // Changed cast
 
       const response = await fetch(`/api/cards/${cardId}`, {
-        method: 'PATCH', // Should likely be PUT if replacing, or ensure PATCH handler exists and handles BlockNoteDocument correctly
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatePayload),
       });

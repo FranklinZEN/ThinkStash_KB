@@ -8,10 +8,6 @@ const withBundleAnalyzer = bundleAnalyzer({
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: false, // Disable React Strict Mode for diagnostics
-  
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
 };
 
 export default withBundleAnalyzer(nextConfig); 
