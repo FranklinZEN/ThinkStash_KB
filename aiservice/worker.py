@@ -2,8 +2,8 @@ import psycopg2
 import psycopg2.extras
 import time
 import json
-from app.config.settings import settings
-from app.services.orchestrator import run_pipeline
+from .app.config.settings import settings
+from .app.services.orchestrator import run_pipeline
 
 def get_db_connection():
     return psycopg2.connect(settings.DATABASE_URL)

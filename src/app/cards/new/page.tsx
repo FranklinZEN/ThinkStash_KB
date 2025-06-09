@@ -45,7 +45,7 @@ export default function NewCardFromUrlPage() {
   const [taskId, setTaskId] = useState<string | null>(null);
 
   const { data: task, error: swrError } = useSWR<Task>(
-    taskId ? `/api/tasks/${taskId}/status` : null,
+    taskId ? `/api/get-task-status?taskId=${taskId}` : null,
     fetcher,
     {
       refreshInterval: (latestData) => {
