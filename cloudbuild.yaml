@@ -138,9 +138,6 @@ steps:
 # Define available secrets from Secret Manager
 availableSecrets:
   secretManager:
-  # This secret provides the full DATABASE_URL for the running services
-  - versionName: projects/${_PROJECT_ID}/secrets/thinkstash-db-url/versions/latest
-    env: 'DATABASE_URL'
   # Secrets required ONLY for the migration step with the proxy
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
     env: 'DB_USER'
