@@ -127,8 +127,6 @@ steps:
     - '--memory=512Mi'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--eventarc-trigger'
-    - '--event-filters=type=google.cloud.pubsub.topic.v1.messagePublished,topic=run-worker-topic'
 
 # Define available secrets from Secret Manager
 availableSecrets:
