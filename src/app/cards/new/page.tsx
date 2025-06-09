@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, FormEvent, useCallback } from 'react';
+import React, { useState, FormEvent, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import useSWR from 'swr';
 import {
   Box,
   Button,
@@ -16,130 +17,102 @@ import {
   Flex,
   Text,
   Container,
-  HStack,
-  Tag,
-  TagLabel,
-  TagCloseButton,
+  Alert,
+  AlertIcon,
+  AlertTitle,
+  AlertDescription,
+  Progress,
 } from '@chakra-ui/react';
-import { BlockNoteEditor as BlockNoteEditorComponent } from '@/components/editor/BlockNoteEditor';
-import {
-  BlockNoteEditor as BlockNoteEditorType,
-  PartialBlock,
-} from '@blocknote/core';
 
-interface ErrorResponse {
-  message?: string;
+interface Task {
+  id: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  progress: number;
+  progressMessage: string | null;
+  result: { cardId: string } | null;
+  error: { userMessage: string } | null;
 }
 
-export default function NewCardPage() {
-  const { status } = useSession();
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+export default function NewCardFromUrlPage() {
+  const { status, data: session } = useSession();
   const router = useRouter();
   const toast = useToast();
 
-  const [title, setTitle] = useState('');
-  const [keywords, setKeywords] = useState<string[]>([]);
-  const [currentKeyword, setCurrentKeyword] = useState('');
+  const [sourceUrl, setSourceUrl] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  // State to hold the editor instance received from the child component
-  const [editor, setEditor] = useState<BlockNoteEditorType | null>(null);
-  // Define state for the editor content
-  const [editorContent, setEditorContent] = useState<
-    PartialBlock[] | undefined
-  >(undefined);
+  const [taskId, setTaskId] = useState<string | null>(null);
 
-  // Callback to receive the editor instance from the child
-  const handleEditorInstanceReady = useCallback(
-    (editorInstance: BlockNoteEditorType | null) => {
-      setEditor(editorInstance);
-    },
-    [],
-  );
-
-  const handleKeywordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentKeyword(e.target.value);
-  };
-
-  const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && currentKeyword.trim() !== '') {
-      e.preventDefault();
-      // Add '#' prefix if not already present, and ensure uniqueness
-      const newKeyword = currentKeyword.trim().startsWith('#')
-        ? currentKeyword.trim()
-        : `#${currentKeyword.trim()}`;
-      if (!keywords.includes(newKeyword)) {
-        setKeywords([...keywords, newKeyword]);
-      }
-      setCurrentKeyword(''); // Clear input
+  const { data: task, error: swrError } = useSWR<Task>(
+    taskId ? `/api/tasks/${taskId}/status` : null,
+    fetcher,
+    {
+      refreshInterval: (latestData) => {
+        // Stop polling if the task is completed or failed
+        if (latestData?.status === 'COMPLETED' || latestData?.status === 'FAILED') {
+          return 0;
+        }
+        return 2000; // Poll every 2 seconds
+      },
+      onSuccess: (data) => {
+        if (data.status === 'COMPLETED') {
+          toast({
+            title: 'Processing complete!',
+            description: 'Redirecting to the new card...',
+            status: 'success',
+            duration: 3000,
+            isClosable: true,
+          });
+          if (data.result?.cardId) {
+            router.push(`/cards/${data.result.cardId}`);
+          }
+        }
+      },
     }
-  };
-
-  const removeKeyword = (keywordToRemove: string) => {
-    setKeywords(keywords.filter((keyword) => keyword !== keywordToRemove));
-  };
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    // Check the editor state received from the child
-    if (!editor) {
+    if (!sourceUrl.trim()) {
       toast({
-        title: 'Editor not ready or failed to load',
-        status: 'error',
-        duration: 3000,
-      });
-      return;
-    }
-    if (!title.trim() || !editorContent) {
-      toast({
-        title: 'Title and content are required',
+        title: 'Source URL is required',
         status: 'warning',
         duration: 3000,
       });
       return;
     }
-
     setIsSubmitting(true);
-
-    // Get content from the editor instance we have in state
-    // const content = editor.document; // Removed unused variable
+    setTaskId(null);
 
     try {
-      console.log('Creating card with keywords:', keywords);
-      const response = await fetch('/api/cards', {
+      const response = await fetch('/api/ai/reconstruct-and-analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          title: title.trim(),
-          content: editorContent,
-          tags: keywords,
-        }),
+        body: JSON.stringify({ sourceUrl }),
       });
 
-      const newCard = await response.json();
-      console.log('API response for new card:', newCard); // Log API response
-
-      if (response.ok) {
+      if (response.status === 202) {
+        const { taskId } = await response.json();
+        setTaskId(taskId);
         toast({
-          title: 'Card created successfully.',
-          status: 'success',
-          duration: 3000,
+          title: 'Task submitted.',
+          description: 'The AI is starting its work. You can see progress below.',
+          status: 'info',
+          duration: 5000,
           isClosable: true,
         });
-        router.push('/');
-        router.refresh();
       } else {
-        // Use newCard.message if available, otherwise a default message
-        const serverError =
-          (newCard as ErrorResponse)?.message || 'Failed to create card.';
-        throw new Error(serverError);
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to start task.');
       }
-    } catch (error: unknown) {
-      console.error('Create card error:', error);
+    } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : 'Could not save the card.';
+        error instanceof Error ? error.message : 'An unexpected error occurred.';
       toast({
-        title: 'Error creating card.',
+        title: 'Error submitting task.',
         description: errorMessage,
         status: 'error',
         duration: 5000,
@@ -150,7 +123,12 @@ export default function NewCardPage() {
     }
   };
 
-  // Handle loading and unauthenticated states
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/api/auth/signin?callbackUrl=/cards/new');
+    }
+  }, [status, router]);
+  
   if (status === 'loading') {
     return (
       <Flex justify="center" align="center" height="80vh">
@@ -159,123 +137,81 @@ export default function NewCardPage() {
     );
   }
 
-  if (status === 'unauthenticated') {
-    router.push('/api/auth/signin?callbackUrl=/cards/new');
+  const renderStatusBox = () => {
+    if (!taskId) return null;
+
+    if (swrError) {
+      return (
+        <Alert status="error">
+          <AlertIcon />
+          <AlertTitle>Could not fetch task status!</AlertTitle>
+          <AlertDescription>Please try submitting the URL again.</AlertDescription>
+        </Alert>
+      );
+    }
+
+    if (!task) {
+      return (
+        <Box>
+            <Text mb={2}>Waiting for task to start...</Text>
+            <Spinner />
+        </Box>
+      );
+    }
+
+    if (task.status === 'FAILED') {
+        return (
+            <Alert status="error">
+              <AlertIcon />
+              <AlertTitle>Task Failed!</AlertTitle>
+              <AlertDescription>{task.error?.userMessage || 'An unknown error occurred.'}</AlertDescription>
+            </Alert>
+          );
+    }
+
     return (
-      <Flex justify="center" align="center" height="80vh">
-        <Text>Redirecting to sign in...</Text>
-      </Flex>
+        <Box p={5} borderWidth="1px" borderRadius="md" boxShadow="sm">
+            <Heading size="md" mb={3}>Processing Status</Heading>
+            <Text fontSize="lg" mb={4}>{task.progressMessage || '...'}</Text>
+            <Progress value={task.progress} hasStripe isAnimated={task.status === 'PROCESSING'} />
+        </Box>
     );
   }
 
   return (
-    <Container maxW="container.lg" py={8} fontFamily="'Open Sans', sans-serif">
-      <Heading
-        as="h1"
-        size="xl"
-        mb={6}
-        fontFamily="'Open Sans', sans-serif"
-        fontSize="36px"
-      >
-        Create New Knowledge Card
+    <Container maxW="container.lg" py={8}>
+      <Heading as="h1" size="xl" mb={6}>
+        Create New Card from URL
       </Heading>
       <Box as="form" onSubmit={handleSubmit}>
         <VStack spacing={6} align="stretch">
           <FormControl isRequired>
-            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-              Title
-            </FormLabel>
+            <FormLabel>Source URL</FormLabel>
             <Input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter card title"
-              isDisabled={isSubmitting}
-              fontFamily="'Open Sans', sans-serif"
-              fontSize="16px"
+              type="url"
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              placeholder="https://example.com/article"
+              isDisabled={isSubmitting || !!taskId}
             />
           </FormControl>
-
-          {/* Key Words Section - Moved here */}
-          <FormControl>
-            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-              Key Words{' '}
-              <Text as="span" fontSize="16px" color="gray.500">
-                (Optional)
-              </Text>
-            </FormLabel>
-            <Input
-              type="text"
-              value={currentKeyword}
-              onChange={handleKeywordChange}
-              onKeyDown={handleKeywordKeyDown}
-              placeholder="Type a keyword and press Enter"
-              isDisabled={isSubmitting}
-              fontFamily="'Open Sans', sans-serif"
-              fontSize="16px"
-              color="#A1824A"
-              _placeholder={{ color: '#A1824A' }}
-            />
-            <HStack spacing={2} mt={3} flexWrap="wrap">
-              {keywords.map((keyword) => (
-                <Tag
-                  size="lg"
-                  key={keyword}
-                  borderRadius="md"
-                  variant="solid"
-                  colorScheme="blue"
-                  boxShadow="md"
-                  sx={{
-                    boxShadow:
-                      '2px 2px 5px rgba(0,0,0,0.2), inset 1px 1px 2px rgba(255,255,255,0.3)',
-                    border: '1px solid rgba(0,0,0,0.1)',
-                  }}
-                >
-                  <TagLabel>{keyword}</TagLabel>
-                  <TagCloseButton onClick={() => removeKeyword(keyword)} />
-                </Tag>
-              ))}
-            </HStack>
-          </FormControl>
-
-          <FormControl isRequired>
-            <FormLabel fontFamily="'Open Sans', sans-serif" fontSize="24px">
-              Content
-            </FormLabel>
-            {/* Use the custom BlockNoteEditor with toolbar */}
-            <BlockNoteEditorComponent
-              initialContent={editorContent}
-              onChange={setEditorContent}
-              onEditorReady={handleEditorInstanceReady}
-              readOnly={false}
-            />
-          </FormControl>
-
-          {/* Buttons */}
-          <Flex justify="flex-start" gap={3} mt={4}>
-            {' '}
-            {/* Use Flex for horizontal alignment and gap */}
-            <Button
-              colorScheme="green"
-              type="submit"
-              isLoading={isSubmitting}
-              fontFamily="'Open Sans', sans-serif"
-              fontSize="16px"
-            >
-              Create Card
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => router.push('/')}
-              isDisabled={isSubmitting}
-              fontFamily="'Open Sans', sans-serif"
-              fontSize="16px"
-            >
-              Cancel
-            </Button>
-          </Flex>
+          <Button
+            type="submit"
+            colorScheme="blue"
+            isLoading={isSubmitting}
+            isDisabled={!!taskId && task?.status !== 'FAILED'}
+          >
+            Create Card
+          </Button>
         </VStack>
       </Box>
+
+      {taskId && (
+         <Box mt={8}>
+            {renderStatusBox()}
+         </Box>
+      )}
+
     </Container>
   );
 }
