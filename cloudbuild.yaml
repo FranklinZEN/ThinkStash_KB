@@ -82,56 +82,83 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
+    # Add the Cloud SQL instance connection. THIS IS THE FIX.
+    '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}',
     # IMPORTANT: Mount the database URL and NextAuth secrets for the webapp
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
 
 # ==============================================================================
-# AISERVICE - Build and Deploy the Python Worker
+# AISERVICE - Build and Deploy the Python API and Worker
 # ==============================================================================
 
-# 7. Build AI Worker Docker Image
+# 7. Build Common AI Service Docker Image
+# This one image can be used for both the API and the Worker
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'worker-docker-build'
+  id: 'aiservice-docker-build'
   args: [
     'build',
     '-t',
-    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '-f', 'aiservice/Dockerfile', # Correct path to the new Dockerfile
-    '.' # Use the root directory as the build context
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
+    '-f', 'aiservice/worker.Dockerfile', # Use the correct Dockerfile
+    '.' # Use the project root as the build context
   ]
 
-# 8. Push AI Worker Docker Image
+# 8. Push Common AI Service Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'worker-docker-push'
-  waitFor: ['worker-docker-build']
-  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
+  id: 'aiservice-docker-push'
+  waitFor: ['aiservice-docker-build']
+  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
 
-# 9. Deploy AI Worker to Cloud Run as a SERVICE
+# 9. Deploy AI API Service to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'worker-deploy-service'
-  waitFor: ['worker-docker-push']
-  entrypoint: gcloud
+  id: 'aiservice-api-deploy'
+  waitFor: ['aiservice-docker-push']
+  entrypoint: 'gcloud'
   args:
     - 'run'
     - 'deploy'
-    - 'thinkstash-worker' # The name of our service
+    - 'thinkstash-aiservice' # The name of our API service
     - '--image'
-    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA'
+    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
     - '--region'
     - '${_GCP_REGION}'
     - '--platform=managed'
-    - '--no-allow-unauthenticated' # Make the service internal
+    - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    # Add the Cloud SQL instance connection. This makes the socket available.
-    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
-    - '--port=8080' # Expose the port our FastAPI app is listening on
+    - '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}'
+    - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
-    - '--min-instances=1' # Set to 1 to keep one instance warm and prevent cold start 503 errors.
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
+    - '--command=uvicorn' # Override CMD to run the API
+    - '--args=app.main:app,--host=0.0.0.0,--port=8080'
+
+# 10. Deploy AI Worker to Cloud Run
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'worker-deploy'
+  waitFor: ['aiservice-docker-push']
+  entrypoint: 'gcloud'
+  args:
+    - 'run'
+    - 'deploy'
+    - 'thinkstash-worker' # The name of our worker service
+    - '--image'
+    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
+    - '--region'
+    - '${_GCP_REGION}'
+    - '--platform=managed'
+    - '--no-allow-unauthenticated'
+    - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    - '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}'
+    - '--cpu=1'
+    - '--memory=512Mi'
+    - '--min-instances=1' # Ensure one worker is always running
     - '--max-instances=3'
-    # Mount secrets for database, worker invocation, and the primary AI service (Gemini).
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,WORKER_KEY=thinkstash-worker-key:latest,GEMINI_API_KEY=gemini-api-key:latest'
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
+    - '--command=python' # Override CMD to run the worker
+    - '--args=-u,worker.py'
+    - '--no-cpu-throttling' # Allow worker to run continuously in the background
 
 # Define available secrets from Secret Manager
 availableSecrets:
@@ -139,11 +166,10 @@ availableSecrets:
   # Secrets required ONLY for the migration step with the proxy
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
     env: 'DB_USER'
-  - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
+  - versionName: projects/${_PROJECT__ID}/secrets/kc-db-password/versions/latest
     env: 'DB_PASSWORD'
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
     env: 'DB_NAME'
 
 options:
   logging: CLOUD_LOGGING_ONLY
-
