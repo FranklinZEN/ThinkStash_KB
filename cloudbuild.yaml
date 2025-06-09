@@ -166,7 +166,7 @@ availableSecrets:
   # Secrets required ONLY for the migration step with the proxy
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
     env: 'DB_USER'
-  - versionName: projects/${_PROJECT__ID}/secrets/kc-db-password/versions/latest
+  - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
     env: 'DB_PASSWORD'
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
     env: 'DB_NAME'
