@@ -126,6 +126,7 @@ steps:
     '--region=${_GCP_REGION}',
     '--platform=managed',
     '--no-allow-unauthenticated', # Worker should not be publicly accessible
+    '--no-cpu-throttling', # IMPORTANT: Treat as a background worker, disable CPU idle throttling
     '--min-instances=1', # Keep one instance warm to process tasks quickly
     '--max-instances=5',
     '--cpu=1',
