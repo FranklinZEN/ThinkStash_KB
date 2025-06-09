@@ -105,8 +105,8 @@ steps:
     'build',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile',
-    '.'
+    '-f', 'worker.Dockerfile',
+    'aiservice'
   ]
 
 # 9. Push AI Worker Docker Image
