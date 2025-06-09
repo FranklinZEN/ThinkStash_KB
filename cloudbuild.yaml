@@ -126,16 +126,14 @@ steps:
     '--region=${_GCP_REGION}',
     '--platform=managed',
     '--no-allow-unauthenticated', # Worker should not be publicly accessible
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest',
     # Correctly disable the startup health check for a non-HTTP service
     '--startup-probe-type=none',
+    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest',
     '--min-instances=1', # Keep one instance warm to process tasks quickly
     '--max-instances=5',
     '--cpu=1',
     '--memory=512Mi',
-    '--service-account=${_CLOUD_RUN_SA_EMAIL}',
-    # IMPORTANT: Mount the database URL secret for the worker
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest'
+    '--service-account=${_CLOUD_RUN_SA_EMAIL}'
   ]
 
 # Define available secrets from Secret Manager
