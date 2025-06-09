@@ -51,19 +51,32 @@ steps:
   waitFor: ['webapp-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA']
 
-# 6. Run Webapp Migrations
-# This step uses the newly built webapp image to run prisma migrations.
+# 6. Run Webapp Migrations with Cloud SQL Proxy
 - name: '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA'
   id: 'webapp-migrations'
   waitFor: ['webapp-docker-push']
-  secretEnv: ['DATABASE_URL']
+  secretEnv:
+    - 'DB_USER'
+    - 'DB_PASSWORD'
+    - 'DB_NAME'
   entrypoint: 'sh'
   args:
     - '-c'
     - |
-      echo "Running Prisma migrations..."
+      set -e
+      echo "Starting migrations with Cloud SQL Proxy..."
+      wget https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.10.0/cloud-sql-proxy.linux.amd64 -O /tmp/cloud-sql-proxy
+      chmod +x /tmp/cloud-sql-proxy
+      # Start proxy in the background
+      /tmp/cloud-sql-proxy "${_DB_INSTANCE_CONNECTION_NAME}" &
+      echo "Waiting for proxy to initialize (10s)..."
+      sleep 10
+      # The DATABASE_URL for the migration must point to the local proxy
+      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@127.0.0.1:5432/$${DB_NAME}?sslmode=disable"
+      echo "DATABASE_URL set for migration. Running migrations..."
       npx prisma migrate deploy
       echo "Migrations complete."
+      # Cloud Build automatically terminates child processes (the proxy)
 
 # 7. Deploy Webapp to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -125,9 +138,16 @@ steps:
 # Define available secrets from Secret Manager
 availableSecrets:
   secretManager:
-  # This secret provides the full DATABASE_URL for Prisma and the worker
+  # This secret provides the full DATABASE_URL for the running services
   - versionName: projects/${_PROJECT_ID}/secrets/thinkstash-db-url/versions/latest
     env: 'DATABASE_URL'
+  # Secrets required ONLY for the migration step with the proxy
+  - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
+    env: 'DB_USER'
+  - versionName: projects/${_PROJECT_ID}/${_PROJECT_ID}/secrets/kc-db-password/versions/latest
+    env: 'DB_PASSWORD'
+  - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
+    env: 'DB_NAME'
 
 options:
   logging: CLOUD_LOGGING_ONLY
