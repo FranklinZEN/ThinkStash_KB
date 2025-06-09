@@ -77,7 +77,7 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
-    # IMPORTANT: Mount the database URL secret for the webapp
+    # IMPORTANT: Mount the database URL and NextAuth secrets for the webapp
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
 
@@ -128,9 +128,6 @@ availableSecrets:
   # This secret provides the full DATABASE_URL for Prisma and the worker
   - versionName: projects/${_PROJECT_ID}/secrets/thinkstash-db-url/versions/latest
     env: 'DATABASE_URL'
-  # Secret for NextAuth
-  - versionName: projects/${_PROJECT_ID}/secrets/nextauth-secret/versions/latest
-    env: 'NEXTAUTH_SECRET'
 
 options:
   logging: CLOUD_LOGGING_ONLY
