@@ -115,24 +115,28 @@ steps:
   waitFor: ['worker-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
 
-# 10. Deploy AI Worker to Cloud Run
+# Deploys the worker as a Cloud Run Job, which is suitable for non-HTTP, task-based workloads.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'worker-deploy'
+  id: 'worker-deploy-job'
   waitFor: ['worker-docker-push']
   entrypoint: gcloud
-  args: [
-    'run', 'deploy', 'thinkstash-worker',
-    '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '--region=${_GCP_REGION}',
-    '--platform=managed',
-    '--no-allow-unauthenticated',
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest',
-    '--min-instances=1',
-    '--max-instances=5',
-    '--cpu=1',
-    '--memory=512Mi',
-    '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-  ]
+  args:
+    - 'run'
+    - 'jobs'
+    - 'deploy'
+    - 'thinkstash-worker-job' # Note the new name for the job
+    - '--image'
+    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA'
+    - '--region'
+    - '${_GCP_REGION}'
+    - '--platform'
+    - 'managed'
+    - '--max-retries=3'
+    - '--tasks=1'
+    - '--cpu=1'
+    - '--memory=512Mi'
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest'
+    - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
 
 # Define available secrets from Secret Manager
 availableSecrets:
