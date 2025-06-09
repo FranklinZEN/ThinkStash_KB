@@ -8,4 +8,4 @@ COPY aiservice/ .
 # DEBUG: List all files recursively to see what's in the build context
 RUN ls -laR
 # Command to run the worker
-CMD ["python", "-u", "worker.py"] 
+CMD ["python", "-u", "app/worker.py"] 
