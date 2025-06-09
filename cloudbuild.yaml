@@ -121,15 +121,13 @@ steps:
   waitFor: ['worker-docker-push']
   entrypoint: gcloud
   args: [
-    'run', 'deploy', 'thinkstash-worker', # Hardcoded service name as per plan
+    'run', 'deploy', 'thinkstash-worker',
     '--image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
     '--region=${_GCP_REGION}',
     '--platform=managed',
-    '--no-allow-unauthenticated', # Worker should not be publicly accessible
-    # Correctly disable the startup health check for a non-HTTP service
-    '--startup-probe-type=none',
+    '--no-allow-unauthenticated',
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest',
-    '--min-instances=1', # Keep one instance warm to process tasks quickly
+    '--min-instances=1',
     '--max-instances=5',
     '--cpu=1',
     '--memory=512Mi',
