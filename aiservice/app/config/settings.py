@@ -1,9 +1,9 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    openai_api_key: str
+    gemini_api_key: str 
+    openai_api_key: str | None = None # Optional, for fallback or other agents
     openai_model_name: str = "gpt-4o-mini" # Default value, will be overridden by .env
-    gemini_api_key: str | None = None # Optional Gemini API key
     DATABASE_URL: str
 
     # For FastAPI/Uvicorn if needed later

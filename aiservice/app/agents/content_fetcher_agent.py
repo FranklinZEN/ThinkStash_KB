@@ -3,14 +3,17 @@ from app.tools.web_content_fetcher_tool import WebPageContentFetcherTool
 from app.config.settings import settings # To potentially pass LLM config if needed for the agent itself
 import os
 
-# Ensure API keys are set for the agent's LLM 
-# (though this agent primarily uses a tool, its underlying LLM might still be invoked for reasoning)
+# Set environment variables for the LLMs.
+# The primary key is Gemini. We set it for both GEMINI_API_KEY and OPENAI_API_KEY
+# to handle libraries that might be hardcoded for OpenAI's variable name.
+os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
+os.environ["OPENAI_API_KEY"] = settings.gemini_api_key # For OpenAI-compatible endpoints or library defaults
+
+# If a specific OpenAI key is also provided (for a different agent, perhaps), set it.
 if settings.openai_api_key:
+    # This might overwrite the OPENAI_API_KEY set above, which is intentional
+    # if you want to use a specific agent with OpenAI.
     os.environ["OPENAI_API_KEY"] = settings.openai_api_key
-if settings.openai_model_name:
-    os.environ["OPENAI_MODEL_NAME"] = settings.openai_model_name
-if settings.gemini_api_key: # If you have Gemini and want to use it for an agent
-    os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
 
 # Instantiate the tool the agent will use
 web_fetcher_tool = WebPageContentFetcherTool()

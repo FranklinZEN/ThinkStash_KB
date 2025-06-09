@@ -128,8 +128,8 @@ steps:
     - '--memory=512Mi'
     - '--min-instances=1' # Set to 1 to keep one instance warm and prevent cold start 503 errors.
     - '--max-instances=3'
-    # Mount secrets for database connection and the worker invocation key
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,WORKER_KEY=thinkstash-worker-key:latest'
+    # Mount secrets for database, worker invocation, and the primary AI service (Gemini).
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,WORKER_KEY=thinkstash-worker-key:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 # Define available secrets from Secret Manager
 availableSecrets:

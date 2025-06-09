@@ -6,10 +6,32 @@ litellm.set_verbose = True # Turn on litellm verbose mode
 from crewai import Agent, Task, Crew, Process
 from app.config.settings import settings # Import your settings
 
+# --- Environment Setup ---
+# Set environment variables for the LLMs based on the loaded settings.
+# The primary key is Gemini. We set it for both GEMINI_API_KEY and OPENAI_API_KEY
+# to handle libraries that might be hardcoded for OpenAI's variable name.
+os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
+os.environ["OPENAI_API_KEY"] = settings.gemini_api_key # For OpenAI-compatible endpoints
+
+# If a specific OpenAI key is also provided, it will overwrite the compatible key.
+if settings.openai_api_key:
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+
+def debug_env_vars():
+    """Prints the state of relevant environment variables for debugging."""
+    if "GEMINI_API_KEY" in os.environ:
+        print(f"Environment: Gemini API Key IS SET.")
+    else:
+        print("Environment: Gemini API Key IS NOT SET.")
+    
+    if "OPENAI_API_KEY" in os.environ:
+        print(f"Environment: OpenAI API Key IS SET.")
+    else:
+        print("Environment: OpenAI API Key IS NOT SET.")
+
 # Explicitly set the OpenAI API key and model from settings for CrewAI
 if settings.openai_api_key:
     print(f"Settings: Found OpenAI API Key (first 5, last 4): {settings.openai_api_key[:5]}...{settings.openai_api_key[-4:]}") # DEBUG
-    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
 else:
     print("Settings: OpenAI API Key NOT FOUND in settings object.") # DEBUG
 
@@ -55,31 +77,42 @@ hello_crew = Crew(
     verbose=True
 )
 
-if __name__ == "__main__":
-    print("Running Hello CrewAI Example...")
-    print("--------------------------------")
-    # Moved this print lower, after potential os.environ modification
-    # print(f"Attempting to use OpenAI Model: {os.environ.get('OPENAI_MODEL_NAME', 'Not Set')}") 
+# --- Main Execution ---
+def main():
+    """
+    Main function to run the Crew AI setup.
+    """
+    print("--- Starting Crew AI Hello World ---")
+    debug_env_vars()
+
+    # This is a placeholder for where you would assemble and run your crew.
+    # For now, we are just verifying that the environment is set up correctly.
     
-    if not settings.openai_api_key:
-        print("Error: OPENAI_API_KEY not found in .env file or settings.")
-        print("Please ensure your API key is set correctly in aiservice/.env")
+    # Example Crew Setup (commented out):
+    #
+    # research_task = Task(...)
+    # writing_task = Task(...)
+    # researcher_agent = Agent(...)
+    # writer_agent = Agent(...)
+    #
+    # project_crew = Crew(
+    #     tasks=[research_task, writing_task],
+    #     agents=[researcher_agent, writer_agent],
+    #     process=Process.sequential
+    # )
+    #
+    # result = project_crew.kickoff()
+    # print("\n--- Crew Execution Finished ---")
+    # print("Result:", result)
+    
+    print("\n--- Crew AI Setup Verification Complete ---")
+
+
+if __name__ == "__main__":
+    if not settings.gemini_api_key:
+        print("Error: GEMINI_API_KEY not found in .env file or settings.")
     else:
-        # This print is now a bit redundant due to earlier debug prints but confirms settings object again
-        # print(f"OpenAI API Key found (first 5 chars): {settings.openai_api_key[:5]}...")
-        print(f"Attempting to use OpenAI Model from settings: {settings.openai_model_name}") # DEBUG
-        try:
-            result = hello_crew.kickoff()
-            print("\n--------------------------------")
-            print("Hello Crew Result:")
-            print(result)
-            print("--------------------------------")
-        except Exception as e:
-            print(f"An error occurred during crew kickoff: {e}")
-            print("Please check the following:")
-            print("- Your OpenAI API key in aiservice/.env is valid and has credit.")
-            print(f"- The model name '{settings.openai_model_name}' is correctly specified and available.")
-            print("- Network connectivity to OpenAI API.")
+        main()
 
 # To run this file directly (from the 'aiservice' directory):
 # Make sure your virtual environment is activated.
