@@ -123,6 +123,8 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated' # Make the service internal
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    # Add the Cloud SQL instance connection. This makes the socket available.
+    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--port=8080' # Expose the port our FastAPI app is listening on
     - '--cpu=1'
     - '--memory=512Mi'
