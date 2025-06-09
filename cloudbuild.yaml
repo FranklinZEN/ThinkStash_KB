@@ -126,7 +126,7 @@ steps:
     - '--port=8080' # Expose the port our FastAPI app is listening on
     - '--cpu=1'
     - '--memory=512Mi'
-    - '--min-instances=0' # Can scale to zero when not in use
+    - '--min-instances=1' # Set to 1 to keep one instance warm and prevent cold start 503 errors.
     - '--max-instances=3'
     # Mount secrets for database connection and the worker invocation key
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,WORKER_KEY=thinkstash-worker-key:latest'
