@@ -21,4 +21,4 @@ ENV PORT 8080
 
 # Run main.py when the container launches
 # Use gunicorn for a production-ready server, managed by Uvicorn workers
-CMD ["gunicorn", "--workers", "1", "--threads", "8", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:$PORT", "main:app"] 
+CMD gunicorn --workers 1 --threads 8 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT main:app 
