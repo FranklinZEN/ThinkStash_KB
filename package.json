@@ -2,7 +2,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "rm -rf .next && prisma generate && next build",
+    "build": "rimraf .next && prisma generate && next build",
     "start": "next start",
     "analyze": "cross-env ANALYZE=true npm run build",
     "lint": "cross-env ESLINT_USE_FLAT_CONFIG=true eslint src/ pages/ lib/ --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
@@ -68,6 +68,7 @@
     "lint-staged": "^15.5.1",
     "prettier": "^3.5.3",
     "prisma": "^6.6.0",
+    "rimraf": "^6.0.1",
     "ts-jest": "^29.3.2",
     "typescript": "5.8.3"
   },

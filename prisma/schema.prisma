@@ -31,6 +31,7 @@ model User {
   // Application-specific relations
   folders        Folder[]
   knowledgeCards KnowledgeCard[]
+  tasks          Task[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -120,4 +121,23 @@ model Tag {
   cards     KnowledgeCard[] @relation("CardTags")
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            String   // e.g., "RECONSTRUCT_AND_ANALYZE", "REWRITE_CONTENT"
+  status          String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  payload         Json     // Input for the task, e.g., { "sourceUrl": "http://..." }
+  result          Json?    // Output of the task, e.g., { "cardId": "..." }
+  error           Json?    // Structured error: { "userMessage": "...", "errorCode": "..." }
+  progress        Int      @default(0) // Percentage complete, 0-100
+  progressMessage String?  // User-facing status, e.g., "Fetching content..."
+
+  @@index([userId])
+  @@index([status])
 }

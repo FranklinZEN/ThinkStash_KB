@@ -17,22 +17,14 @@ steps:
   entrypoint: 'npm'
   args: ['install']
 
-# 2. Generate Prisma Client
-# This is a build-time dependency for the Next.js app.
-- name: 'node:20'
-  id: 'webapp-prisma-generate'
-  waitFor: ['webapp-install']
-  entrypoint: 'npx'
-  args: ['prisma', 'generate']
-
-# 3. Build Next.js App
+# 2. Build Next.js App (Prisma Generate is now part of this script)
 - name: 'node:20'
   id: 'webapp-build'
-  waitFor: ['webapp-prisma-generate']
+  waitFor: ['webapp-install']
   entrypoint: 'npm'
   args: ['run', 'build']
 
-# 4. Build Webapp Docker Image
+# 3. Build Webapp Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'webapp-docker-build'
   waitFor: ['webapp-build']
@@ -45,13 +37,13 @@ steps:
     '.'
   ]
 
-# 5. Push Webapp Docker Image
+# 4. Push Webapp Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'webapp-docker-push'
   waitFor: ['webapp-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA']
 
-# 6. Run Webapp Migrations with Cloud SQL Proxy
+# 5. Run Webapp Migrations with Cloud SQL Proxy
 - name: '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA'
   id: 'webapp-migrations'
   waitFor: ['webapp-docker-push']
@@ -78,7 +70,7 @@ steps:
       echo "Migrations complete."
       # Cloud Build automatically terminates child processes (the proxy)
 
-# 7. Deploy Webapp to Cloud Run
+# 6. Deploy Webapp to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'webapp-deploy'
   waitFor: ['webapp-migrations']
@@ -98,7 +90,7 @@ steps:
 # AISERVICE - Build and Deploy the Python Worker
 # ==============================================================================
 
-# 8. Build AI Worker Docker Image
+# 7. Build AI Worker Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'worker-docker-build'
   args: [
@@ -109,7 +101,7 @@ steps:
     '.' # Use the root directory as the build context
   ]
 
-# 9. Push AI Worker Docker Image
+# 8. Push AI Worker Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'worker-docker-push'
   waitFor: ['worker-docker-build']
