@@ -16,8 +16,6 @@ COPY prisma ./prisma
 
 # Copy Next.js configuration
 COPY next.config.mjs .
-COPY postcss.config.js .
-COPY tailwind.config.ts .
 COPY tsconfig.json .
 
 # Copy application source
