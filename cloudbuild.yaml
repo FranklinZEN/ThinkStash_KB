@@ -160,7 +160,6 @@ steps:
     - '--args=-u,worker.py'
     - '--no-cpu-throttling' # Allow worker to run continuously in the background
     - '--no-traffic' # Don't route traffic to this service
-    - '--no-startup-health-check' # Don't check for a listening port on startup
 
 # Define available secrets from Secret Manager
 availableSecrets:
