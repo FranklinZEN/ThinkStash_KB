@@ -94,6 +94,7 @@ steps:
 # 7. Build Common AI Service Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'aiservice-docker-build'
+  dir: 'aiservice'
   args: [
     'build',
     '--no-cache',
@@ -130,7 +131,7 @@ steps:
     - '--memory=512Mi'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
     - '--command=uvicorn'
-    - '--args=app.main:app,--host=0.0.0.0,--port=8080'
+    - '--args=main:app,--host=0.0.0.0,--port=8080'
 
 # 10. Deploy AI Worker to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
