@@ -33,8 +33,7 @@ steps:
     '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile', # Use the CORRECT dockerfile
-    '--build-arg', 'SERVICE_TYPE=webapp', # Add build-arg to specify service type
+    '-f', 'webapp.Dockerfile', # Use the CORRECT dockerfile
     '.'
   ]
 
@@ -100,7 +99,6 @@ steps:
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
     '-f', 'aiservice/worker.Dockerfile',
-    '--build-arg', 'SERVICE_TYPE=aiservice',
     '.'
   ]
 
