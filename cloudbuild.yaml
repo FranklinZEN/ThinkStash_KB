@@ -83,7 +83,7 @@ steps:
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
     # Add the Cloud SQL instance connection. THIS IS THE FIX.
-    '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}',
+    '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
     # IMPORTANT: Mount the database URL and NextAuth secrets for the webapp
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
@@ -126,7 +126,7 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}'
+    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
@@ -150,7 +150,7 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--add-cloudsql-instances=${_DB_INSTANCE_CONNECTION_NAME}'
+    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--cpu=1'
     - '--memory=512Mi'
     - '--min-instances=1' # Ensure one worker is always running
