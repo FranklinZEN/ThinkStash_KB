@@ -110,7 +110,7 @@ steps:
   waitFor: ['aiservice-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
 
-# 9. Deploy AI API Service to Cloud Run (No DB Connection Needed)
+# 9. Deploy AI API Service to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'aiservice-api-deploy'
   waitFor: ['aiservice-docker-push']
@@ -126,6 +126,7 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
