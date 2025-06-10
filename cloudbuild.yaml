@@ -30,10 +30,11 @@ steps:
   waitFor: ['webapp-build']
   args: [
     'build',
-    '--no-cache', # Add this flag to force a fresh build and prevent stale UI issues
+    '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA',
-    '-f', 'Dockerfile', # Explicitly use the root Dockerfile
+    '-f', 'aiservice/worker.Dockerfile', # Use the CORRECT dockerfile
+    '--build-arg', 'SERVICE_TYPE=webapp', # Add build-arg to specify service type
     '.'
   ]
 
@@ -60,7 +61,7 @@ steps:
       wget https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.10.0/cloud-sql-proxy.linux.amd64 -O /tmp/cloud-sql-proxy
       chmod +x /tmp/cloud-sql-proxy
       # Start proxy in the background
-      /tmp/cloud-sql-proxy "${_DB_INSTANCE_CONNECTION_NAME}" &
+      /tmp/cloud-sql-proxy "thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance" &
       echo "Waiting for proxy to initialize (10s)..."
       sleep 10
       # The DATABASE_URL for the migration must point to the local proxy
@@ -82,9 +83,7 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
-    # Add the Cloud SQL instance connection. THIS IS THE FIX.
     '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
-    # IMPORTANT: Mount the database URL and NextAuth secrets for the webapp
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
 
@@ -93,21 +92,35 @@ steps:
 # ==============================================================================
 
 # 7. Build Common AI Service Docker Image
-# This one image can be used for both the API and the Worker
 - name: 'gcr.io/cloud-builders/docker'
   id: 'aiservice-docker-build'
   args: [
     'build',
+    '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile', # Use the correct Dockerfile
-    '.' # Use the project root as the build context
+    '-f', 'aiservice/worker.Dockerfile',
+    '--build-arg', 'SERVICE_TYPE=aiservice',
+    '.'
   ]
+
+# NEW STEP: Verify the contents of the built image for debugging
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'aiservice-verify-contents'
+  waitFor: ['aiservice-docker-build']
+  entrypoint: 'sh'
+  args:
+    - '-c'
+    - |
+      echo "Listing contents of /app in the new image..."
+      docker run --rm --entrypoint=ls \
+        '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA' \
+        -la /app
 
 # 8. Push Common AI Service Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'aiservice-docker-push'
-  waitFor: ['aiservice-docker-build']
+  waitFor: ['aiservice-verify-contents']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
 
 # 9. Deploy AI API Service to Cloud Run
@@ -118,7 +131,7 @@ steps:
   args:
     - 'run'
     - 'deploy'
-    - 'thinkstash-aiservice' # The name of our API service
+    - 'thinkstash-aiservice'
     - '--image'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
     - '--region'
@@ -131,7 +144,7 @@ steps:
     - '--cpu=1'
     - '--memory=512Mi'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
-    - '--command=uvicorn' # Override CMD to run the API
+    - '--command=uvicorn'
     - '--args=app.main:app,--host=0.0.0.0,--port=8080'
 
 # 10. Deploy AI Worker to Cloud Run
@@ -142,7 +155,7 @@ steps:
   args:
     - 'run'
     - 'deploy'
-    - 'thinkstash-worker' # The name of our worker service
+    - 'thinkstash-worker'
     - '--image'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
     - '--region'
@@ -153,18 +166,17 @@ steps:
     - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--cpu=1'
     - '--memory=512Mi'
-    - '--min-instances=1' # Ensure one worker is always running
+    - '--min-instances=1'
     - '--max-instances=3'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
-    - '--command=python' # Override CMD to run the worker
+    - '--command=python'
     - '--args=-u,worker.py'
-    - '--no-cpu-throttling' # Allow worker to run continuously in the background
-    - '--no-traffic' # Don't route traffic to this service
+    - '--no-cpu-throttling'
+    - '--no-traffic'
 
 # Define available secrets from Secret Manager
 availableSecrets:
   secretManager:
-  # Secrets required ONLY for the migration step with the proxy
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-user/versions/latest
     env: 'DB_USER'
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-password/versions/latest

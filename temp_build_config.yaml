@@ -1,6 +1,0 @@
-substitutions:
-  _ARTIFACT_REGISTRY_REPO: thinkstash-kb
-  _CLOUD_RUN_SA_EMAIL: kc-backend-sa@thinkstash-knowledge-base.iam.gserviceaccount.com
-  _CLOUD_RUN_SERVICE_NAME: kc-nextjs-backend-service
-  _PROJECT_ID: thinkstash-knowledge-base
-  _DB_INSTANCE_CONNECTION_NAME: thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance 
