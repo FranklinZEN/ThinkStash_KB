@@ -10,7 +10,6 @@ WORKDIR /app
 
 # Copy dependency definitions
 COPY package*.json ./
-COPY pnpm-lock.yaml ./
 
 # Copy prisma schema
 COPY prisma ./prisma
