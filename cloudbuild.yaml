@@ -100,7 +100,7 @@ steps:
     '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile',
+    '-f', 'worker.Dockerfile',
     '.'
   ]
 

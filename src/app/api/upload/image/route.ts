@@ -95,8 +95,10 @@ export async function POST(request: NextRequest) {
 }
 
 // Configure the API route to accept multipart/form-data
+/*
 export const config = {
   api: {
     bodyParser: false,
   },
 };
+*/

@@ -331,23 +331,26 @@ export default function CardDetailPage() {
         body: JSON.stringify(updatePayload),
       });
 
-      const updatedCard = await response.json();
-      console.log('API response for updated card:', updatedCard); // Log API response
+      const responseData = await response.json();
+      console.log('API response for updated card:', responseData); // Log API response
 
       if (response.ok) {
-        setCard(updatedCard as KnowledgeCard);
+        const updatedCard = responseData as KnowledgeCard;
+        setCard(updatedCard);
         setTitle(updatedCard.title);
         setKeywords(
           updatedCard.tags ? updatedCard.tags.map((tag) => tag.name) : [],
-        ); // Extract tag names
+        ); // 'tag' is now correctly inferred
         setIsEditing(false);
         toast({
-          title: 'Card updated successfully',
+          title: 'Card updated',
+          description: 'Your changes have been saved successfully.',
           status: 'success',
           duration: 3000,
+          isClosable: true,
         });
       } else {
-        throw new Error(updatedCard.message || 'Failed to update card');
+        throw new Error(responseData.error || 'Failed to update card');
       }
     } catch (err: unknown) {
       console.error('Save card error:', err);
@@ -541,7 +544,7 @@ export default function CardDetailPage() {
       {isEditing ? (
         <Box
           as="form"
-          onSubmit={(e) => {
+          onSubmit={(e: React.FormEvent) => {
             e.preventDefault();
             handleSaveChanges();
           }}
@@ -554,7 +557,7 @@ export default function CardDetailPage() {
               <Input
                 type="text"
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)}
                 placeholder="Enter card title"
                 isDisabled={isSaving}
                 fontFamily="'Open Sans', sans-serif"

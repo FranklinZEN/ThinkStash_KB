@@ -23,6 +23,7 @@ import {
   AlertDescription,
   Progress,
 } from '@chakra-ui/react';
+import { z } from 'zod';
 
 interface Task {
   id: string;
@@ -36,7 +37,7 @@ interface Task {
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function NewCardFromUrlPage() {
-  const { status, data: session } = useSession();
+  const { status } = useSession();
   const router = useRouter();
   const toast = useToast();
 
