@@ -1,6 +1,8 @@
 import time
 import logging
 import os
+import threading
+from flask import Flask
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -8,9 +10,21 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- Flask App for Health Checks ---
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    """Responds to Cloud Run health checks."""
+    return "Worker is running.", 200
+
+# --- Worker Logic ---
+
 # Database connection settings from environment variables
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
+    # This will run at import time, so if the variable is missing, the container will fail to start.
+    logging.critical("DATABASE_URL environment variable is not set.")
     raise ValueError("DATABASE_URL environment variable is not set.")
 
 # --- Mock AI Orchestration Logic ---
@@ -46,7 +60,6 @@ def get_db_connection():
 
 def process_pending_tasks(engine):
     """
-
     Polls for pending tasks, processes them, and updates their status.
     """
     Session = sessionmaker(bind=engine)
@@ -90,9 +103,10 @@ def process_pending_tasks(engine):
             logging.error(f"An error occurred while processing tasks: {e}")
             session.rollback()
 
-def main():
-    """Main worker loop."""
-    logging.info("Starting AI Worker...")
+
+def worker_main_loop():
+    """Main worker loop that runs indefinitely."""
+    logging.info("Starting AI Worker main loop in a background thread...")
     try:
         engine = get_db_connection()
         while True:
@@ -100,8 +114,26 @@ def main():
             # Poll every 10 seconds
             time.sleep(10)
     except Exception as e:
-        logging.critical(f"Worker failed to initialize database connection: {e}")
-        # The container will restart due to the critical failure.
+        logging.critical(f"Worker loop failed critically: {e}")
+        # The thread will exit, but the main Flask app will keep running.
+        # Cloud Run might restart the container if liveness probes fail later.
+
+def main():
+    """
+    Main entry point. Starts the worker in a background thread
+    and the Flask server in the main thread.
+    """
+    # Start the worker loop in a background thread.
+    # daemon=True ensures the thread exits when the main thread exits.
+    worker_thread = threading.Thread(target=worker_main_loop, daemon=True)
+    worker_thread.start()
+
+    # Start the Flask app to respond to health checks from Cloud Run.
+    # The PORT environment variable is automatically set by Cloud Run.
+    port = int(os.environ.get("PORT", 8080))
+    logging.info(f"Starting health check server on port {port}")
+    app.run(host='0.0.0.0', port=port)
+
 
 if __name__ == "__main__":
     main() 

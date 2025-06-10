@@ -14,6 +14,7 @@ lxml[html_clean]
 psycopg2-binary
 sqlalchemy
 tenacity
+Flask
 # Add other core libraries as identified, e.g.:
 # readability-lxml
 # sentence-transformers

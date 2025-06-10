@@ -4,7 +4,7 @@
 substitutions:
   _GCP_REGION: us-central1
   # Add other substitutions like _PROJECT_ID, _ARTIFACT_REGISTRY_REPO etc. as needed from your setup.
-  # Assuming _DB_INSTANCE_CONNECTION_NAME, _CLOUD_RUN_SERVICE_NAME, _CLOUD_RUN_SA_EMAIL are set in the trigger.
+  # Assuming _CLOUD_RUN_SERVICE_NAME, _CLOUD_RUN_SA_EMAIL are set in the trigger.
 
 steps:
 # ==============================================================================
@@ -33,7 +33,7 @@ steps:
     '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-webapp:$COMMIT_SHA',
-    '-f', 'webapp.Dockerfile', # Use the CORRECT dockerfile
+    '-f', 'webapp.Dockerfile',
     '.'
   ]
 
@@ -59,7 +59,7 @@ steps:
       echo "Starting migrations with Cloud SQL Proxy..."
       wget https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.10.0/cloud-sql-proxy.linux.amd64 -O /tmp/cloud-sql-proxy
       chmod +x /tmp/cloud-sql-proxy
-      # Start proxy in the background
+      # Start proxy in the background. HARDCODED to prevent newline corruption.
       /tmp/cloud-sql-proxy "thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance" &
       echo "Waiting for proxy to initialize (10s)..."
       sleep 10
@@ -82,6 +82,7 @@ steps:
     '--platform=managed',
     '--allow-unauthenticated',
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
+    # HARDCODED to prevent newline corruption from trigger variables
     '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
     '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
@@ -102,26 +103,13 @@ steps:
     '.'
   ]
 
-# NEW STEP: Verify the contents of the built image for debugging
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'aiservice-verify-contents'
-  waitFor: ['aiservice-docker-build']
-  entrypoint: 'sh'
-  args:
-    - '-c'
-    - |
-      echo "Listing contents of /app in the new image..."
-      docker run --rm --entrypoint=ls \
-        '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA' \
-        -la /app
-
 # 8. Push Common AI Service Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'aiservice-docker-push'
-  waitFor: ['aiservice-verify-contents']
+  waitFor: ['aiservice-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
 
-# 9. Deploy AI API Service to Cloud Run
+# 9. Deploy AI API Service to Cloud Run (No DB Connection Needed)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'aiservice-api-deploy'
   waitFor: ['aiservice-docker-push']
@@ -137,7 +125,6 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
@@ -161,7 +148,9 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
+    # HARDCODED to prevent newline corruption from trigger variables
     - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
+    - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
     - '--min-instances=1'
