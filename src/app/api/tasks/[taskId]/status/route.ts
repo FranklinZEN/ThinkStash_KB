@@ -1,9 +1,10 @@
-import { prisma } from '@/lib/prisma';
+import prisma from '@/lib/prisma';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { NextResponse } from 'next/server';
+import { type RouteContext } from './types';
 
-export async function GET(req: Request, { params }: { params: { taskId: string } }) {
+export async function GET(req: Request, { params }: RouteContext) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
