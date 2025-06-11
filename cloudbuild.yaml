@@ -161,6 +161,7 @@ steps:
     - '--command=python'
     - '--args=-u,worker.py'
     - '--no-cpu-throttling'
+    - '--no-startup-probe'
 
 # Define available secrets from Secret Manager
 availableSecrets:
