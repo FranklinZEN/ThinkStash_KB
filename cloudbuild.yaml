@@ -159,7 +159,7 @@ steps:
     - '--command=python'
     - '--args=-u,worker.py'
     - '--no-cpu-throttling'
-    - '--clear-ports'
+    - '--startup-probe-command=ls'
 
 # Define available secrets from Secret Manager
 availableSecrets:
