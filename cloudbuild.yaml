@@ -84,7 +84,7 @@ steps:
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
     # HARDCODED to prevent newline corruption from trigger variables
     '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=thinkstash-nextauth-secret:latest'
+    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
   ]
 
 # ==============================================================================
