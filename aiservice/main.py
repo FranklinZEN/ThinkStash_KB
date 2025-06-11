@@ -19,13 +19,10 @@ def get_db_connection():
 
 @app.post("/invoke")
 async def invoke_worker(request: Request):
-    # We add a simple security check. In a real-world scenario,
-    # this should be a more robust mechanism like a pre-shared key,
-    # or an IAM role check if running on GCP.
-    expected_key = os.environ.get("WORKER_KEY")
-    if not expected_key or request.headers.get("X-ThinkStash-Worker-Key") != expected_key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    # Authentication is now handled by Cloud Run's built-in IAM.
+    # The service is configured to not allow unauthenticated requests,
+    # and we will grant our Cloud Scheduler the necessary 'run.invoker' role.
+    
     conn = get_db_connection()
     conn.autocommit = False
     task_id = None

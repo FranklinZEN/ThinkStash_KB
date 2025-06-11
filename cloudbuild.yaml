@@ -134,7 +134,7 @@ steps:
     - ''
     - '--args'
     - ''
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,WORKER_KEY=thinkstash-worker-key:latest'
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 # Define available secrets from Secret Manager
 availableSecrets:
