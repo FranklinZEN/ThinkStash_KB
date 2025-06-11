@@ -84,82 +84,54 @@ steps:
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
     # HARDCODED to prevent newline corruption from trigger variables
     '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest'
+    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=thinkstash-nextauth-secret:latest,NEXTAUTH_URL=thinkstash-nextauth-url:latest'
   ]
 
 # ==============================================================================
-# AISERVICE - Build and Deploy the Python API and Worker
+# WORKER - Build and Deploy the Python Worker
 # ==============================================================================
 
-# 7. Build Common AI Service Docker Image
+# 7. Build Worker Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'aiservice-docker-build'
-  dir: 'aiservice'
+  id: 'worker-docker-build'
   args: [
     'build',
     '--no-cache',
     '-t',
-    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
-    '-f', 'worker.Dockerfile',
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
+    '-f', 'aiservice/worker.Dockerfile',
     '.'
   ]
 
-# 8. Push Common AI Service Docker Image
+# 8. Push Worker Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'aiservice-docker-push'
-  waitFor: ['aiservice-docker-build']
-  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
+  id: 'worker-docker-push'
+  waitFor: ['worker-docker-build']
+  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
 
-# 9. Deploy AI API Service to Cloud Run
+# 9. Deploy AI Worker as a Cloud Run Job
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'aiservice-api-deploy'
-  waitFor: ['aiservice-docker-push']
+  id: 'worker-job-deploy'
+  waitFor: ['worker-docker-push']
   entrypoint: 'gcloud'
   args:
     - 'run'
+    - 'jobs'
     - 'deploy'
-    - 'thinkstash-aiservice'
+    - 'thinkstash-worker-job'
     - '--image'
-    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
+    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA'
     - '--region'
     - '${_GCP_REGION}'
-    - '--platform=managed'
-    - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
     - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
-    - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
+    - '--max-retries=3'
+    - '--task-timeout=600' # 10 minutes
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
-    - '--command=uvicorn'
-    - '--args=main:app,--host=0.0.0.0,--port=8080'
-
-# 10. Deploy AI Worker to Cloud Run
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'worker-deploy'
-  waitFor: ['aiservice-docker-push']
-  entrypoint: 'gcloud'
-  args:
-    - 'run'
-    - 'deploy'
-    - 'thinkstash-worker'
-    - '--image'
-    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA'
-    - '--region'
-    - '${_GCP_REGION}'
-    - '--platform=managed'
-    - '--no-allow-unauthenticated'
-    - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
-    - '--cpu=1'
-    - '--memory=512Mi'
-    - '--min-instances=1'
-    - '--max-instances=3'
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,WORKER_KEY=thinkstash-worker-key:latest'
     - '--command=python'
     - '--args=-u,worker.py'
-    - '--no-cpu-throttling'
-    - '--startup-probe-exec=ls'
 
 # Define available secrets from Secret Manager
 availableSecrets:
