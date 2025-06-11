@@ -154,10 +154,12 @@ steps:
     - '--cpu=1'
     - '--memory=512Mi'
     - '--min-instances=1'
+    - '--max-instances=3'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,WORKER_KEY=thinkstash-worker-key:latest'
     - '--command=python'
     - '--args=-u,worker.py'
     - '--no-cpu-throttling'
+    - '--clear-ports'
 
 # Define available secrets from Secret Manager
 availableSecrets:
