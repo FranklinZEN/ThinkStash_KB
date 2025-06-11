@@ -150,18 +150,14 @@ steps:
     - '--platform=managed'
     - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    # HARDCODED to prevent newline corruption from trigger variables
     - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
-    - '--port=8080'
     - '--cpu=1'
     - '--memory=512Mi'
     - '--min-instances=1'
-    - '--max-instances=3'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,WORKER_KEY=thinkstash-worker-key:latest'
     - '--command=python'
     - '--args=-u,worker.py'
     - '--no-cpu-throttling'
-    - '--no-startup-probe'
 
 # Define available secrets from Secret Manager
 availableSecrets:
