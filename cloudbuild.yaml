@@ -84,12 +84,11 @@ steps:
     '--service-account=${_CLOUD_RUN_SA_EMAIL}',
     # HARDCODED to prevent newline corruption from trigger variables
     '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance',
-    '--remove-env-vars=NEXTAUTH_URL',
-    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,NEXTAUTH_SECRET=thinkstash-nextauth-secret:latest,NEXTAUTH_URL=thinkstash-nextauth-url:latest'
+    '--set-secrets=DATABASE_URL=thinkstash-db-url:latest'
   ]
 
 # ==============================================================================
-# WORKER - Build and Deploy the Python Worker
+# WORKER - Build and Deploy the Python AI Service Worker
 # ==============================================================================
 
 # 7. Build Worker Docker Image
@@ -100,7 +99,7 @@ steps:
     '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile',
+    '-f', 'aiservice/Dockerfile',
     '.'
   ]
 
@@ -110,29 +109,28 @@ steps:
   waitFor: ['worker-docker-build']
   args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
 
-# 9. Deploy AI Worker as a Cloud Run Job
+# 9. Deploy AI Worker as a Cloud Run Service
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'worker-job-deploy'
+  id: 'worker-service-deploy'
   waitFor: ['worker-docker-push']
   entrypoint: 'gcloud'
   args:
     - 'run'
-    - 'jobs'
     - 'deploy'
-    - 'thinkstash-worker-job'
+    - 'thinkstash-worker'
     - '--image'
     - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA'
     - '--region'
     - '${_GCP_REGION}'
+    - '--platform=managed'
+    - '--no-allow-unauthenticated'
     - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
     - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
     - '--cpu=1'
     - '--memory=512Mi'
-    - '--max-retries=3'
-    - '--task-timeout=600' # 10 minutes
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
-    - '--command=python'
-    - '--args=-u,worker.py'
+    - '--min-instances=1'
+    - '--max-instances=3'
+    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,WORKER_KEY=thinkstash-worker-key:latest'
 
 # Define available secrets from Secret Manager
 availableSecrets:

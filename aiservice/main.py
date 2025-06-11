@@ -1,6 +1,7 @@
 import psycopg2
 import psycopg2.extras
 import json
+import os
 from fastapi import FastAPI, HTTPException, Request
 from app.config.settings import settings
 from app.services.orchestrator import run_pipeline
@@ -21,7 +22,8 @@ async def invoke_worker(request: Request):
     # We add a simple security check. In a real-world scenario,
     # this should be a more robust mechanism like a pre-shared key,
     # or an IAM role check if running on GCP.
-    if request.headers.get("X-ThinkStash-Worker-Key") != "thinkstash-personal-knowledge-base-worker-api-service-secret":
+    expected_key = os.environ.get("WORKER_KEY")
+    if not expected_key or request.headers.get("X-ThinkStash-Worker-Key") != expected_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     conn = get_db_connection()
