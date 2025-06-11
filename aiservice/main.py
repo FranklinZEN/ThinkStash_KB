@@ -31,7 +31,7 @@ async def invoke_worker(request: Request):
             # Find and lock one pending task
             cur.execute("""
                 BEGIN;
-                SELECT id, payload FROM "Task" WHERE status = 'PENDING' ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED;
+                SELECT id, payload, "userId" FROM "Task" WHERE status = 'PENDING' ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED;
             """)
             task_record = cur.fetchone()
 
@@ -42,6 +42,7 @@ async def invoke_worker(request: Request):
 
             task_id = task_record['id']
             payload = task_record['payload']
+            payload['userId'] = task_record['userId']
 
             # Mark task as processing
             cur.execute('UPDATE "Task" SET status = %s, "progressMessage" = %s WHERE id = %s',

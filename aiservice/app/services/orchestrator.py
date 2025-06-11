@@ -1,5 +1,6 @@
 import time
 import json
+import uuid
 
 def _update_progress(db_conn, task_id, message, progress):
     """Helper function to update task progress in the database."""
@@ -12,24 +13,54 @@ def _update_progress(db_conn, task_id, message, progress):
 
 def run_pipeline(db_conn, task_id: str, payload: dict):
     """
-    Simulates the AI processing pipeline.
-    In a real scenario, this would involve calls to AI services, etc.
+    Executes the full AI pipeline to create a Knowledge Card.
     """
     try:
         source_url = payload.get("sourceUrl")
-        
+        user_id = payload.get("userId") # We need the user ID to associate the card
+
+        if not user_id:
+            raise ValueError("userId is missing from the task payload")
+
         _update_progress(db_conn, task_id, "Starting reconstruction pipeline...", 10)
-        time.sleep(2) # Simulate work
+        time.sleep(2)
 
         _update_progress(db_conn, task_id, "Fetching and processing content...", 40)
-        time.sleep(3) # Simulate more work
+        # In a real app, this is where you'd use source_url to fetch and process content.
+        # For now, we'll create some dummy content.
+        processed_content = {
+            "title": f"Card from {source_url}",
+            "content": f"This is the reconstructed content from the source URL: {source_url}",
+            "summary": "This is a summary of the content.",
+            "tags": ["reconstructed", "pipeline"]
+        }
+        time.sleep(3)
 
-        _update_progress(db_conn, task_id, "Structuring knowledge card...", 80)
-        time.sleep(2) # Simulate final work
-
-        # The final result that will be stored in the 'result' JSON field of the Task.
-        # In a real implementation, this would be the actual ID of the created KnowledgeCard.
-        final_result = { "cardId": "placeholder-card-id-from-pipeline" }
+        _update_progress(db_conn, task_id, "Creating knowledge card in database...", 80)
+        
+        with db_conn.cursor() as cur:
+            # Create the new KnowledgeCard and get its ID
+            new_card_id = str(uuid.uuid4())
+            cur.execute(
+                """
+                INSERT INTO "KnowledgeCard" (id, "userId", title, content, summary, tags, "sourceUrl")
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    new_card_id,
+                    user_id,
+                    processed_content["title"],
+                    json.dumps(processed_content["content"]), # Assuming content is stored as JSON
+                    processed_content["summary"],
+                    processed_content["tags"],
+                    source_url
+                )
+            )
+            
+            # The final result is the ID of the card we just created.
+            final_result = { "cardId": new_card_id }
+        
+        db_conn.commit()
         
         _update_progress(db_conn, task_id, "Pipeline completed successfully.", 100)
 
