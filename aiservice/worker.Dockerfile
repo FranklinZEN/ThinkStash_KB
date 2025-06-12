@@ -22,7 +22,6 @@ COPY ./aiservice/ .
 
 # List the contents of the /app directory to help with debugging
 RUN ls -la /app
-RUN ls -la /app/aiservice
 
 # Command to run the application
 CMD ["python", "-u", "worker.py"] 
