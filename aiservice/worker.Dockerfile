@@ -17,11 +17,19 @@ COPY ./aiservice/requirements.txt .
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
-COPY ./aiservice/ .
+# Copy the worker script first
+COPY ./aiservice/worker.py /app/worker.py
 
-# List the contents of the /app directory to help with debugging
-RUN ls -la /app
+# Copy the rest of the application code
+COPY ./aiservice/ /app/
+
+# Debug: Show the contents of the /app directory
+RUN echo "=== Contents of /app ===" && \
+    ls -la /app && \
+    echo "=== Contents of /app/aiservice (if exists) ===" && \
+    ls -la /app/aiservice || true && \
+    echo "=== Python path ===" && \
+    python -c "import sys; print('\n'.join(sys.path))"
 
 # Command to run the application
-CMD ["python", "-u", "worker.py"] 
+CMD ["python", "-u", "/app/worker.py"] 
