@@ -1,22 +1,193 @@
-fastapi
-uvicorn[standard]
-gunicorn
-pydantic
-python-dotenv
+# Core AI/Agent Libraries
 crewai
-langchain
-langchain-openai
-requests
-beautifulsoup4
 crewai-tools
-newspaper3k
-lxml[html_clean]
-psycopg2-binary
-sqlalchemy
-tenacity
-Flask
-# Add other core libraries as identified, e.g.:
-# readability-lxml
-# sentence-transformers
-# psycopg2-binary (if direct DB access is needed later, though initially we are returning to Next.js backend)
-google-cloud-storage 
+langchain
+langchain_core
+langchain_community
+langchain_openai # For OpenAI models, or Gemini via OpenAI compatibility layer
+langchain-anthropic
+
+# FastAPI and Pydantic
+fastapi
+pydantic[email]>=2.0,<3.0
+pydantic-settings
+uvicorn[standard]
+
+# Web Scraping, Parsing, and Content Extraction
+requests==2.32.3
+aiohttp
+beautifulsoup4==4.13.4 # Also listed below, ensure one version
+lxml[html_clean]==5.4.0 # Also listed below, ensure one version
+trafilatura==2.0.0 # Also listed below, ensure one version
+newspaper3k==0.2.8
+python-docx==1.1.2
+PyMuPDF==1.26.0 # Fitz, also listed below
+mistune==3.1.3
+markdown-it-py # Also listed below
+Markdown
+pdfminer.six
+
+# Playwright for advanced web interaction
+playwright
+
+# HTTP client (general purpose)
+httpx
+
+# Image Processing
+Pillow==11.2.1
+pdf2image==1.17.0 # For converting PDF pages to images
+
+# Google Cloud Services
+google-cloud-storage
+google-auth
+
+# Utilities
+python-dotenv>=1.0.0 # For .env file support
+cachetools # For caching
+python-magic-bin # For identifying file types (Windows friendly)
+ftfy==6.3.1 # Optional, for text fixing
+
+# Testing
+requests-mock==1.12.1
+pytest==8.3.5
+pytest-asyncio
+pytest-cov
+
+# Linting, Formatting, Type Checking
+mypy
+ruff
+
+# Ensure no major duplications from the previous version.
+# Keeping specific versions where they were pinned, otherwise letting pip resolve.
+
+# Utility and Parsing Libraries (pinned where specific versions are known good or important)
+aiohttp
+beautifulsoup4==4.13.4
+newspaper3k==0.2.8
+lxml[html_clean]==5.4.0
+trafilatura==2.0.0
+python-docx==1.1.2
+PyMuPDF==1.26.0 # Fitz
+mistune==3.1.3
+python-magic-bin
+pdf2image==1.17.0
+Pillow==11.2.1
+pdfminer.six # Was 20250327, likely a date-based versioning, let pip pick latest if possible
+Markdown
+markdown-it-py # Let pip pick latest
+linkify-it-py
+
+# OpenAI SDK (pinned as it's generally stable)
+openai # For OpenAI library, used by langchain-openai and for Gemini compatibility
+
+# Testing (pinned as they are generally stable)
+requests-mock==1.12.1
+pytest==8.3.5
+
+# Optional, for a specific tool implementation detail if needed
+ftfy==6.3.1
+
+# Removed crewai sub-dependencies like appdirs, click, embedchain, instructor etc.
+# Pip will resolve these based on the requirements of the latest crewai/langchain. 
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# For asynchronous HTTP requests (if Next.js calls this service)
+httpx
+
+# Other specific libraries if needed by tools or agents
+# e.g., beautifulsoup4 for web scraping tools
+
+# For LLM configuration (potentially, if models are loaded this way)
+# langchain_community # Often has base LLM providers or utilities
+
+# Older, potentially replaced Gemini SDK - keep commented if direct langchain-google-genai is not used
+# google-generativeai
+
+# Image processing
+# pdf2image # If PDFs contain images that need to be extracted not as part of text flow
+
+# OCR
+# pytesseract # If OCR is needed beyond what PDF extraction provides
+
+# PDF Processing
+# pdfminer.six
+
+# Web Scraping related, if used by tools
+# beautifulsoup4
+# requests
+
+# For Celery (if used for background tasks, not currently in scope for V2.6 core AI insight)
+# celery
+# redis # as a Celery broker
+
+# Langchain (core, and specific integrations)
+langchain-openai # For OpenAI models, or Gemini via OpenAI compatibility layer
+# langchain-google-genai # For direct Gemini integration - switching back to OpenAI compatibility layer
+
+# Core FastAPI and Uvicorn
+uvicorn[standard]
+
+# Pydantic for data validation
+pydantic-settings
+
+# Web Scraping and Parsing
+trafilatura
+beautifulsoup4
+markdown-it-py
+markdownify
+python-docx
+lxml # Required by trafilatura and bs4, good to have explicit
+
+# PDF Processing
+PyMuPDF
+
+# Image Processing
+Pillow
+# google-cloud-vision # Optional, if direct Vision API features are added back here
+
+# Google Cloud Services
+google-cloud-storage
+google-auth
+
+# AI Agent Framework (Example, adjust as per actual usage)
+# crewai 
+# crewai-tools
+
+# Utilities
+python-dotenv # For .env file support
+cachetools # For caching
+
+# Logging
+# structlog # Example, if structured logging is adopted
+python-json-logger # Added for structured JSON logging
+
+# Optional for specific database connections if not using an ORM that handles it
+# psycopg2-binary # For PostgreSQL
+psycopg2-binary # For PostgreSQL
+
+# For development and testing
+pytest-asyncio
+pytest-cov
+mypy
+ruff # Linter and formatter
+# pre-commit # For git hooks
+
+# Other specific dependencies
+# Add any other specific libraries your project uses
+
+# Added Playwright for advanced web interaction
+playwright 
+
+# Added by AI Assistant - 2024-05-30
+chardet
+langchain-text-splitters
+unstructured[local-inference]
+opencv-python # For image processing, often a dependency of unstructured[local-inference]
+paddleocr # For OCR, another potential dependency of unstructured
+pyclipper # Often a dependency for paddleocr or other geometry libraries
+layoutparser # For layout analysis, used by unstructured
+pytesseract # For OCR, often used with layoutparser or unstructured 
+markdownify
+url-normalize

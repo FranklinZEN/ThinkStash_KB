@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { BlockNoteDocument } from '@/types/blocknote';
+// import type { BlockNoteDocument } from '@/types/blocknote';
+import type { AppPartialBlock } from '@/lib/blocknote/appSchema'; // Import the new type
 
 // Update CardListItem type to include isStarred and tags
 export interface CardListItem {
@@ -15,7 +16,7 @@ export interface CardListItem {
   } | null;
   isStarred: boolean; // Added isStarred
   tags: { name: string }[]; // Added tags
-  content: BlockNoteDocument | null; // No longer optional
+  content: AppPartialBlock[] | null; // Use AppPartialBlock[]
 }
 
 // Type for raw card data from API with string dates

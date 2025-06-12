@@ -33,8 +33,9 @@
   "include": [
     "next-env.d.ts",
     ".next/types/**/*.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/blocknote.d.ts",
     "custom-next-auth.d.ts",
     "**/*.d.ts"
   ],

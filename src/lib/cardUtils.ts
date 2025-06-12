@@ -1,14 +1,20 @@
-import type { Block, InlineContent } from '@/types/blocknote';
+// import type { Block, InlineContent } from '@/types/blocknote'; // Old import to be removed
+import type { /*Block,*/ AppInlineContent as InlineContent } from '@/lib/blocknote/appSchema'; // Block might not be needed if AppPartialBlock is used
+import type { AppPartialBlock, AppInlineContent } from '@/lib/blocknote/appSchema';
 
-export function extractSnippetFromContent(document: Block[] | null): string {
-  if (!document || !Array.isArray(document)) return '';
+export function extractSnippetFromContent(document: AppPartialBlock[] | null): string {
+  if (!document || document.length === 0) return '';
 
   try {
     const textSnippets: string[] = [];
     let currentLength = 0;
     const MAX_LENGTH = 150;
 
-    function processInlineContent(inlineContent: InlineContent): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function processInlineContent(inlineContent: any): string {
+      if (typeof inlineContent === 'string') {
+        return inlineContent;
+      }
       if (inlineContent.type === 'text') {
         return inlineContent.text;
       }

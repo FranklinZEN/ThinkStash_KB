@@ -23,15 +23,13 @@ export async function POST(req: Request) {
         type: 'RECONSTRUCT_AND_ANALYZE',
         status: 'PENDING',
         payload: { sourceUrl },
-        progress: 5, // Start with a small amount of progress
-        progressMessage: 'Task created and awaiting processing.',
+        progressMessage: 'Task created',
       },
     });
 
     return NextResponse.json({ taskId: task.id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create task:', error);
-    // In case of a database error or other server issue
     return new NextResponse('Internal Server Error', { status: 500 });
   }
-} 
+}

@@ -94,12 +94,13 @@ steps:
 # 7. Build Worker Docker Image
 - name: 'gcr.io/cloud-builders/docker'
   id: 'worker-docker-build'
+  waitFor: ['webapp-docker-push']
   args: [
     'build',
     '--no-cache',
     '-t',
     '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '-f', 'aiservice/Dockerfile',
+    '-f', 'aiservice/worker.Dockerfile',
     '.'
   ]
 
@@ -130,10 +131,6 @@ steps:
     - '--memory=512Mi'
     - '--min-instances=1'
     - '--max-instances=3'
-    - '--command'
-    - ''
-    - '--args'
-    - ''
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 # Define available secrets from Secret Manager

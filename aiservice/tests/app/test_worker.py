@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, call
 import json
 import psycopg2
 
@@ -12,126 +12,131 @@ from worker import process_single_task, get_db_connection
 
 class TestWorker(unittest.TestCase):
 
-    @patch('worker.get_db_connection')
-    @patch('worker.run_pipeline')
-    def test_process_single_task_success(self, mock_run_pipeline, mock_get_db_connection):
+    @patch('aiservice.worker.run_pipeline')
+    @patch('aiservice.worker.get_db_connection')
+    def test_process_single_task_success(self, mock_get_db_connection, mock_run_pipeline):
+        """
+        Tests the successful processing of a single task.
+        - Mocks the database connection to return a pending task.
+        - Mocks the run_pipeline to return a successful result.
+        - Verifies that the task status is updated to PROCESSING and then to COMPLETED.
+        """
         # --- Setup Mocks ---
-        # Mock database connection and cursor
         mock_conn = MagicMock()
-        mock_cursor = MagicMock()
+        mock_cur = MagicMock()
         mock_get_db_connection.return_value = mock_conn
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
 
-        # Mock fetching a single task
-        mock_task_record = {'id': 'task-123', 'payload': {'sourceUrl': 'http://example.com'}}
-        mock_cursor.fetchone.return_value = mock_task_record
+        # Mock fetching a task
+        task_id = 'test-task-123'
+        task_payload = {'sourceUrl': 'http://example.com'}
+        mock_cur.fetchone.return_value = {'id': task_id, 'payload': task_payload}
+        
+        # Mock the pipeline result
+        pipeline_result = {'cardId': 'card-abc-456'}
+        mock_run_pipeline.return_value = pipeline_result
 
-        # Mock the pipeline execution result
-        mock_run_pipeline.return_value = {'cardId': 'card-456'}
-
-        # --- Call the function ---
+        # --- Run the function to test ---
         process_single_task()
 
         # --- Assertions ---
-        # 1. Check that a connection was established
         mock_get_db_connection.assert_called_once()
-
-        # 2. Check that the correct sequence of SQL commands was executed
-        self.assertEqual(mock_cursor.execute.call_count, 3)
         
-        # Check that we selected a task and locked the row
-        mock_cursor.execute.assert_any_call(
-            unittest.mock.ANY,
-        ) # The exact query string is long, so we just check it was called.
-
-        # Check that the task was updated to PROCESSING
-        mock_cursor.execute.assert_any_call(
+        # Verify the sequence of database calls
+        self.assertEqual(mock_cur.execute.call_count, 3)
+        
+        # 1. Lock the task and set to PROCESSING
+        mock_cur.execute.assert_any_call(
             'UPDATE "Task" SET status = %s, "progressMessage" = %s WHERE id = %s',
-            ('PROCESSING', 'Worker picked up task', 'task-123')
+            ('PROCESSING', 'Worker picked up task', task_id)
         )
-
-        # 3. Check that the pipeline was called correctly
-        mock_run_pipeline.assert_called_once_with(mock_conn, 'task-123', {'sourceUrl': 'http://example.com'})
-
-        # 4. Check that the task was updated to COMPLETED with the correct result
-        mock_cursor.execute.assert_any_call(
-            'UPDATE "Task" SET status = %s, "progressMessage" = %s, result = %s WHERE id = %s',
-            ('COMPLETED', 'Task finished successfully', '{"cardId": "card-456"}', 'task-123')
-        )
-
-        # 5. Check that the transaction was committed
-        mock_conn.commit.assert_called()
-
-
-    @patch('worker.get_db_connection')
-    @patch('worker.run_pipeline')
-    def test_process_single_task_failure(self, mock_run_pipeline, mock_get_db_connection):
-        # --- Setup Mocks ---
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_get_db_connection.return_value = mock_conn
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        mock_task_record = {'id': 'task-789', 'payload': {'sourceUrl': 'http://fail.com'}}
-        mock_cursor.fetchone.return_value = mock_task_record
-
-        # Mock the pipeline to raise an exception
-        pipeline_error = Exception("Something went wrong in the pipeline")
-        mock_run_pipeline.side_effect = pipeline_error
-
-        # --- Call the function ---
-        process_single_task()
-
-        # --- Assertions ---
-        # 1. Check that the pipeline was called
-        mock_run_pipeline.assert_called_once_with(mock_conn, 'task-789', {'sourceUrl': 'http://fail.com'})
-
-        # 2. Check that the transaction was rolled back
-        mock_conn.rollback.assert_called_once()
         
-        # 3. Check that the task was updated to FAILED with error details
-        error_payload = json.dumps({
-            "userMessage": "An unexpected error occurred during processing.",
-            "errorCode": "PIPELINE_FAILURE",
-            "details": str(pipeline_error)
-        })
-        mock_cursor.execute.assert_any_call(
-            'UPDATE "Task" SET status = %s, error = %s WHERE id = %s',
-            ('FAILED', error_payload, 'task-789')
+        # 2. Call the pipeline
+        mock_run_pipeline.assert_called_once_with(mock_conn, task_id, task_payload)
+        
+        # 3. Set task to COMPLETED with the result
+        mock_cur.execute.assert_any_call(
+            'UPDATE "Task" SET status = %s, "progressMessage" = %s, result = %s WHERE id = %s',
+            ('COMPLETED', 'Task finished successfully', json.dumps(pipeline_result), task_id)
         )
-
-        # 4. Check that the final state was committed
+        
+        # Verify transaction management
         mock_conn.commit.assert_called()
-
-
-    @patch('worker.get_db_connection')
-    @patch('worker.run_pipeline')
-    def test_no_pending_tasks(self, mock_run_pipeline, mock_get_db_connection):
-        # --- Setup Mocks ---
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_get_db_connection.return_value = mock_conn
-        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        # Mock fetching a task to return None
-        mock_cursor.fetchone.return_value = None
-
-        # --- Call the function ---
-        process_single_task()
-
-        # --- Assertions ---
-        # 1. Assert that the task selection query was made
-        mock_cursor.execute.assert_called_once()
-
-        # 2. Assert that the pipeline was NEVER called
-        mock_run_pipeline.assert_not_called()
-
-        # 3. Assert that no status updates were made
-        self.assertEqual(mock_cursor.execute.call_count, 1) # Only the SELECT call
-
-        # 4. Assert the connection was closed
         mock_conn.close.assert_called_once()
 
+
+    @patch('aiservice.worker.run_pipeline')
+    @patch('aiservice.worker.get_db_connection')
+    def test_process_single_task_pipeline_failure(self, mock_get_db_connection, mock_run_pipeline):
+        """
+        Tests the failure handling when the pipeline raises an exception.
+        - Mocks the database connection to return a pending task.
+        - Mocks the run_pipeline to raise an exception.
+        - Verifies that the task status is updated to FAILED with error details.
+        """
+        # --- Setup Mocks ---
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+        task_id = 'test-task-fail-456'
+        task_payload = {'sourceUrl': 'http://fail.com'}
+        mock_cur.fetchone.return_value = {'id': task_id, 'payload': task_payload}
+        
+        # Mock the pipeline to fail
+        error_message = "Pipeline failed spectacularly"
+        mock_run_pipeline.side_effect = Exception(error_message)
+
+        # --- Run the function to test ---
+        process_single_task()
+
+        # --- Assertions ---
+        mock_get_db_connection.assert_called_once()
+        mock_run_pipeline.assert_called_once_with(mock_conn, task_id, task_payload)
+        
+        # Verify transaction rollback
+        mock_conn.rollback.assert_called_once()
+
+        # Verify task is updated to FAILED
+        expected_error_payload = json.dumps({
+            "userMessage": "An unexpected error occurred during processing.",
+            "errorCode": "PIPELINE_FAILURE",
+            "details": error_message
+        })
+        mock_cur.execute.assert_any_call(
+            'UPDATE "Task" SET status = %s, error = %s WHERE id = %s',
+            ('FAILED', expected_error_payload, task_id)
+        )
+        
+        mock_conn.commit.assert_called() # Should be called after setting the failure state
+        mock_conn.close.assert_called_once()
+
+    @patch('aiservice.worker.get_db_connection')
+    def test_no_pending_tasks(self, mock_get_db_connection):
+        """
+        Tests that nothing happens when there are no pending tasks.
+        """
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_get_db_connection.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        
+        # Mock no task being found
+        mock_cur.fetchone.return_value = None
+
+        process_single_task()
+
+        # Verify we selected tasks but did not update anything
+        mock_cur.execute.assert_called_once_with(
+            """
+                    BEGIN;
+                    SELECT id, payload FROM "Task" WHERE status = 'PENDING' ORDER BY "createdAt" ASC LIMIT 1 FOR UPDATE SKIP LOCKED;
+                """
+        )
+        # Ensure no status updates were attempted
+        self.assertEqual(mock_cur.execute.call_count, 1)
+        mock_conn.close.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main()
