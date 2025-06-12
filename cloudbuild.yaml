@@ -132,7 +132,7 @@ steps:
     - '--min-instances=1'
     - '--max-instances=3'
     - '--no-traffic'
-    - '--no-startup-probe'
+    - '--startup-probe=""'
     - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
 
 # Define available secrets from Secret Manager
