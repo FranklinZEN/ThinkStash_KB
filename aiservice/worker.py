@@ -4,6 +4,8 @@ import os
 import sys
 import platform
 import threading
+import json
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from aiservice.main import background_worker_loop
 
@@ -11,13 +13,30 @@ from aiservice.main import background_worker_loop
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Track worker status
+worker_status = {
+    "start_time": time.time(),
+    "last_task_time": None,
+    "is_healthy": True,
+    "error_count": 0
+}
+
 # Simple HTTP server for health checks
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
+        self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(b'OK')
+        
+        # Update status before sending
+        current_status = {
+            "status": "healthy" if worker_status["is_healthy"] else "unhealthy",
+            "uptime_seconds": int(time.time() - worker_status["start_time"]),
+            "last_task_time": worker_status["last_task_time"],
+            "error_count": worker_status["error_count"]
+        }
+        
+        self.wfile.write(json.dumps(current_status).encode())
         
     def log_message(self, format, *args):
         # Suppress logging for cleaner output
@@ -42,6 +61,9 @@ if __name__ == "__main__":
         asyncio.run(background_worker_loop())
     except KeyboardInterrupt:
         print("Worker stopped by user.")
+        worker_status["is_healthy"] = False
     except Exception as e:
         print(f"Worker failed with error: {e}")
+        worker_status["is_healthy"] = False
+        worker_status["error_count"] += 1
         sys.exit(1) 
