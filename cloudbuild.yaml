@@ -114,26 +114,24 @@ steps:
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'worker-service-deploy'
   waitFor: ['worker-docker-push']
-  entrypoint: 'gcloud'
+  entrypoint: 'bash'
   args:
-    - 'run'
-    - 'deploy'
-    - 'thinkstash-worker'
-    - '--image'
-    - '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA'
-    - '--region'
-    - '${_GCP_REGION}'
-    - '--platform=managed'
-    - '--no-allow-unauthenticated'
-    - '--service-account=${_CLOUD_RUN_SA_EMAIL}'
-    - '--add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance'
-    - '--cpu=1'
-    - '--memory=512Mi'
-    - '--min-instances=1'
-    - '--max-instances=3'
-    - '--no-traffic'
-    - '--startup-probe='
-    - '--set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest'
+    - '-c'
+    - |
+      gcloud run deploy thinkstash-worker \
+        --image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA \
+        --region=${_GCP_REGION} \
+        --platform=managed \
+        --no-allow-unauthenticated \
+        --service-account=${_CLOUD_RUN_SA_EMAIL} \
+        --add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance \
+        --cpu=1 \
+        --memory=512Mi \
+        --min-instances=1 \
+        --max-instances=3 \
+        --no-traffic \
+        --startup-probe="" \
+        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest
 
 # Define available secrets from Secret Manager
 availableSecrets:

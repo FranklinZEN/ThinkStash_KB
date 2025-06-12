@@ -22,7 +22,7 @@ import { z } from 'zod'; // Added for Zod
 
 const CardIdParamsSchema = z.object({
   // Restored
-  cardId: z.string().cuid({ message: 'Invalid card ID format' }),
+  cardId: z.string().uuid({ message: 'Invalid card ID format' }),
 });
 
 const UpdateCardBodySchema = z // Restored & Renamed for clarity
@@ -35,7 +35,7 @@ const UpdateCardBodySchema = z // Restored & Renamed for clarity
     content: CardContentSchema.optional(),
     folderId: z
       .string()
-      .cuid({ message: 'Invalid folder ID format.' })
+      .uuid({ message: 'Invalid folder ID format.' })
       .optional()
       .nullable(),
     tags: z.array(z.string().trim().min(1)).optional(),
