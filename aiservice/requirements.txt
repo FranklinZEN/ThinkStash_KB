@@ -1,3 +1,76 @@
+# === AI Agent & LLM Frameworks ===
+crewai
+crewai-tools
+langchain
+langchain_core
+langchain_community
+langchain_openai
+langchain_anthropic
+langchain-text-splitters
+unstructured[local-inference]
+
+# === Web Service Framework ===
+fastapi
+uvicorn[standard]
+python-json-logger # For structured JSON logging
+
+# === Data Models & Settings ===
+pydantic[email]>=2.0,<3.0
+pydantic-settings
+
+# === Web Scraping, Parsing, and Content Extraction ===
+requests==2.32.3
+aiohttp
+beautifulsoup4==4.13.4
+lxml[html_clean]==5.4.0
+trafilatura==2.0.0
+newspaper3k==0.2.8
+playwright
+url-normalize
+
+# === File Type Handling & Parsing ===
+python-docx==1.1.2
+PyMuPDF==1.26.0 # Fitz
+mistune==3.1.3
+markdown-it-py
+Markdown
+markdownify
+pdfminer.six
+python-magic # REPLACED python-magic-bin for Linux compatibility
+
+# === Image Processing ===
+Pillow==11.2.1
+pdf2image==1.17.0
+opencv-python
+paddleocr
+pyclipper
+layoutparser
+pytesseract
+
+# === Google Cloud Services ===
+google-cloud-storage
+google-auth
+
+# === Database ===
+psycopg2-binary # For PostgreSQL
+
+# === Utilities ===
+python-dotenv>=1.0.0
+cachetools
+ftfy==6.3.1
+chardet
+linkify-it-py
+
+# === Testing ===
+requests-mock==1.12.1
+pytest==8.3.5
+pytest-asyncio
+pytest-cov
+
+# === Linting, Formatting, Type Checking ===
+mypy
+ruff
+
 # Core AI/Agent Libraries
 crewai
 crewai-tools
