@@ -12,13 +12,17 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y libmagic1 && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY ./aiservice/requirements.txt .
+COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the entire aiservice directory
-COPY ./aiservice /app/
+# Copy the worker script and all necessary files
+COPY worker.py .
+COPY main.py .
+COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 
 # Debug: Show the contents of the /app directory
 RUN echo "=== Contents of /app ===" && \
@@ -30,4 +34,4 @@ RUN echo "=== Contents of /app ===" && \
 EXPOSE 8080
 
 # Run worker.py when the container launches
-CMD ["python", "-u", "/app/worker.py"] 
+CMD ["python", "-u", "worker.py"] 
