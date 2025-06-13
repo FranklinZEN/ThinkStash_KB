@@ -28,9 +28,10 @@ RUN npm run build
 FROM base as runner
 WORKDIR /app
 
-# Install wget, which is required by the migration step in cloudbuild.yaml
-# to download the Cloud SQL Proxy.
-RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+# Install wget and ca-certificates.
+# wget is required by the migration step in cloudbuild.yaml to download the Cloud SQL Proxy.
+# ca-certificates is required to validate the SSL certificate of storage.googleapis.com.
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 
