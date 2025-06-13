@@ -9,11 +9,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin/ms-playwright # Standard path for playwrig
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies needed for Playwright and other libraries
+# Install system dependencies needed for Playwright and other libraries.
+# Playwright-specific dependencies are included in this list.
 RUN apt-get update && apt-get install -y \
     libmagic1 \
     wget \
-    # Playwright-specific dependencies
     libnss3 \
     libnspr4 \
     libdbus-1-3 \
