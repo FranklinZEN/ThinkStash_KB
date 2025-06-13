@@ -7,7 +7,7 @@ import threading
 import json
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from main import background_worker_loop
+from aiservice.main import background_worker_loop
 
 # Apply asyncio policy patch for Windows if applicable
 if platform.system() == "Windows":

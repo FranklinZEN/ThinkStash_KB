@@ -52,12 +52,16 @@ RUN playwright install chromium
 
 # --- FINAL APPLICATION SETUP ---
 
-# Copy the entire aiservice application code into the /app directory
-COPY ./aiservice/ /app/
+# Copy the entire aiservice application code into a subdirectory named 'aiservice'
+COPY ./aiservice /app/aiservice
+
+# Add the root /app directory to the PYTHONPATH.
+# This allows Python to find the 'aiservice' module.
+ENV PYTHONPATH=/app
 
 # Make port 8080 available for the health check server
 EXPOSE 8080
 
-# Run worker.py when the container launches.
-# It's now in the root of WORKDIR (/app)
-CMD ["python", "-u", "worker.py"] 
+# Run the 'worker' module from within the 'aiservice' package.
+# Using -m ensures the Python path is handled correctly for a package.
+CMD ["python", "-u", "-m", "aiservice.worker"] 
