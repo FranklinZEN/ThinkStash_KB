@@ -281,207 +281,86 @@ class WebAcquisitionService(BaseService):
         self.logger.debug(f"Playwright: Finished fetching image details for {url}. Found details for {len(image_details_map)} images.")
         return image_details_map
 
-    async def _process_html_element(
-        self,
-        element: Union[Tag, str],
-        blocks: List[PreliminaryBlock],
-        base_url: str,
-        job_id: str,
-        user_id: Optional[str],
-        all_raw_images: List[RawImageInput],
-        img_idx_counter: List[int],
-        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]],
-        original_request_url: str,
-        first_heading_encountered: List[bool]
-    ) -> bool:
-        if isinstance(element, Comment):
-            return False
-
-        if isinstance(element, str):
-            text_content_stripped = element.strip()
-            if text_content_stripped:
-                if blocks and blocks[-1].type == "text":
-                    blocks[-1].text_content += " " + text_content_stripped
-                else:
-                    blocks.append(PreliminaryBlock(
-                        block_id=f"pb_{job_id}_{len(blocks)}",
-                        type="text",
-                        text_content=text_content_stripped,
-                        order=len(blocks)
-                    ))
-            return False
-
-        tag_name = element.name.lower() if element.name else ""
-        if not tag_name or tag_name in ['script', 'style', 'svg']:
-            return False
-
-        if tag_name in self.HEADING_TAGS:
-            heading_text = element.get_text(separator=" ", strip=True)
-            if heading_text:
-                if heading_text.lower().strip() in self.stop_headings:
-                    self.logger.info(f"FILTERED (Stop Heading): Encountered '{heading_text}'.")
-                    return True
-                
-                level = int(tag_name[1])
-                blocks.append(PreliminaryBlock(
-                    block_id=f"pb_{job_id}_{len(blocks)}",
-                    type="heading",
-                    text_content=heading_text,
-                    order=len(blocks),
-                    custom_attributes={'level': level}
-                ))
-                first_heading_encountered[0] = True
-            return False
-
-        if tag_name in ['pre', 'code']:
-            code_text = element.get_text(strip=False)
-            if code_text.strip():
-                lang_class = element.find_parent('pre').get('class', []) if element.find_parent('pre') else element.get('class', [])
-                lang = next((c.replace('language-', '') for c in lang_class if c.startswith('language-')), None)
-                blocks.append(PreliminaryBlock(
-                    block_id=f"pb_{job_id}_{len(blocks)}",
-                    type="code",
-                    text_content=code_text,
-                    order=len(blocks),
-                    custom_attributes={'language': lang}
-                ))
-            return False
-
-        if tag_name == 'img' or tag_name == 'graphic':
-            img_src = element.get('src') or element.get('target')
-            if not img_src:
-                return False
-
-            img_abs_url = urljoin(base_url, img_src.strip())
-            if not img_abs_url or img_abs_url in self.processed_image_urls:
-                if img_abs_url: self.logger.info(f"FILTERED (Already Processed URL): {img_abs_url}")
-                return False
-
-            self.processed_image_urls.add(img_abs_url)
-
-            details = playwright_image_details_map.get(img_abs_url) if playwright_image_details_map else None
-            if not details:
-                details = {'width': 0, 'height': 0, 'visible': True, 'alt': element.get('alt', ''), 'source_method': 'manual'}
-
-            if not details['visible'] or \
-               details['width'] < self.service_settings.min_image_width or \
-               details['height'] < self.service_settings.min_image_height or \
-               (details['width'] * details['height']) < self.service_settings.min_image_area:
-                self.logger.info(f"FILTERED (Size/Visibility): {img_abs_url} with details {details}")
-                return False
-
-            if not self._check_image_keyword_filters(img_abs_url, details.get('alt')):
-                return False
-
-            internal_image_id = f"web_{job_id}_img{img_idx_counter[0]}"
-            img_idx_counter[0] += 1
-            
-            final_alt = details.get('alt') or "Image"
-
-            blocks.append(PreliminaryBlock(
-                block_id=f"pb_{job_id}_{internal_image_id}",
-                type='image_placeholder',
-                image_id_ref=internal_image_id,
-                order=len(blocks),
-                text_content=final_alt
-            ))
-            all_raw_images.append(RawImageInput(
-                image_id=internal_image_id,
-                source_url=img_abs_url,
-                alt_text=final_alt,
-                source_document_id=job_id,
-                original_source_identifier_for_gcs_path=original_request_url,
-                source_type_for_gcs_path="web",
-                job_id_for_gcs_path=job_id
-            ))
-            self.logger.info(f"CREATED Image Block & RawImageInput (ID: {internal_image_id}) for <{tag_name}> URL: {img_abs_url}")
-            return False
-
-        if hasattr(element, 'contents'):
-            for child in element.contents:
-                if await self._process_html_element(child, blocks, base_url, job_id, user_id, all_raw_images, img_idx_counter, playwright_image_details_map, original_request_url, first_heading_encountered):
-                    return True
-        
-        return False
-
     async def _parse_and_structure_html(
         self,
-        html_content: str,
-        base_url: str, # URL associated with the html_content
-        original_request_url: str, # The very first URL user provided (for GCS path in RawImageInput & PW)
+        xml_content: str,
+        base_url: str,
+        original_request_url: str,
         job_id: str,
         user_id: Optional[str],
-        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]] # Details from Playwright
+        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]]
     ) -> Tuple[List[PreliminaryBlock], List[RawImageInput]]:
+        blocks: List[PreliminaryBlock] = []
+        all_raw_images: List[RawImageInput] = []
         
-        preliminary_blocks: List[PreliminaryBlock] = []
-        all_raw_images: List[RawImageInput] = [] # To be populated by _process_html_element
-        img_idx_counter: List[int] = [0] # Mutable int passed by reference
-        first_heading_encountered: List[bool] = [False] # ADDED: Flag for pre-heading image filtering
+        # We are now parsing the XML from trafilatura directly
+        soup = BeautifulSoup(xml_content, 'xml')
+        
+        main_content = soup.find('main')
+        if not main_content:
+            self.logger.warning("Trafilatura output did not contain a <main> tag. Parsing entire document.")
+            main_content = soup
 
-        self.logger.debug(f"WebService _parse_and_structure_html: Input html_content snippet (first 500 chars):\\n{html_content[:500] if html_content else 'None'}")
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        if soup.contents:
-            self.logger.debug(f"WebService _parse_and_structure_html: soup.contents length: {len(soup.contents)}")
-            self.logger.debug(f"WebService _parse_and_structure_html: type(soup.contents[0]): {type(soup.contents[0])}")
-            self.logger.debug(f"WebService _parse_and_structure_html: soup.contents[0] snippet (first 100 chars):\\n{str(soup.contents[0])[:100] if soup.contents[0] else 'None'}")
-        else:
-            self.logger.debug("WebService _parse_and_structure_html: soup.contents is empty.")
+        order = 0
+        img_idx_counter = 0
 
-        # Determine the main content container to process.
-        # If html_content is from Trafilatura, it's likely already focused.
-        # Otherwise, find common main content tags or fall back to body.
-        # Note: Trafilatura's output might not have a single <article> or <main> if it combines sections.
-        # It often produces a sequence of <p>, <head level="h2">, <graphic>, etc.
-        # So, using soup (which is the Trafilatura output if available) directly might be best.
-        
-        # The root for processing will be the entire soup object derived from main_content_html_to_parse
-        # In _process_html_element, we'll iterate its children.
-        # Children of the root 'soup' object are usually the top-level tags of the parsed document fragment.
-        
-        for child_element in soup.contents: # Iterate over top-level elements in the parsed HTML
-            await self._process_html_element(
-                child_element, 
-                preliminary_blocks, 
-                base_url, # base_url is where html_content came from
-                job_id, 
-                user_id,
-                all_raw_images,
-                img_idx_counter,
-                playwright_image_details_map,
-                original_request_url,
-                first_heading_encountered
-            )
-        
-        # Post-processing: Consolidate adjacent text blocks if necessary
-        # (This logic can be enhanced or moved to ContentStructuringService)
-        consolidated_blocks: List[PreliminaryBlock] = []
-        if preliminary_blocks:
-            current_block = preliminary_blocks[0]
-            for next_block in preliminary_blocks[1:]:
-                current_text_val = getattr(current_block, 'text_content', None)
-                next_text_val = getattr(next_block, 'text_content', None)
+        for element in main_content.find_all(True, recursive=True):
+            if element.name == 'head':
+                heading_level_str = element.get('rend', 'h2').replace('h', '')
+                try:
+                    level = int(heading_level_str)
+                except (ValueError, TypeError):
+                    level = 2 # Default to h2 if parsing fails
+                
+                text = element.get_text(strip=True)
+                if text:
+                    blocks.append(PreliminaryBlock(
+                        block_id=f"{job_id}_head_{order}",
+                        order=order,
+                        type='heading',
+                        text_content=text,
+                        heading_level=level
+                    ))
+                    order += 1
+            
+            elif element.name == 'p':
+                text = element.get_text(strip=True)
+                if text:
+                    blocks.append(PreliminaryBlock(
+                        block_id=f"{job_id}_p_{order}",
+                        order=order,
+                        type='text',
+                        text_content=text
+                    ))
+                    order += 1
 
-                if current_block.type == "text" and next_block.type == "text" and \
-                   current_text_val and next_text_val: 
-                    self.logger.debug(f"Consolidating text block {next_block.block_id} into {current_block.block_id}")
-                    current_block.text_content = current_text_val + " " + next_text_val
-                else:
-                    consolidated_blocks.append(current_block)
-                    current_block = next_block
-            consolidated_blocks.append(current_block) 
-        
-        if len(consolidated_blocks) != len(preliminary_blocks) and consolidated_blocks:
-            self.logger.debug(f"Re-assigning order to {len(consolidated_blocks)} consolidated blocks.")
-            for i, block in enumerate(consolidated_blocks):
-                block.order = i
-        
-        final_blocks = [b for b in consolidated_blocks if not (b.type == "text" and not getattr(b, 'text_content', "").strip())] # Remove empty text blocks
+            elif element.name == 'graphic':
+                src = element.get('src')
+                if src:
+                    abs_url = urljoin(base_url, src)
+                    image_id = f"web_{job_id}_img{img_idx_counter}"
+                    
+                    # Create the RawImageInput for the ImageProcessingService
+                    all_raw_images.append(RawImageInput(
+                        image_id=image_id,
+                        source_url=abs_url,
+                        alt_text=element.get('alt'),
+                        original_source_identifier_for_gcs_path=original_request_url
+                    ))
+                    
+                    # Create a placeholder block for the ContentStructuringService
+                    blocks.append(PreliminaryBlock(
+                        block_id=f"{job_id}_img_placeholder_{order}",
+                        order=order,
+                        type='image_placeholder',
+                        image_id_ref=image_id
+                    ))
+                    order += 1
+                    img_idx_counter += 1
 
+            # Add logic for other tags like lists (<ul>, <ol>, <li>) and code (<code>, <pre>) here if needed
 
-        self.logger.info(f"WebService _parse_and_structure_html: Blocks: {len(final_blocks)}, Final Raw Images: {len(all_raw_images)}")
-        return final_blocks, all_raw_images
+        return blocks, all_raw_images
 
     async def _is_content_behind_paywall(self, extracted_html_content: Optional[str], domain: Optional[str]) -> bool:
         """Checks if the extracted content is likely behind a paywall."""
@@ -675,7 +554,7 @@ class WebAcquisitionService(BaseService):
             # Step 5: Parse the chosen HTML content and structure it, integrating Playwright details
             # First pass: Parse Trafilatura's output (if any)
             parsed_blocks_pass1, raw_images_pass1 = await self._parse_and_structure_html(
-                html_content=main_content_html_to_parse, 
+                xml_content=main_content_html_to_parse, 
                 base_url=final_url_after_redirects,    
                 original_request_url=final_url_after_redirects, 
                 job_id=job_id_for_run,
