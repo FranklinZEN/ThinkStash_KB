@@ -72,3 +72,6 @@ pytest-cov
 # === Linting, Formatting, Type Checking ===
 mypy
 ruff
+
+# === Additional Dependencies ===
+gunicorn

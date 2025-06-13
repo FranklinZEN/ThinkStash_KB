@@ -703,7 +703,9 @@ class FileAcquisitionService(BaseService):
         finally:
             if temp_gcs_file_path and os.path.exists(temp_gcs_file_path):
                 try:
-                    await loop.run_in_executor(None, os.unlink, temp_gcs_file_path)
+                    # Get the current running event loop to ensure cleanup can be scheduled.
+                    current_loop = asyncio.get_running_loop()
+                    await current_loop.run_in_executor(None, os.unlink, temp_gcs_file_path)
                     self.logger.info(f"FileAcquisitionService: Successfully deleted temporary GCS file: {temp_gcs_file_path}")
                 except Exception as e_unlink:
                     self.logger.error(f"FileAcquisitionService: Failed to delete temporary GCS file {temp_gcs_file_path}: {e_unlink}")
