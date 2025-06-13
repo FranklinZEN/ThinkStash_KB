@@ -6,7 +6,7 @@ from typing import List, Optional, Any, Dict
 
 # Assuming pipeline_models.py is at aiservice.app.models.pipeline_models
 # Adjust import path if necessary based on your project structure.
-from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, EnrichedImageMetadata
+from aiservice.app.models.pipeline_models import PreliminaryBlock, DocumentMetadata, EnrichedImageMetadata, RawImageInput
 
 class ContentStructuringInput(BaseModel):
     extracted_text_content_ref: str = Field(..., description="Reference to the main text content in DataStore.")
@@ -24,11 +24,12 @@ class ContentStructuringOutput(BaseModel):
     error_message: Optional[str] = None 
 
 class ContentStructuringServiceInput(BaseModel):
-    preliminary_blocks: List[PreliminaryBlock] = Field(..., description="List of preliminary blocks from acquisition services.")
-    enriched_images: List[EnrichedImageMetadata] = Field(..., description="List of enriched image metadata from ImageProcessingService.")
-    document_metadata: DocumentMetadata = Field(..., description="Document metadata from acquisition services.")
-    job_id: Optional[str] = Field(None, description="Optional job identifier.")
-    user_id: Optional[str] = Field(None, description="Identifier of the user who initiated the process.")
+    preliminary_blocks: List[PreliminaryBlock] = Field(..., description="List of preliminary blocks from acquisition service.")
+    enriched_images: Optional[List[EnrichedImageMetadata]] = Field(default_factory=list, description="List of image metadata objects after processing.")
+    raw_images: Optional[List[RawImageInput]] = Field(default_factory=list, description="The original raw image inputs from acquisition, used for fallbacks.")
+    document_metadata: Optional[DocumentMetadata] = Field(None, description="Metadata about the source document.")
+    job_id: Optional[str] = Field(None, description="Job identifier.")
+    user_id: Optional[str] = Field(None, description="User identifier.")
 
 # Output model for ContentStructuringService is implicitly List[ContentBlock]
 # from aiservice.app.models.orchestration_models.py, so no specific output model here. 

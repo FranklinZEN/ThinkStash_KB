@@ -8,52 +8,65 @@ A dynamic personal knowledge base application built with Next.js and Chakra UI.
 - npm (comes with Node.js)
 - Docker Desktop (required for the local PostgreSQL database)
 
-## Getting Started
+## Local Development Setup
 
-Follow these steps to get the development environment running:
+This section provides the official, step-by-step instructions for running the complete ThinkStash application stack (Webapp, AI Worker, Database) on your local machine. This is the required setup for all development and debugging.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd knowledge-card-system
-    ```
+### 1. Environment Variable Setup
 
-2.  **Set Node.js version (if using NVM):**
-    ```bash
-    nvm use
-    ```
+You will need to create two environment files. **These files should not be committed to git.**
 
-3.  **Install dependencies:**
-    ```bash
-    npm install
-    ```
+A. **Webapp Environment (`.env.local`):**
+   - In the project root directory, create a file named `.env.local`.
+   - Add the following content:
+     ```
+     DATABASE_URL="postgresql://user:password@localhost:5433/knowledge_cards?sslmode=disable"
+     NEXTAUTH_SECRET="a-secret-for-local-development"
+     ```
 
-4.  **Set up environment variables:**
-    - Copy the example environment file:
+B. **AI Worker Environment (`aiservice/.env.worker`):**
+   - In the `aiservice/` directory, create a file named `.env.worker`.
+   - This file must contain all the environment variables the worker needs to run. You will need to get your own `GEMINI_API_KEY`.
+     ```
+     # In aiservice/.env.worker
+     DATABASE_URL="postgresql://user:password@localhost:5433/knowledge_cards?sslmode=disable"
+     GEMINI_API_KEY="your-google-ai-api-key"
+     GCS_BUCKET_NAME="your-gcs-bucket-name"
+     PYTHONUNBUFFERED=1
+     PYTHONDONTWRITEBYTECODE=1
+     # ... (copy all other variables from the Phoenix Plan or cloudbuild.yaml) ...
+     ```
+
+### 2. Running the Application
+
+Follow these steps in order.
+
+1.  **Start the Local Database:**
+    - Open a terminal in the project root.
+    - Run the following command to start the PostgreSQL database in a Docker container.
       ```bash
-      cp .env.example .env
+      docker-compose up -d postgres
       ```
-    - Open the `.env` file and fill in the required variables:
-      - `DATABASE_URL`: Should match the Docker setup (e.g., `postgresql://user:password@localhost:5433/knowledge_cards?schema=public`)
-      - `NEXTAUTH_SECRET`: Generate a secure secret (e.g., using `openssl rand -base64 32`) 
-        *(Note: Need to run `openssl rand -base64 32` or similar and add to .env)*
 
-5.  **Start the local database:**
-    ```bash
-    docker compose up -d
-    ```
+2.  **Set Up the Database Schema:**
+    - This command applies any pending migrations to the local database, creating the necessary tables.
+      ```bash
+      npx prisma migrate dev
+      ```
 
-6.  **Run database migrations:**
-    ```bash
-    npx prisma migrate dev
-    ```
+3.  **Start the Webapp:**
+    - In a new terminal, run the Next.js development server.
+      ```bash
+      npm run dev
+      ```
+    - The web application will be available at `http://localhost:3000`.
 
-7.  **Run the development server:**
-    ```bash
-    npm run dev
-    ```
-
-    Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+4.  **Start the AI Worker:**
+    - In another new terminal, run the worker startup script.
+      ```bash
+      sh aiservice/run_local_worker.sh
+      ```
+    - This will start the Python worker, which will listen for and process background tasks.
 
 ## Tech Stack
 

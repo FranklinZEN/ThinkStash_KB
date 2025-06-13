@@ -49,18 +49,24 @@ class WebServiceSpecificSettings(BaseSettings):
     )
 
 class Settings(BaseSettings):
-    # Application settings
+    # --- General Application Settings ---
     app_name: str = "ThinkStash AI Service"
-    debug_mode: bool = Field(default=False, description="Enable debug mode for more verbose logging.")
+    description: str = "Backend service for AI-powered content processing and analysis."
+    version: str = "0.2.0"
+    # Added debug_mode to the main Settings class
+    debug_mode: bool = Field(default=False, description="Enable debug logging and behavior across the application.")
 
-    # Database URL (for PostgreSQL)
-    database_url: Optional[str] = Field(None, env="DATABASE_URL", description="PostgreSQL database connection URL.")
+    # --- Database Settings ---
+    database_url: str = Field(..., description="Primary PostgreSQL connection URL.")
+    db_pool_min_size: int = Field(default=2, description="Minimum number of connections in the database pool.")
+    db_pool_max_size: int = Field(default=10, description="Maximum number of connections in the database pool.")
 
+    # --- API Keys & Secrets ---
+    openai_api_key: Optional[str] = Field(None, description="API key for OpenAI services.")
+    gemini_api_key: Optional[str] = Field(None, description="API key for Google Gemini services.")
+    
     # LLM Configuration - Focused on Gemini via OpenAI Compatibility Layer
     # This will load GEMINI_API_KEY from the .env file
-    gemini_api_key: Optional[str] = Field(None, env="GEMINI_API_KEY", description="API key for Gemini models (used by OpenAI compatibility layer).")
-    
-    # Flag to explicitly use the Gemini via OpenAI compatibility layer
     use_gemini_via_openai_compatibility: bool = Field(default=True, env="USE_GEMINI_VIA_OPENAI_COMPATIBILITY", description="Flag to enable Gemini via OpenAI compatibility layer.")
     
     # Model name for the text generation, as used by the OpenAI compatibility layer
@@ -76,14 +82,6 @@ class Settings(BaseSettings):
     
     # Multimodal model - align with your .env or set a sensible default
     default_multimodal_llm_model: str = Field(default="models/gemini-2.5-flash", env="DEFAULT_MULTIMODAL_MODEL_NAME", description="Default LLM for multimodal tasks.")
-
-    # Optional: Keep OpenAI API key if you plan to use OpenAI models directly for some tasks
-    openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY", description="Direct OpenAI API Key, if needed for other models.")
-
-    # --- Commented out fields related to direct Google GenAI integration to avoid confusion ---
-    # google_api_key: Optional[str] = Field(None, env="GOOGLE_API_KEY", description="API key for Google AI services (Gemini).")
-    # default_llm_model: str = Field(default="gemini-1.5-flash-latest", env="DEFAULT_LLM_MODEL", description="Default LLM model for text generation/analysis. Ensure .env matches desired model.") 
-    # default_multimodal_llm_model: str = Field(default="gemini-1.5-pro-latest", env="DEFAULT_MULTIMODAL_LLM_MODEL", description="Default LLM for multimodal tasks (e.g., vision).")
 
     # Service Behavior Flags
     use_llm_for_routing: bool = Field(default=False, description="Use LLM for routing (V2.4 style, should be False for V2.5 deterministic). Set to False for V2.5.")
@@ -134,11 +132,14 @@ class Settings(BaseSettings):
     # Nested WebServiceSpecificSettings
     web_service: WebServiceSpecificSettings = Field(default_factory=WebServiceSpecificSettings)
 
+    # New setting for orchestrator logic
+    long_article_char_threshold: int = Field(default=3000, env="LONG_ARTICLE_CHAR_THRESHOLD")
+
     model_config = SettingsConfigDict(
-        env_file=_ENV_FILE_PATH, # Use the explicitly determined path
-        env_file_encoding='utf-8', 
-        extra='ignore', 
-        case_sensitive=False # Important for .env variable names like GEMINI_API_KEY
+        env_file=_ENV_FILE_PATH,
+        env_file_encoding='utf-8',
+        extra='ignore',
+        case_sensitive=False
     )
 
 settings = Settings()

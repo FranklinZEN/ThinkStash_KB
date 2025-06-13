@@ -11,43 +11,36 @@ class OrchestrationInput(BaseModel):
     user_id: Optional[str] = Field(default=None, description="User identifier")
     output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
 
+# --- BlockNote Compliant Models ---
+
+class InlineContent(BaseModel):
+    type: str = Field(..., description="e.g., 'text', 'link'")
+    text: str
+    styles: Dict[str, Any] = Field(default_factory=dict)
+    href: Optional[str] = Field(None, description="URL for 'link' type content")
+
+class BlockProps(BaseModel):
+    level: Optional[int] = Field(None, description="Heading level (1-6)")
+    language: Optional[str] = Field(None, description="Language for code blocks")
+    ordered: Optional[bool] = Field(None, description="For list blocks")
+    url: Optional[str] = Field(None, description="URL for image blocks")
+    caption: Optional[str] = Field(None, description="Caption for image blocks")
+    # Add other props as needed, e.g., backgroundColor, textColor
+
 class ContentBlock(BaseModel):
-    block_id: str = Field(..., description="Unique ID for this block, inherited from PreliminaryBlock.")
-    tmp_id: Optional[str] = Field(None, description="Temporary ID used during processing, can be same as block_id or different.")
-    user_id: str = Field(..., description="Identifier of the user associated with this content block.")
-    document_id: str = Field(..., description="Identifier of the source document for this content block.")
-    type: str = Field(..., description="Type of content (e.g., 'text', 'heading', 'list', 'image', 'code_snippet', 'math_text', 'table').")
-    order_index: Optional[int] = Field(None, description="Sequential order of the block in the reconstructed content.")
+    id: str = Field(..., description="Unique ID for this block.")
+    type: str = Field(..., description="BlockNote-compatible type (e.g., 'paragraph', 'heading', 'bulletListItem', 'image').")
+    props: BlockProps = Field(default_factory=BlockProps)
+    content: Union[List[InlineContent], str] = Field(default_factory=list, description="For text-based blocks, a list of InlineContent. For other blocks like 'image', this can be empty or hold simple content.")
+    children: List['ContentBlock'] = Field(default_factory=list)
     
-    # Common fields, often populated
-    content: Optional[str] = Field(None, description="Primary text content for types like 'text', 'heading', 'code_snippet', 'math_text', 'table' (e.g., HTML table).")
-    page_number: Optional[int] = Field(None, description="Page number in the original document.")
-    bbox: Optional[List[float]] = Field(None, description="Bounding box [x0, y0, x1, y1] on the page, if applicable.")
-
-    # Fields specific to type: 'heading'
-    level: Optional[int] = Field(None, description="For 'heading' type, the heading level (1-6).")
-
-    # Fields specific to type: 'code_snippet'
-    language: Optional[str] = Field(None, description="For 'code_snippet' type, the programming language.")
-
-    # Fields specific to type: 'list'
-    items: Optional[List[Union[str, Dict[str, Any]]]] = Field(None, description="For 'list' type, holds list item contents. Items can be simple strings or nested structures for complex/nested lists.")
-    ordered: Optional[bool] = Field(None, description="For 'list' type, true if the list is ordered, false if unordered.")
-    list_start_number: Optional[int] = Field(None, description="For ordered 'list' type, the starting number if not 1.")
-
-    # Fields specific to type: 'image'
-    # These fields are populated by looking up EnrichedImageMetadata using image_id_ref
-    image_id_ref: Optional[str] = Field(None, description="For 'image' type, reference to EnrichedImageMetadata.image_id.")
-    gcs_url: Optional[str] = Field(None, description="For 'image' type, URL of the image in GCS.")
-    alt_text: Optional[str] = Field(None, description="For 'image' type, original or LLM-refined alt text.")
-    caption: Optional[str] = Field(None, description="For 'image' type, original or LLM-refined caption.")
-    llm_description: Optional[str] = Field(None, description="For 'image' type, LLM-generated description of the image content.")
-    width: Optional[int] = Field(None, description="For 'image' type, image width in pixels.")
-    height: Optional[int] = Field(None, description="For 'image' type, image height in pixels.")
-    
-    # Ensure no old image fields like original_source_identifier are lingering if they are now part of EnrichedImageMetadata
-    # The plan was to have ContentStructuringService create 'image' ContentBlock by finding matching EnrichedImageMetadata.
-    # So, ContentBlock itself stores the resolved image details.
+    # --- Deprecated/Legacy Fields for ThinkStash Backend ---
+    # These are kept for reference during transition but are not part of the core BlockNote structure.
+    # The data they hold should be mapped to the new structure.
+    block_id: Optional[str] = Field(None, description="[DEPRECATED] Use id.")
+    user_id: Optional[str] = Field(None, description="[DEPRECATED] Data is now scoped to the document/card.")
+    document_id: Optional[str] = Field(None, description="[DEPRECATED] Data is now scoped to the document/card.")
+    order_index: Optional[int] = Field(None, description="[DEPRECATED] Order is implicit in the list.")
 
 class OrchestrationStatusCodeEnum(str, enum.Enum):
     """Standardized status codes for orchestration and processing."""
@@ -97,4 +90,5 @@ class OrchestrationOutput(BaseModel):
     original_content_blocks: List[ContentBlock] = []
     processed_images_data: Dict[str, EnrichedImageMetadata] = Field(default_factory=dict, description="Dictionary mapping image_id to EnrichedImageMetadata.")
     document_metadata: Optional[DocumentMetadata] = Field(None, description="Comprehensive metadata about the processed document.")
-    error_message: Optional[str] = None 
+    error_message: Optional[str] = None
+    card_id: Optional[str] = Field(None, description="The ID of the newly created KnowledgeCard on success.") 

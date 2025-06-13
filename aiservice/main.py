@@ -26,6 +26,7 @@ from aiservice.app.services.acquisition.file_service import FileAcquisitionServi
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock
+from aiservice.app.services.task_db_service import TaskDBService
 # --- End Service Imports ---
 
 # --- Database and Task Models ---
@@ -40,37 +41,33 @@ class TaskPayload(BaseModel):
     status: str
     payload: Dict[str, Any]
 
+# --- Global Service Instances ---
+# By creating instances here, they are shared across the application's lifespan
+settings = Settings()
+task_db_service = TaskDBService(min_conn=settings.db_pool_min_size, max_conn=settings.db_pool_max_size)
+routing_s = RoutingService(settings=settings)
+img_proc_s = ImageProcessingService(settings=settings)
+content_struct_s = ContentStructuringService(settings=settings)
+orchestrator_instance = ParallelOrchestrator(
+    task_db_service=task_db_service,
+    routing_service=routing_s,
+    image_processing_service=img_proc_s,
+    content_structuring_service=content_struct_s,
+    settings=settings
+)
+
 # --- FastAPI App Definition ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the background task when the application starts
-    asyncio.create_task(background_worker_loop())
+    # This block runs on startup
+    # The services are already initialized above
+    print("AI Service started. Orchestrator and services are initialized.")
     yield
-    # (No cleanup needed for this simple case)
+    # This block runs on shutdown
+    print("AI Service shutting down. Closing database connection pool.")
+    task_db_service.close_pool()
 
 app = FastAPI(title="ThinkStash AI Worker Service", lifespan=lifespan)
-
-# --- Orchestrator Factory ---
-# This function creates an instance of the orchestrator and all its dependencies.
-# It's based on the get_orchestrator function from the stable build's endpoints.py.
-def get_orchestrator_instance() -> ParallelOrchestrator:
-    settings = Settings()
-    routing_s = RoutingService(settings=settings)
-    web_acq_s = WebAcquisitionService(settings=settings)
-    pdf_acq_s = PDFAcquisitionService(settings=settings)
-    file_acq_s = FileAcquisitionService(settings=settings)
-    img_proc_s = ImageProcessingService(settings=settings)
-    content_struct_s = ContentStructuringService(settings=settings)
-    
-    return ParallelOrchestrator(
-        routing_service=routing_s,
-        web_acquisition_service=web_acq_s,
-        pdf_acquisition_service=pdf_acq_s,
-        file_acquisition_service=file_acq_s,
-        image_processing_service=img_proc_s,
-        content_structuring_service=content_struct_s,
-        settings=settings
-    )
 
 def json_serializer(obj):
     """JSON serializer for objects not serializable by default json code"""
@@ -78,23 +75,17 @@ def json_serializer(obj):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
-def get_db_connection():
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable is not set.")
-    return psycopg2.connect(database_url)
-
 async def process_single_task():
     """
     This function fetches and processes one pending task from the database.
-    It's the core logic that was previously in the /invoke endpoint.
+    It now uses the global orchestrator instance.
     """
-    conn = None
     task_id = None
+    conn = None
     try:
-        conn = get_db_connection()
-        conn.autocommit = False
-
+        # We still need a connection here to fetch the task itself.
+        # This part of the logic remains outside the main orchestrator transaction.
+        conn = task_db_service.get_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute("""
                 SELECT id, "userId", type, status, payload FROM "Task"
@@ -106,20 +97,17 @@ async def process_single_task():
             task_record = cur.fetchone()
 
             if not task_record:
-                # No pending tasks, which is a normal state.
-                return
+                return # No pending tasks, normal exit
 
             task = TaskPayload(**task_record)
             task_id = task.id
-
-            print(f"Processing task: {task_id} of type {task.type}")
-            cur.execute(
-                'UPDATE "Task" SET status = %s, "progressMessage" = %s WHERE id = %s',
-                ('PROCESSING', 'Worker picked up task...', task_id)
-            )
+            print(f"Picked up task: {task_id} of type {task.type}")
+            # The 'PROCESSING' status will now be set by the orchestrator
+            # inside its own transaction. We commit the task pickup here.
             conn.commit()
 
-        orchestrator = get_orchestrator_instance()
+        # The orchestrator now handles its own DB transaction, including setting
+        # status to PROCESSING, COMPLETED, or FAILED.
         orchestration_input = None
         
         # --- Task Routing ---
@@ -135,7 +123,7 @@ async def process_single_task():
             )
         elif task.type == 'RECONSTRUCT_AND_ANALYZE_FILE':
             gcs_path = task.payload.get("gcsPath")
-            file_type = task.payload.get("fileAcquisitionType") # e.g., 'pdf', 'docx'
+            file_type = task.payload.get("fileAcquisitionType")
             if not gcs_path or not file_type:
                 raise ValueError("Task payload for RECONSTRUCT_AND_ANALYZE_FILE is missing 'gcsPath' or 'fileAcquisitionType'")
             orchestration_input = OrchestrationInput(
@@ -144,61 +132,48 @@ async def process_single_task():
                 user_id=task.userId,
                 job_id=task_id
             )
-        # Add routing for other task types here in the future
-        elif task.type in ['REWRITE_CONTENT', 'GENERATE_KEYWORDS', 'GENERATE_TITLE']:
-            raise NotImplementedError(f"Task type '{task.type}' is not yet implemented in the worker.")
         else:
             raise ValueError(f"Unknown or unsupported task type: {task.type}")
 
-        orchestrator_result = await orchestrator.process(orchestration_input)
+        # The orchestrator's process method now returns a ServiceResult
+        orchestrator_result = await orchestrator_instance.process(orchestration_input)
 
-        if not orchestrator_result.is_success() or not orchestrator_result.data:
-            error_message = orchestrator_result.error_message or "Orchestration failed without a message."
-            raise ValueError(error_message)
-
-        # Correctly unpack the OrchestrationOutput object
-        orchestration_output: OrchestrationOutput = orchestrator_result.data
-        
-        # The content blocks are already structured with images.
-        content_blocks_as_dicts = [block.model_dump(exclude_none=True) for block in orchestration_output.original_content_blocks]
-
-        # Use a more generic result structure based on task type
-        final_result = {}
-        if task.type == 'RECONSTRUCT_AND_ANALYZE':
-             card_title = orchestration_output.extracted_title or "Untitled Card"
-             final_result = {
-                 "title": card_title,
-                 "contentBlocks": content_blocks_as_dicts,
-                 "keywords": [], # Placeholder for now
-                 "document_metadata": orchestration_output.document_metadata.model_dump(exclude_none=True) if orchestration_output.document_metadata else None
-             }
-
-        with conn.cursor() as cur:
-            cur.execute(
-                'UPDATE "Task" SET status = %s, "progressMessage" = %s, result = %s WHERE id = %s',
-                ('COMPLETED', 'Task finished successfully', json.dumps(final_result, default=json_serializer), task_id)
-            )
-            conn.commit()
-            print(f"Task {task_id} completed successfully.")
+        # The success or failure, including DB updates, is now fully handled
+        # by the orchestrator. We just log the outcome here.
+        if orchestrator_result.is_success():
+            print(f"Task {task_id} processed successfully by orchestrator.")
+        else:
+            print(f"Task {task_id} failed processing by orchestrator: {orchestrator_result.error_message}")
 
     except Exception as e:
-        print(f"Processing failed for task {task_id}: {e}")
-        if conn and task_id:
-            conn.rollback()
-            error_payload = json.dumps({
-                "userMessage": f"Processing failed for task {task_id}.",
-                "errorCode": "PIPELINE_FAILURE",
-                "details": str(e)
-            })
-            with conn.cursor() as cur:
-                cur.execute(
-                    'UPDATE "Task" SET status = %s, error = %s WHERE id = %s',
-                    ('FAILED', error_payload, task_id)
-                )
-            conn.commit()
+        # This block catches errors from fetching the task or unhandled exceptions
+        # from the orchestrator logic if it doesn't return a ServiceResult.
+        print(f"Outer processing loop failed for task {task_id}: {e}", file=sys.stderr)
+        if task_id:
+            # Last-ditch effort to mark the task as failed if something went wrong
+            # outside the orchestrator's transaction management.
+            error_conn = None
+            try:
+                error_conn = task_db_service.get_connection()
+                error_payload = json.dumps({
+                    "userMessage": f"A critical error occurred in the main worker loop for task {task_id}.",
+                    "errorCode": "WORKER_LOOP_UNHANDLED_EXCEPTION",
+                    "details": str(e)
+                })
+                with error_conn.cursor() as cur:
+                    cur.execute(
+                        'UPDATE "Task" SET status = %s, error = %s WHERE id = %s AND status != %s',
+                        ('FAILED', error_payload, task_id, 'COMPLETED')
+                    )
+                error_conn.commit()
+            except Exception as db_err:
+                print(f"CRITICAL: Could not mark task {task_id} as FAILED in DB. Error: {db_err}", file=sys.stderr)
+                if error_conn: error_conn.rollback()
+            finally:
+                if error_conn: task_db_service.release_connection(error_conn)
     finally:
         if conn:
-            conn.close()
+            task_db_service.release_connection(conn)
 
 async def background_worker_loop():
     """A loop that runs in the background to process tasks."""
@@ -237,4 +212,4 @@ if __name__ == "__main__":
     # e.g., export DATABASE_URL=...
     if not os.getenv("DATABASE_URL"):
         print("Warning: DATABASE_URL is not set. The worker will fail if it needs the database.")
-    uvicorn.run(app, host="0.0.0.0", port=8080) 
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080))) 
