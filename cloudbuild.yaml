@@ -126,11 +126,30 @@ steps:
         --service-account=${_CLOUD_RUN_SA_EMAIL} \
         --add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance \
         --cpu=1 \
-        --memory=512Mi \
+        --memory=1Gi \
         --min-instances=1 \
         --max-instances=3 \
         --port=8080 \
-        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest
+        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest \
+        --set-env-vars=^##^
+          PYTHONUNBUFFERED=1,##
+          PYTHONDONTWRITEBYTECODE=1,##
+          USE_GEMINI_VIA_OPENAI_COMPATIBILITY=true,##
+          GEMINI_TEXT_MODEL_COMPAT=models/gemini-2.5-flash,##
+          GEMINI_COMPATIBILITY_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/,##
+          WEB_USE_PLAYWRIGHT_FOR_IMAGE_FILTERING=true,##
+          WEB_MIN_IMAGE_WIDTH=300,##
+          WEB_MIN_IMAGE_HEIGHT=75,##
+          WEB_MIN_IMAGE_AREA=22500,##
+          WEB_PLAYWRIGHT_PAGE_LOAD_TIMEOUT_MS=30000,##
+          WEB_PLAYWRIGHT_NETWORK_IDLE_TIMEOUT_MS=10000,##
+          WEB_MINIMAL_CONTENT_LENGTH_THRESHOLD=500,##
+          IMG_FILTER_MIN_WIDTH_PX=75,##
+          IMG_FILTER_MIN_HEIGHT_PX=75,##
+          IMG_FILTER_MIN_AREA=5000,##
+          IMG_FILTER_MAX_ASPECT_RATIO_DEVIATION=999.0,##
+          DEFAULT_REQUEST_TIMEOUT_SECONDS=30,##
+          MAX_CONCURRENT_TASKS=10
 
 # Define available secrets from Secret Manager
 availableSecrets:
