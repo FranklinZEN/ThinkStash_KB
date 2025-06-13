@@ -133,6 +133,17 @@ async def process_single_task():
                 user_id=task.userId,
                 job_id=task_id
             )
+        elif task.type == 'RECONSTRUCT_AND_ANALYZE_FILE':
+            gcs_path = task.payload.get("gcsPath")
+            file_type = task.payload.get("fileAcquisitionType") # e.g., 'pdf', 'docx'
+            if not gcs_path or not file_type:
+                raise ValueError("Task payload for RECONSTRUCT_AND_ANALYZE_FILE is missing 'gcsPath' or 'fileAcquisitionType'")
+            orchestration_input = OrchestrationInput(
+                source_identifier=gcs_path,
+                source_type=file_type,
+                user_id=task.userId,
+                job_id=task_id
+            )
         # Add routing for other task types here in the future
         elif task.type in ['REWRITE_CONTENT', 'GENERATE_KEYWORDS', 'GENERATE_TITLE']:
             raise NotImplementedError(f"Task type '{task.type}' is not yet implemented in the worker.")

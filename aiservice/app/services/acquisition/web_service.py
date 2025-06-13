@@ -288,7 +288,9 @@ class WebAcquisitionService(BaseService):
         original_request_url: str,
         job_id: str,
         user_id: Optional[str],
-        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]]
+        playwright_image_details_map: Optional[Dict[str, Dict[str, Any]]],
+        source_document_id: str,
+        source_type: str,
     ) -> Tuple[List[PreliminaryBlock], List[RawImageInput]]:
         blocks: List[PreliminaryBlock] = []
         all_raw_images: List[RawImageInput] = []
@@ -340,15 +342,16 @@ class WebAcquisitionService(BaseService):
                     abs_url = urljoin(base_url, src)
                     image_id = f"web_{job_id}_img{img_idx_counter}"
                     
-                    # Create the RawImageInput for the ImageProcessingService
                     all_raw_images.append(RawImageInput(
                         image_id=image_id,
                         source_url=abs_url,
                         alt_text=element.get('alt'),
-                        original_source_identifier_for_gcs_path=original_request_url
+                        original_source_identifier_for_gcs_path=original_request_url,
+                        source_document_id=source_document_id,
+                        source_type_for_gcs_path=source_type,
+                        job_id_for_gcs_path=job_id
                     ))
                     
-                    # Create a placeholder block for the ContentStructuringService
                     blocks.append(PreliminaryBlock(
                         block_id=f"{job_id}_img_placeholder_{order}",
                         order=order,
@@ -553,17 +556,16 @@ class WebAcquisitionService(BaseService):
             
             # Step 5: Parse the chosen HTML content and structure it, integrating Playwright details
             # First pass: Parse Trafilatura's output (if any)
-            parsed_blocks_pass1, raw_images_pass1 = await self._parse_and_structure_html(
+            preliminary_blocks, raw_images = await self._parse_and_structure_html(
                 xml_content=main_content_html_to_parse, 
                 base_url=final_url_after_redirects,    
                 original_request_url=final_url_after_redirects, 
                 job_id=job_id_for_run,
                 user_id=user_id_for_run,
-                playwright_image_details_map=playwright_image_details_map
+                playwright_image_details_map=playwright_image_details_map,
+                source_document_id=job_id_for_run, # job_id serves as the document_id
+                source_type='url' # source_type is 'url' for this service
             )
-
-            preliminary_blocks = parsed_blocks_pass1
-            raw_images = raw_images_pass1
 
             duration = time.time() - start_time
             self.logger.info(f"WebService execution for {final_url_after_redirects} completed in {duration:.2f}s. Blocks: {len(preliminary_blocks)}, Images: {len(raw_images)}")

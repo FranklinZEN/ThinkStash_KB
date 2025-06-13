@@ -8,6 +8,10 @@ const withBundleAnalyzer = bundleAnalyzer({
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: false, // Disable React Strict Mode for diagnostics
+  webpack: (config, { isServer }) => {
+    // ... (rest of your webpack config)
+    return config;
+  },
 };
 
 export default withBundleAnalyzer(nextConfig); 

@@ -166,6 +166,10 @@ export default function NewCardPage() {
   >(undefined);
   const [editorKey, setEditorKey] = useState(Date.now());
 
+  // New state for file upload
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isFileUploading, setIsFileUploading] = useState(false);
+
   // Keyword states
   const [keywords, setKeywords] = useState<string[]>([]);
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
@@ -879,6 +883,53 @@ export default function NewCardPage() {
     setDisplayMode('rewritten');
   };
 
+  const handleFileSubmit = async () => {
+    if (!selectedFile) {
+        toast({ title: 'No file selected', status: 'error', duration: 3000, isClosable: true });
+        return;
+    }
+    setIsFileUploading(true);
+    setCurrentProgressMessage('Uploading file...');
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+        const response = await fetch('/api/files/upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (response.status === 202) {
+            const data = await response.json();
+            setPollingTaskId(data.taskId);
+            setPollingTaskType('reconstruct');
+            setCurrentProgressMessage('File uploaded. Awaiting processing...');
+            toast({ title: 'Upload successful', description: 'Your file is being processed.', status: 'success', duration: 3000, isClosable: true });
+        } else {
+            const errorText = await response.text();
+            toast({ title: 'Upload failed', description: errorText || 'Unknown error', status: 'error', duration: 5000, isClosable: true });
+            setCurrentProgressMessage(null);
+        }
+    } catch (error) {
+        console.error('File upload error:', error);
+        toast({ title: 'Upload error', description: 'An unexpected error occurred.', status: 'error', duration: 5000, isClosable: true });
+        setCurrentProgressMessage(null);
+    } finally {
+        setIsFileUploading(false);
+    }
+  };
+
+  const clearStagingAndLocalData = useCallback(() => {
+    clearStagingData();
+    setTitle('');
+    setEditorContent(undefined);
+    setEditorKey(Date.now());
+    setRewriteError(null);
+    setDisplayMode('original');
+    setShowComparisonView(false);
+    setSelectedFile(null); // Also clear selected file
+  }, [clearStagingData, setEditor]);
+
   if (sessionStatus === 'loading' || isStagingLoading) {
     return (
       <Flex justify="center" align="center" minH="100vh">
@@ -906,8 +957,30 @@ export default function NewCardPage() {
   }
 
   return (
-    <Container maxW="container.lg" py={8}>
-      <Heading mb={6}>Create New Knowledge Card</Heading>
+    <Container maxW="container.xl" py={10}>
+      <VStack spacing={4} align="stretch" mb={8}>
+        <Heading as="h2" size="lg">Create from File</Heading>
+        <FormControl>
+          <FormLabel>Upload a DOCX, PDF, MD, or TXT file</FormLabel>
+          <Input
+            type="file"
+            onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)}
+            accept=".docx,.pdf,.md,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain"
+            p={1.5}
+            isDisabled={isFileUploading || (pollingTaskType === 'reconstruct' && !!pollingTaskId)}
+          />
+        </FormControl>
+        <Button
+          onClick={handleFileSubmit}
+          isLoading={isFileUploading || (pollingTaskType === 'reconstruct' && !!pollingTaskId)}
+          loadingText={currentProgressMessage || 'Processing...'}
+          colorScheme="blue"
+          isDisabled={!selectedFile || (pollingTaskType === 'reconstruct' && !!pollingTaskId)}
+        >
+          Create Card from File
+        </Button>
+      </VStack>
+
       <form onSubmit={handleSubmit}>
         <VStack spacing={6} align="stretch">
           <FormControl isRequired>
