@@ -4,18 +4,23 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin/ms-playwright # Standard path for playwright install
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin/ms-playwright
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies needed for Playwright and other libraries.
+# --- INSTALLATION & DEBUGGING STEPS ---
+# By separating these RUN commands, we can pinpoint failures in Cloud Build.
+
+# STEP 1: Update package lists
+RUN apt-get update
+
+# STEP 2: Install system dependencies.
 # A comprehensive list is used to ensure Playwright's headless browser can run reliably.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get install -y --no-install-recommends \
     libmagic1 \
     wget \
     ca-certificates \
-    # Playwright's browser dependencies:
     libglib2.0-0 \
     libnss3 \
     libnspr4 \
@@ -38,14 +43,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# STEP 3: Copy and install Python requirements
 COPY ./aiservice/requirements.txt .
-
-# Install Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install only the chromium browser binaries. The OS dependencies were installed above.
+# STEP 4: Install only the chromium browser binaries.
 RUN playwright install chromium
+
+# --- FINAL APPLICATION SETUP ---
 
 # Copy the entire aiservice application code into the /app directory
 COPY ./aiservice/ /app/
