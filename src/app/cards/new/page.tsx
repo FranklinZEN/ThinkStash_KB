@@ -196,10 +196,6 @@ export default function NewCardPage() {
   const [pollingAttempts, setPollingAttempts] = useState(0);
   const [currentProgressMessage, setCurrentProgressMessage] =
     useState<string | null>(null);
-  const [
-    hasShownInitialContentReadyToast,
-    setHasShownInitialContentReadyToast,
-  ] = useState(false);
 
   const [pollingTaskId, setPollingTaskId] = useState<string | null>(null);
   const [pollingTaskType, setPollingTaskType] = useState<
@@ -327,6 +323,7 @@ export default function NewCardPage() {
     pollingTaskType,
     setStagingData,
     toast,
+    pollingAttempts,
   ]);
 
   useEffect(() => {

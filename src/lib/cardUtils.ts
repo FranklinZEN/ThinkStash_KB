@@ -1,5 +1,4 @@
 // import type { Block, InlineContent } from '@/types/blocknote'; // Old import to be removed
-import type { /*Block,*/ AppInlineContent as InlineContent } from '@/lib/blocknote/appSchema'; // Block might not be needed if AppPartialBlock is used
 import type { AppPartialBlock, AppInlineContent } from '@/lib/blocknote/appSchema';
 
 export function extractSnippetFromContent(document: AppPartialBlock[] | null): string {
@@ -65,7 +64,7 @@ export function extractSnippetFromContent(document: AppPartialBlock[] | null): s
       snippet.length === MAX_LENGTH &&
       document.length > 0 &&
       document[0].content &&
-      (document[0].content as InlineContent[]).length > 0
+      (document[0].content as AppInlineContent[]).length > 0
     ) {
       // Only add ellipsis if we actually truncated something meaningful
       snippet += '...';
