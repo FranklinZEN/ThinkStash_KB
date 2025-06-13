@@ -28,6 +28,10 @@ RUN npm run build
 FROM base as runner
 WORKDIR /app
 
+# Install wget, which is required by the migration step in cloudbuild.yaml
+# to download the Cloud SQL Proxy.
+RUN apt-get update && apt-get install -y --no-install-recommends wget && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 
 # Copy the built application from the 'builder' stage
