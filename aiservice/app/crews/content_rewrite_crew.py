@@ -342,7 +342,7 @@ class ContentRewriteCrewManager:
                 }, exc_info=True)
         return parsed_blocks
 
-    def run(self) -> RewriteContentOutput:
+    async def run(self) -> RewriteContentOutput:
         start_time = time.time()
         current_trace_id = self.correlation_id if self.correlation_id else self.task_id
 
@@ -417,8 +417,14 @@ class ContentRewriteCrewManager:
                 'essential_image_metadata_for_summarizer_prompt': json.dumps(essential_image_metadata)
             }
             
-            crew_result = self.crew.kickoff(inputs=crew_inputs)
-            
+            self.logger.info("ContentRewriteCrewManager: Kicking off crew...")
+
+            # Execute the crew asynchronously
+            crew_result = await self.crew.kickoff_async(inputs=crew_inputs)
+
+            duration = time.time() - start_time
+            self.logger.info(f"ContentRewriteCrewManager: Crew execution finished in {duration:.2f} seconds.")
+
             if not crew_result or not crew_result.tasks_output:
                 logger.error("Crew kickoff returned empty or no task outputs.", extra={
                     'task_id': self.task_id, 
@@ -599,6 +605,7 @@ class ContentRewriteCrewManager:
 
 # Example Usage (for direct testing if needed)
 if __name__ == "__main__":
+    import asyncio
     # Ensure necessary model imports for example are within __main__ or globally accessible if run directly
     from aiservice.app.models.pipeline_models import DocumentMetadata # For sample data
     import datetime
@@ -631,10 +638,10 @@ if __name__ == "__main__":
     print("Running ContentRewriteCrew...")
     # Note: Running this will make actual LLM calls if GEMINI_API_KEY is set and valid.
     # Ensure your .env and settings are configured.
-    output = crew_manager.run()
+    output = asyncio.run(crew_manager.run())
 
     print("\n--- Crew Output ---")
-    if output.status_code == OrchestrationStatusCodeEnum.SUCCESS.value: # Compare with Enum value
+    if output.status_code == OrchestrationStatusCodeEnum.REWRITE_SUCCESS.value: # Compare with Enum value
         print("Rewrite successful!")
         for i, block in enumerate(output.ai_rewritten_content_blocks):
             print(f"Block {i+1} (Type: {block.type}, ID: {block.block_id}):")

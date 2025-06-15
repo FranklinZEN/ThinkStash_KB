@@ -48,7 +48,7 @@ class GeneralPurposeKeywordExtractionCrew:
             "Example desired output format: ['#AI', '#SystemArchitecture', '#DataAnalysis']"
         )
 
-    def run(self) -> Union[List[str], str]:
+    async def run(self) -> Union[List[str], str]:
         self.logger.info("Starting Keyword Extraction Crew execution...")
         
         try:
@@ -91,7 +91,7 @@ class GeneralPurposeKeywordExtractionCrew:
             process=Process.sequential,
             verbose=True 
         )
-        crew_result = crew.kickoff()
+        crew_result = await crew.kickoff_async()
         self.logger.info(f"Keyword Extraction Crew execution finished. Raw CrewOutput: {crew_result}")
 
         final_keywords: Union[List[str], str] = "Error: Keyword extraction failed to produce a recognizable list."
@@ -172,9 +172,10 @@ class GeneralPurposeKeywordExtractionCrew:
 
 # Example Usage (for testing, similar to Title Generation Crew)
 # if __name__ == '__main__':
+#     import asyncio
 #     from aiservice.app.models.content_structuring_models import ContentBlock, ImageBlockData, ListBlockData
 #     logger = get_logger("__main__")
-
+#
 #     # Sample ContentBlocks (replace with actual data or load from a JSON for testing)
 #     sample_blocks_data = [
 #         {"type": "heading", "level": 1, "text": "The Future of Artificial Intelligence"},
@@ -182,12 +183,12 @@ class GeneralPurposeKeywordExtractionCrew:
 #         {"type": "text", "text": "We also see advancements in ads prediction and overall system architecture improvements thanks to AI. Generative AI is a hot topic."}
 #     ]
 #     sample_content_blocks = [ContentBlock(**block) for block in sample_blocks_data]
-
+#
 #     logger.info("Initializing Keyword Extraction Crew for testing...")
 #     keyword_crew = GeneralPurposeKeywordExtractionCrew(content_blocks=sample_content_blocks)
 #     logger.info("Running Keyword Extraction Crew...")
-#     results = keyword_crew.run()
-
+#     results = asyncio.run(keyword_crew.run())
+#
 #     logger.info("\n--- Keyword Extraction Results ---")
 #     if isinstance(results, list):
 #         logger.info(f"Suggested Keywords: {results}")

@@ -219,3 +219,10 @@ thinkstash-knowledge-base-94ace76cab03.json
 
 # AIService specific .env
 aiservice/.env
+
+# Local environment files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+aiservice/.env.worker

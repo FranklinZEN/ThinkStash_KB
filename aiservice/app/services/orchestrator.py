@@ -18,6 +18,7 @@ from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService
 from aiservice.app.services.acquisition.file_service import FileAcquisitionService, FileAcquisitionServiceInput
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService, ImageProcessingServiceInput
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService, ContentStructuringServiceInput
+from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew
 from aiservice.app.utils.url_utils import custom_normalize_url
 from aiservice.app.services.task_db_service import TaskDBService
 
@@ -56,12 +57,21 @@ class ParallelOrchestrator(BaseService):
             conn = self.task_db_service.get_connection()
             self.logger.info(f"Job {job_id}: Database connection acquired from pool.")
             
-            self.task_db_service.update_task_status_processing(job_id, conn)
-            
-            output = await self._run_pipeline(orchestrator_input, job_id, conn)
+            # This is the core routing logic based on task type.
+            task_type = orchestrator_input.task_type
+            self.logger.info(f"Job {job_id}: Routing task of type '{task_type}'.")
+
+            if task_type == "RECONSTRUCT_AND_ANALYZE":
+                self.task_db_service.update_task_status_processing(job_id, conn)
+                output = await self._run_reconstruction_pipeline(orchestrator_input, job_id, conn)
+            elif task_type == "GENERATE_TITLE":
+                self.task_db_service.update_task_status_processing(job_id, conn)
+                output = await self._run_title_generation_pipeline(orchestrator_input, job_id, conn)
+            else:
+                raise NotImplementedError(f"Unknown or unsupported task type: {task_type}")
 
             conn.commit()
-            self.logger.info(f"Job {job_id}: Pipeline successful. Database transaction committed.")
+            self.logger.info(f"Job {job_id}: Pipeline for task type '{task_type}' successful. Database transaction committed.")
             return ServiceResult.success(data=output)
 
         except Exception as e:
@@ -99,9 +109,9 @@ class ParallelOrchestrator(BaseService):
                 self.task_db_service.release_connection(conn)
                 self.logger.info(f"Job {job_id}: Database connection released back to pool.")
 
-    async def _run_pipeline(self, orchestrator_input: OrchestrationInput, job_id: str, conn) -> OrchestrationOutput:
+    async def _run_reconstruction_pipeline(self, orchestrator_input: OrchestrationInput, job_id: str, conn) -> OrchestrationOutput:
         """
-        The core pipeline logic, now running within a managed transaction.
+        The core pipeline logic for reconstructing content from a source (e.g., URL).
         The `conn` object is passed to any function that needs to interact with the DB.
         """
         start_time = time.time()
@@ -207,8 +217,14 @@ class ParallelOrchestrator(BaseService):
             error_message = "; ".join(accumulated_warnings)
 
         # Step 4: Create the Knowledge Card in the database
+        # A default title is used here. Title generation is now a separate, on-demand task.
         final_title = page_title or "Untitled Document"
-        card_id = self.task_db_service.create_knowledge_card_from_blocks(orchestrator_input.user_id, final_title, json.loads(json.dumps(final_content_blocks, default=lambda o: o.dict())) , conn)
+        card_id = self.task_db_service.create_knowledge_card_from_blocks(
+            orchestrator_input.user_id, 
+            final_title, 
+            [block.model_dump() for block in final_content_blocks],
+            conn
+        )
 
         # Step 5: Finalize and return the result with the new card_id
         log_extra = {'task_id': job_id}
@@ -220,14 +236,68 @@ class ParallelOrchestrator(BaseService):
             final_url, determined_final_source_type, document_metadata_obj, is_long, card_id
         )
         
-        self.task_db_service.update_task_status_completed(job_id, output.model_dump(), conn)
+        reconstruction_result_payload = {"card_id": card_id}
+        self.task_db_service.update_task_status_completed(job_id, reconstruction_result_payload, conn)
         
         duration = time.time() - start_time
-        self.logger.info(f"Job {job_id}: Pipeline finished successfully in {duration:.2f} seconds.")
+        self.logger.info(f"Job {job_id}: RECONSTRUCT_AND_ANALYZE pipeline finished successfully in {duration:.2f} seconds.")
+        
+        return output
+
+    async def _run_title_generation_pipeline(self, orchestrator_input: OrchestrationInput, job_id: str, conn) -> OrchestrationOutput:
+        """
+        The pipeline logic for generating a title for an existing KnowledgeCard.
+        """
+        start_time = time.time()
+        
+        card_id = orchestrator_input.payload.get("card_id")
+        if not card_id:
+            raise ValueError("Payload for GENERATE_TITLE task must contain a 'card_id'.")
+            
+        self.logger.info(f"Job {job_id}: GENERATE_TITLE pipeline starting for card_id: {card_id}")
+        self.task_db_service.update_task_progress_stage(job_id, "Fetching card content", conn)
+
+        card_content_str = self.task_db_service.get_knowledge_card_content_by_id(card_id, conn)
+        if not card_content_str:
+            raise ValueError(f"Could not retrieve content for KnowledgeCard with ID: {card_id}")
+
+        self.task_db_service.update_task_progress_stage(job_id, "Running AI Title Generation Crew", conn)
+
+        title_crew = GeneralPurposeTitleGenerationCrew(
+            settings=self.settings,
+            card_content=card_content_str,
+            job_id=job_id
+        )
+        crew_result = await title_crew.akickoff()
+        self.logger.info(f"Job {job_id}: Title generation crew finished. Result: {crew_result}")
+        
+        new_title = str(crew_result).strip()
+        if not new_title:
+            raise ValueError("Title generation crew returned an empty result.")
+            
+        self.logger.info(f"Job {job_id}: Successfully parsed new title: '{new_title}'")
+
+        self.task_db_service.update_task_progress_stage(job_id, "Saving new title", conn)
+        self.task_db_service.update_knowledge_card_title(card_id, new_title, conn)
+        self.logger.info(f"Job {job_id}: Successfully saved new title to card {card_id}.")
+
+        output = self._prepare_final_output(
+            orchestrator_input, orchestrator_input.source_identifier, OrchestrationStatusCodeEnum.SUCCESS,
+            new_title,
+            [], {}, None, orchestrator_input.source_identifier, orchestrator_input.source_type,
+            None, False, card_id
+        )
+        
+        title_generation_result_payload = {"generated_title": new_title}
+        self.task_db_service.update_task_status_completed(job_id, title_generation_result_payload, conn)
+        
+        duration = time.time() - start_time
+        self.logger.info(f"Job {job_id}: GENERATE_TITLE pipeline finished successfully in {duration:.2f} seconds.")
         
         return output
 
     def _is_long_article(self, content_blocks: List[ContentBlock]) -> bool:
+        """Checks if the document is long based on word count."""
         total_char_count = sum(len(block.content) for block in content_blocks if block.type == "text" and block.content)
         long_article_threshold = self.settings.long_article_char_threshold if self.settings else 3000
         return total_char_count > long_article_threshold

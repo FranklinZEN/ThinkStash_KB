@@ -133,9 +133,8 @@ export interface RewriteContentResponse {
 
 // --- /api/ai/generate-title ---
 export interface GenerateTitleRequest {
+  card_id: string;
   content_blocks: ContentBlock[]; // Content to generate title from
-  existing_title?: string; // Optional: if there's a title to improve upon
-  // user_id is typically inferred from session
 }
 
 export interface GenerateTitleResponse {

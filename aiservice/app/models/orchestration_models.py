@@ -4,11 +4,14 @@ from .pipeline_models import DocumentMetadata, EnrichedImageMetadata
 import enum
 
 class OrchestrationInput(BaseModel):
+    """Defines the input for the main orchestrator."""
     source_identifier: str = Field(..., description="URL or filepath")
     source_type: Optional[str] = Field(default=None, examples=["url", "pdf", "docx", "txt", "md"])
-    processing_level: str = Field(default="full_content", examples=["full_content", "text_only"])
+    task_type: str # The type of task, e.g., RECONSTRUCT_AND_ANALYZE
     job_id: Optional[str] = Field(default=None, description="Unique job identifier")
     user_id: Optional[str] = Field(default=None, description="User identifier")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Payload for task types like GENERATE_TITLE")
+    processing_level: str = Field(default="full_content", examples=["full_content", "text_only"])
     output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
 
 # --- BlockNote Compliant Models ---
@@ -46,6 +49,7 @@ class OrchestrationStatusCodeEnum(str, enum.Enum):
     """Standardized status codes for orchestration and processing."""
     SUCCESS = "success"
     PARTIAL_SUCCESS = "partial_success"
+    SUCCESS_WITH_WARNINGS = "success_with_warnings"
     
     ERROR_UNKNOWN = "error_unknown"
     ERROR_CREW_EXECUTION_FAILED = "error_crew_execution_failed"
@@ -80,11 +84,9 @@ class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])
     user_id: Optional[str] = Field(default=None, description="User identifier for the entire orchestration, if available.")
     document_id: Optional[str] = Field(default=None, description="Document identifier (job_id) for the entire orchestration, if available.")
-    source_identifier: str
-    source_type: str
-    user_id: Optional[str] = Field(None, description="Identifier of the user who initiated the request, mirrored from input or document_metadata.")
-    document_id: Optional[str] = Field(None, description="Unique identifier for the processed document instance, mirrored from document_metadata.")
-    processing_level_used: str
+    source_identifier: Optional[str] = None
+    source_type: Optional[str] = None
+    processing_level_used: Optional[str] = None
     extracted_title: Optional[str] = None
     is_long_article: bool = False
     original_content_blocks: List[ContentBlock] = []

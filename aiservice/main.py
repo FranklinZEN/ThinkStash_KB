@@ -118,8 +118,23 @@ async def process_single_task():
             orchestration_input = OrchestrationInput(
                 source_identifier=source_url,
                 source_type='url',
+                task_type=task.type,
                 user_id=task.userId,
-                job_id=task_id
+                job_id=task.id,
+                payload=task.payload
+            )
+        elif task.type == 'GENERATE_TITLE':
+            card_id = task.payload.get("card_id")
+            if not card_id:
+                raise ValueError("Task payload for GENERATE_TITLE is missing 'card_id'")
+            # For this task type, the source_identifier is not a URL but the card_id,
+            # which is relevant context for the task.
+            orchestration_input = OrchestrationInput(
+                source_identifier=card_id,
+                task_type=task.type,
+                user_id=task.userId,
+                job_id=task.id,
+                payload=task.payload
             )
         elif task.type == 'RECONSTRUCT_AND_ANALYZE_FILE':
             gcs_path = task.payload.get("gcsPath")
@@ -129,8 +144,10 @@ async def process_single_task():
             orchestration_input = OrchestrationInput(
                 source_identifier=gcs_path,
                 source_type=file_type,
+                task_type=task.type,
                 user_id=task.userId,
-                job_id=task_id
+                job_id=task.id,
+                payload=task.payload
             )
         else:
             raise ValueError(f"Unknown or unsupported task type: {task.type}")

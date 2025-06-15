@@ -1,9 +1,10 @@
 # === AI Agent & LLM Frameworks ===
-crewai
-crewai-tools
+crewai==0.130.0
+crewai-tools==0.47.1
 langchain
 langchain_core
 langchain_community
+langchain_google_genai
 langchain_openai
 langchain_anthropic
 langchain-text-splitters

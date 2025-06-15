@@ -7,9 +7,16 @@ import os
 # --- Determine the path to the .env file relative to this settings.py file ---
 # Directory where settings.py is located (aiservice/app/config)
 _SETTINGS_DIR = os.path.dirname(os.path.abspath(__file__))
-# Path to .env file (should be in the project root, one level above the 'aiservice' directory)
-# aiservice/app/config -> aiservice/app -> aiservice -> project_root
-_ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_SETTINGS_DIR))), ".env")
+# Path to the worker-specific .env file (aiservice/.env.worker)
+# This is the primary configuration file for any process running from the aiservice package.
+# Path calculation: aiservice/app/config -> aiservice/app -> aiservice
+_ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(_SETTINGS_DIR)), ".env.worker")
+
+if not os.path.exists(_ENV_FILE_PATH):
+    print(f"WARNING: The primary environment file for the AI service was not found at '{_ENV_FILE_PATH}'.")
+    print("WARNING: The application will rely on system environment variables, which might cause errors if critical values like DATABASE_URL are not set.")
+    # Set to None so pydantic doesn't fail on a non-existent file.
+    _ENV_FILE_PATH = None
 
 class WebServiceSpecificSettings(BaseSettings):
     # Copied from MockWebServiceSettings in web_service.py and defaults from WebService constructor

@@ -52,7 +52,7 @@ class TitleGenerationAgents:
                 "and conveying the essence of the content. You are now tasked with focusing solely on title "
                 "creation based on text provided to you, using your LLM capabilities efficiently."
             ),
-            tools=[self.optimized_llm_interaction_tool], # Only this tool is needed now
+            tools=[self.full_text_extractor_tool, self.optimized_llm_interaction_tool], # Add the extractor tool
             llm=self.llm,
             verbose=True,
             allow_delegation=False, # No delegation needed for this focused task

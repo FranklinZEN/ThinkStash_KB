@@ -13,8 +13,16 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json()) as GenerateTitleRequest;
-    const { content_blocks } = body;
+    const { card_id, content_blocks } = body;
 
+    if (!card_id) {
+      return NextResponse.json(
+        { error: 'Invalid request body: card_id is required.' },
+        { status: 400 },
+      );
+    }
+
+    /*
     if (
       !content_blocks ||
       !Array.isArray(content_blocks) ||
@@ -28,6 +36,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    */
 
     const task = await prisma.task.create({
       data: {
@@ -35,7 +44,7 @@ export async function POST(req: Request) {
         type: 'GENERATE_TITLE',
         status: 'PENDING',
         payload: {
-          content_blocks: content_blocks as unknown as Prisma.JsonValue,
+          card_id: card_id,
         },
         progressMessage: 'Title generation task created',
       },
