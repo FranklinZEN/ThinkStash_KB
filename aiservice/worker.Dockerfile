@@ -62,6 +62,6 @@ ENV PYTHONPATH=/app
 # Make port 8080 available for the health check server
 EXPOSE 8080
 
-# Run the 'worker' module from within the 'aiservice' package.
-# Using -m ensures the Python path is handled correctly for a package.
-CMD ["python", "-u", "-m", "aiservice.worker"] 
+# Run the new entrypoint script for Cloud Run.
+# This script starts a health check server and the Celery worker.
+CMD ["python", "-u", "aiservice/cloud_worker_entrypoint.py"] 

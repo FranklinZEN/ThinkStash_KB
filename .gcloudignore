@@ -1,0 +1,48 @@
+# This file specifies files that are *not* uploaded to Google Cloud when
+# deploying a service. It works similarly to a .gitignore file.
+
+# Git repository files
+.git
+.gitignore
+
+# Node.js dependencies and build artifacts
+node_modules/
+.next/
+npm-debug.log
+yarn-error.log
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python virtual environment
+# If you use a different name, add it here.
+env/
+venv/
+ENV/
+
+# Editor-specific directories
+.vscode/
+.idea/
+
+# Build and distribution artifacts
+build/
+dist/
+
+# Local secrets and environment variables
+.env
+.env.*
+local_settings.py
+*.local
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Local data directories
+pgvector_data/ 
