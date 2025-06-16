@@ -101,10 +101,7 @@ class Settings(BaseSettings):
     gcs_credentials_file_path: Optional[str] = Field(None, env="GCS_CREDENTIALS_FILE_PATH", description="Optional explicit path to GCS credentials JSON file.")
     
     # Caching Configuration
-    redis_host: Optional[str] = Field(default="localhost", env="REDIS_HOST")
-    redis_port: Optional[int] = Field(default=6379, env="REDIS_PORT")
-    redis_db: Optional[int] = Field(default=0, env="REDIS_DB")
-    redis_password: Optional[str] = Field(None, env="REDIS_PASSWORD")
+    redis_url: str = Field(default="redis://localhost:6379/0", env="REDIS_URL", description="URL for Redis, used for caching and as Celery broker.")
     default_cache_ttl_seconds: int = Field(default=3600, env="DEFAULT_CACHE_TTL_SECONDS", description="Default TTL for general cached items in seconds (e.g., Redis).")
     
     # Web Acquisition Service Specific Caching

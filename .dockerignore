@@ -1,0 +1,83 @@
+# Git
+.git
+.gitignore
+.gcloudignore
+
+# Node.js
+node_modules
+.next
+.swc
+package-lock.json
+package.json
+tsconfig.json
+tsconfig.jest.json
+tsconfig.tsbuildinfo
+next.config.mjs
+next.config.cjs
+next-env.d.ts
+jest.config.mjs
+jest.config.backend.js
+jest.setup.js
+jest.setup.backend.mjs
+jest.setup.backend.js
+eslint.config.js
+.eslintrc.json
+.prettierrc.json
+.nvmrc
+
+# Python virtual env
+.venv
+__pycache__
+
+# Root level files not needed for the backend build
+cloud_sql_proxy.exe
+cloudbuild.yaml
+cloudbuild.yaml.bak
+test_connection.py
+README.md
+BlockNoteEditorComponent- Initial.tsx
+
+# Directories not needed for the backend build
+.husky
+.image_cache
+coverage
+devlog
+documentation
+generated
+html
+lib
+pages
+pgvector
+prisma
+public
+src
+terraform
+tests
+version_control
+
+# IDE / OS generated
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*debug.log*
+*error.log*
+.logs
+
+# Build artifacts / large files
+build/
+dist/
+out/
+coverage/
+*.bak
+*.exe
+
+# Terraform
+.terraform
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars 

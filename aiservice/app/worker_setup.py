@@ -1,19 +1,11 @@
 from celery import Celery
-from dotenv import load_dotenv
-import os
-
-# Load environment variables from .env file
-load_dotenv()
-
-# It's good practice to have a central configuration point.
-# We can use os.environ.get for robustness.
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+from aiservice.app.config.settings import settings
 
 # Define the Celery application instance
 app = Celery(
     'aiservice',
-    broker=REDIS_URL,
-    backend=REDIS_URL,
+    broker=settings.redis_url,
+    backend=settings.redis_url,
     include=['aiservice.app.tasks']
 )
 
