@@ -13,6 +13,7 @@ import logging
 import aiohttp
 from PIL import Image # Pillow
 from google.cloud import storage # For GCS
+from google.oauth2 import service_account
 from cachetools import LRUCache # Import LRUCache
 
 from aiservice.app.config.settings import Settings
@@ -42,7 +43,7 @@ class ImageProcessingService(BaseService):
     def __init__(self, image_analysis_tool: Optional[ImageAnalysisLLMTool] = None, settings: Optional[Settings] = None):
         super().__init__(settings)
         self.image_analysis_tool = image_analysis_tool
-        self.settings = settings # Store typed settings
+        self.settings: Settings = settings if settings else Settings()
         self.logger = get_logger(__name__) # Initialize logger
         
         # Default semaphore limit, to be overridden by settings if available
@@ -87,15 +88,24 @@ class ImageProcessingService(BaseService):
             processing_cache_maxsize = 128 # Fallback cache size
             self.default_request_timeout_seconds = 30
 
-        self.gcs_client: Optional[storage.Client] = None
+        self.gcs_client = None
         if self.gcs_bucket_name:
             try:
-                self.gcs_client = storage.Client() # Initialize GCS client
-                self.logger.info(f"ImageProcessingService: GCS Client initialized for bucket: {self.gcs_bucket_name}")
+                credentials_path = self.settings.gcs_credentials_file_path
+                if credentials_path and os.path.exists(credentials_path):
+                    credentials = service_account.Credentials.from_service_account_file(credentials_path)
+                    self.gcs_client = storage.Client(credentials=credentials)
+                    self.logger.info(f"ImageProcessingService: GCS Client initialized from file '{credentials_path}' for bucket: {self.gcs_bucket_name}")
+                else:
+                    # Fallback to default credentials if path not set or file not found
+                    self.gcs_client = storage.Client()
+                    self.logger.info(f"ImageProcessingService: GCS Client initialized with default credentials for bucket: {self.gcs_bucket_name}")
+
             except Exception as e:
-                self.logger.warning(f"ImageProcessingService: WARNING - Failed to initialize GCS client: {str(e)}. GCS uploads will fail.")
-                self.gcs_client = None # Ensure it's None if init fails
-                self.gcs_bucket_name = None # Can't use bucket if client failed
+                self.logger.error(f"ImageProcessingService: Failed to initialize GCS Client: {e}", exc_info=True)
+                self.gcs_client = None # Ensure client is None on failure
+        else:
+            self.logger.warning("ImageProcessingService: GCS_BUCKET_NAME not set. GCS client not initialized.")
         
         # Initialize LRU Cache
         self.processing_cache = LRUCache(maxsize=processing_cache_maxsize)
@@ -103,6 +113,10 @@ class ImageProcessingService(BaseService):
         # Initialize Semaphore for GCS uploads
         self.gcs_upload_semaphore = asyncio.Semaphore(gcs_semaphore_limit)
         self.logger.info(f"ImageProcessingService: GCS upload semaphore initialized with limit: {gcs_semaphore_limit}")
+
+        self.image_cache_dir = self.settings.image_cache_dir
+        if not os.path.exists(self.image_cache_dir):
+            os.makedirs(self.image_cache_dir)
 
     def _sanitize_for_gcs_path(self, text: Optional[str], max_length: int = 100) -> str:
         if not text: return f"untitled_{uuid.uuid4().hex[:6]}"

@@ -7,13 +7,22 @@ import os
 # --- Determine the path to the .env file relative to this settings.py file ---
 # Directory where settings.py is located (aiservice/app/config)
 _SETTINGS_DIR = os.path.dirname(os.path.abspath(__file__))
-# Path to .env file (should be in the project root, one level above the 'aiservice' directory)
-# aiservice/app/config -> aiservice/app -> aiservice -> project_root
-_ENV_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_SETTINGS_DIR))), ".env")
+# Path to project root
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_SETTINGS_DIR)))
+
+# Prioritize .env.local if it exists, otherwise fall back to .env
+_ENV_FILE_LOCAL_PATH = os.path.join(_PROJECT_ROOT, ".env.local")
+_ENV_FILE_PATH = os.path.join(_PROJECT_ROOT, ".env")
+
+# Determine which .env file to use
+if os.path.exists(_ENV_FILE_LOCAL_PATH):
+    _ACTIVE_ENV_FILE = _ENV_FILE_LOCAL_PATH
+else:
+    _ACTIVE_ENV_FILE = _ENV_FILE_PATH
 
 class WebServiceSpecificSettings(BaseSettings):
     # Copied from MockWebServiceSettings in web_service.py and defaults from WebService constructor
-    default_user_agent: str = Field(default="ThinkStashAI/1.0", env="WEB_DEFAULT_USER_AGENT")
+    default_user_agent: str = Field(default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", env="WEB_DEFAULT_USER_AGENT")
     trafilatura_include_comments: bool = Field(default=False, env="WEB_TRAFILATURA_INCLUDE_COMMENTS")
     trafilatura_include_tables: bool = Field(default=True, env="WEB_TRAFILATURA_INCLUDE_TABLES")
     trafilatura_favor_recall: bool = Field(default=True, env="WEB_TRAFILATURA_FAVOR_RECALL")
@@ -42,7 +51,7 @@ class WebServiceSpecificSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix='AISERVICE_', # Optional: prefix for environment variables to avoid collisions
-        env_file=_ENV_FILE_PATH,
+        env_file=_ACTIVE_ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore',
         case_sensitive=False
@@ -89,6 +98,7 @@ class Settings(BaseSettings):
     
     # GCS Configuration
     gcs_bucket_name: Optional[str] = Field(None, env="GCS_BUCKET_NAME", description="Google Cloud Storage bucket for storing images.")
+    gcs_credentials_file_path: Optional[str] = Field(None, env="GCS_CREDENTIALS_FILE_PATH", description="Optional explicit path to GCS credentials JSON file.")
     
     # Caching Configuration
     redis_host: Optional[str] = Field(default="localhost", env="REDIS_HOST")
@@ -101,6 +111,7 @@ class Settings(BaseSettings):
     web_html_cache_ttl_seconds: int = Field(default=3600, env="WEB_HTML_CACHE_TTL_SECONDS", description="TTL for in-memory HTML cache in WebAcquisitionService.")
 
     # Image Processing Service Specific Caching & Filters
+    image_cache_dir: str = Field(default="./.image_cache", env="IMAGE_CACHE_DIR", description="Directory to cache processed images locally.")
     image_processing_cache_size: int = Field(default=256, env="IMAGE_PROCESSING_CACHE_SIZE", description="Max size for LRU cache in ImageProcessingService.")
     gcs_concurrent_upload_limit: int = Field(default=5, env="GCS_CONCURRENT_UPLOAD_LIMIT", description="Limit for concurrent GCS uploads in ImageProcessingService.")
     img_filter_min_dimension: int = Field(default=50, env="IMG_FILTER_MIN_DIMENSION", description="Min width/height for images to be kept (legacy, prefer specific width/height).")
@@ -136,7 +147,7 @@ class Settings(BaseSettings):
     long_article_char_threshold: int = Field(default=3000, env="LONG_ARTICLE_CHAR_THRESHOLD")
 
     model_config = SettingsConfigDict(
-        env_file=_ENV_FILE_PATH,
+        env_file=_ACTIVE_ENV_FILE,
         env_file_encoding='utf-8',
         extra='ignore',
         case_sensitive=False

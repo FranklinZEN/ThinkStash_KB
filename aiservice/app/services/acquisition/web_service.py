@@ -324,9 +324,7 @@ class WebAcquisitionService(BaseService):
         self.logger.debug(f"WebService _process_html_element: Processing {element_type} - {element_details}")
 
         if isinstance(element, Comment):
-            # Comments are currently ignored by default based on Trafilatura settings
-            # self.logger.debug(f"Skipping comment: {element_details}")
-            return False # Continue processing siblings
+            return False
 
         if isinstance(element, str): # NavigableString
             text_content_stripped = element.strip()
@@ -353,16 +351,13 @@ class WebAcquisitionService(BaseService):
                 self.logger.info(f"CREATED PreliminaryBlock (Text) ID: {block_id} - Content: '{text_content_stripped[:100].replace(chr(10), ' ')}...')")
             return False
 
-        # If not a string or comment, it's a Tag
         tag_name = element.name.lower() if element.name else ""
         self.logger.debug(f"WebService _process_html_element: Handling tag: <{tag_name}>")
 
-        # ADDED: Explicitly skip script and style tags and their contents
         if tag_name in ['script', 'style']:
             self.logger.debug(f"Skipping <{tag_name}> tag and its contents.")
-            return False # Continue processing siblings, but skip this tag and its children entirely
+            return False
 
-        # Tag processing starts here
         if tag_name in self.HEADING_TAGS or \
            (tag_name == "head" and element.attrs.get("rend", "").lower().startswith("h")):
             heading_text_content = element.get_text(separator=" ", strip=True)
@@ -373,7 +368,7 @@ class WebAcquisitionService(BaseService):
                 self.logger.info(f"FILTERED (Stop Heading): Encountered stop heading '{heading_text_content}'. Halting processing of further siblings.")
                 return True 
             
-            if not heading_text_content and tag_name == "head": # Trafilatura <head> specific text reconstruction
+            if not heading_text_content and tag_name == "head":
                 if hasattr(element, 'contents') and element.contents:
                     child_texts = []
                     for child_node in element.contents:
@@ -401,7 +396,7 @@ class WebAcquisitionService(BaseService):
                     custom_attributes={'source_url': original_request_url, 'tag_name': tag_name, 'attributes': {'level': level}}
                 ))
                 self.logger.info(f"CREATED PreliminaryBlock (Heading L{level}) ID: {block_id} - Content: '{heading_text_content[:100]}...')")
-                first_heading_encountered[0] = True # ADDED: Set flag when heading is encountered
+                first_heading_encountered[0] = True
             else:
                 self.logger.warning(f"Skipping empty heading <{tag_name}>.")
             return False
@@ -427,14 +422,13 @@ class WebAcquisitionService(BaseService):
 
         elif tag_name == "img" or tag_name == "graphic":
             img_src = element.attrs.get("src")
-            # MODIFIED: Check for other src attributes like data-src or srcset if primary src is missing/problematic
             if not img_src or img_src.startswith("data:image") or not img_src.strip():
                 self.logger.debug(f"Primary 'src' attribute is missing, data URI, or empty for <{tag_name}>. Checking srcset, data-src, data-original.")
                 srcset = element.attrs.get("srcset")
                 data_src = element.attrs.get("data-src")
                 data_original = element.attrs.get("data-original")
 
-                if srcset: # Simplistic srcset handling: take the first URL
+                if srcset:
                     img_src = srcset.strip().split(',')[0].strip().split(' ')[0]
                     self.logger.debug(f"Using first URL from srcset for <{tag_name}>: '{img_src}'")
                 elif data_src:
@@ -444,7 +438,6 @@ class WebAcquisitionService(BaseService):
                     img_src = data_original
                     self.logger.debug(f"Using data-original for <{tag_name}>: '{img_src}'")
                 else:
-                    # Try to get from <picture> parent if available
                     parent_picture = element.find_parent('picture')
                     if parent_picture:
                         source_tag = parent_picture.find('source', srcset=True)
@@ -456,17 +449,13 @@ class WebAcquisitionService(BaseService):
 
             if not img_src or img_src.startswith("data:image") or not img_src.strip():
                 self.logger.debug(f"<{tag_name}> has no valid src, data URI, or empty src even after fallbacks: '{img_src}'. Skipping direct processing.")
-                # Fall through to child recursion for tags like <picture> that might contain a valid <img> deeper
             else:
                 img_abs_url = urljoin(base_url, img_src.strip())
 
-                # ADDED: Pre-heading image filtering
                 if not first_heading_encountered[0]:
                     self.logger.info(f"FILTERED (Pre-Heading Image): Image {img_abs_url} appeared before the first heading.")
-                    # We still want to mark it as processed by URL to avoid re-processing if it somehow appears again,
-                    # though this is less likely for pre-heading banners.
                     self.processed_image_urls.add(img_abs_url) 
-                    return False # Skip this image but continue processing other elements
+                    return False
 
                 if img_abs_url in self.processed_image_urls:
                     self.logger.info(f"FILTERED (Duplicate URL): Image already processed: {img_abs_url}")
@@ -476,18 +465,17 @@ class WebAcquisitionService(BaseService):
                     return False
 
                 final_alt_text = alt_text
-                pw_rendered_width, pw_rendered_height = None, None # Initialize to None
+                pw_rendered_width, pw_rendered_height = None, None
 
-                # Conditional Playwright-based filtering
                 perform_playwright_filtering = self.service_settings.use_playwright_for_image_filtering and playwright_image_details_map is not None and bool(playwright_image_details_map)
 
                 if perform_playwright_filtering:
                     if img_abs_url in playwright_image_details_map:
                         details = playwright_image_details_map[img_abs_url]
-                        pw_rendered_width = details.get("width", 0) # Ensure key matches what _get_playwright_image_details produces
-                        pw_rendered_height = details.get("height", 0) # Ensure key matches
-                        is_visible = details.get("visible", False)      # Ensure key matches
-                        pw_alt = details.get("alt", "")                # Ensure key matches
+                        pw_rendered_width = details.get("width", 0)
+                        pw_rendered_height = details.get("height", 0)
+                        is_visible = details.get("visible", False)
+                        pw_alt = details.get("alt", "")
                         if pw_alt: final_alt_text = pw_alt
 
                         self.logger.info(f"PLAYWRIGHT_PRE_FILTER_DETAILS for <{tag_name}> {img_abs_url}: "
@@ -504,11 +492,8 @@ class WebAcquisitionService(BaseService):
                         if (pw_rendered_width * pw_rendered_height) < self.service_settings.min_image_area: 
                             self.logger.info(f"FILTERED (Playwright <{tag_name}> Area {pw_rendered_width*pw_rendered_height} < {self.service_settings.min_image_area}): {img_abs_url}"); return False
                     else:
-                        # Playwright was used, data was expected, but this specific image URL was not found in its results.
                         self.logger.warning(f"Playwright run, but no details found for <{tag_name}>: {img_abs_url}. Skipping this image as Playwright data is authoritative when present.")
                         return False 
-                # else: (Playwright not used or failed to produce a map) - proceed without Playwright filtering for this image.
-                # No specific filtering here means it passes this stage; other filters (keyword, duplicate) still apply.
                 
                 img_id_ref = f"web_{job_id}_img{img_idx_counter[0]}"
                 img_idx_counter[0] += 1
@@ -524,7 +509,6 @@ class WebAcquisitionService(BaseService):
                     width=pw_rendered_width, height=pw_rendered_height
                 )
                 all_raw_images.append(current_raw_image_input)
-                # ADDED: Log the mapping between img_id_ref and img_abs_url
                 self.logger.critical(f"RAW_IMG_CREATED: ID '{img_id_ref}' for URL '{img_abs_url}'")
                 self.processed_image_urls.add(img_abs_url)
                 self.logger.info(f"CREATED RawImageInput ID: {img_id_ref} for <{tag_name}> URL: {img_abs_url}")
@@ -542,13 +526,12 @@ class WebAcquisitionService(BaseService):
                 self.logger.info(f"CREATED PreliminaryBlock (ImagePlaceholder) ID: {block_id} for {img_id_ref}")
             
             if img_src and not img_src.startswith("data:image"):
-                 return False # Explicitly return False if we processed (or filtered) an img/graphic with a valid src
+                 return False
 
-        # Default behavior for other tags or tags that fell through (e.g. img with no src): recurse children
         if hasattr(element, 'contents') and element.contents:
             self.logger.debug(f"Element <{tag_name if tag_name else 'string_wrapper'}> is a container or unhandled, recursing into {len(element.contents)} children...")
             for child_element in element.contents:
-                if await self._process_html_element(child_element, blocks, base_url, job_id, user_id, all_raw_images, img_idx_counter, playwright_image_details_map, original_request_url, first_heading_encountered): # MODIFIED: Pass flag
+                if await self._process_html_element(child_element, blocks, base_url, job_id, user_id, all_raw_images, img_idx_counter, playwright_image_details_map, original_request_url, first_heading_encountered):
                     return True 
             self.logger.debug(f"Finished recursing for children of <{tag_name if tag_name else 'string_wrapper'}>.")
         

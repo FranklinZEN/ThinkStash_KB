@@ -88,9 +88,9 @@ class ParallelOrchestrator(BaseService):
 
             failure_output = self._prepare_final_output(
                 orchestrator_input, orchestrator_input.source_identifier,
-                OrchestrationStatusCodeEnum.FAILURE_UNHANDLED_EXCEPTION,
+                OrchestrationStatusCodeEnum.ERROR_UNKNOWN,
                 None, [], {}, str(e), orchestrator_input.source_identifier,
-                orchestrator_input.source_type, None, False, None
+                orchestrator_input.source_type, None, False
             )
             return ServiceResult.failure(error_message=str(e), error_details=failure_output.model_dump())
 
@@ -187,7 +187,7 @@ class ParallelOrchestrator(BaseService):
         
         structuring_input = ContentStructuringServiceInput(
             preliminary_blocks=preliminary_blocks,
-            enriched_images=processed_images_data_dict.get('enriched_images', []),
+            enriched_images=enriched_images_list,
             raw_images=raw_images_from_acquisition,
             document_metadata=document_metadata_obj,
             job_id=job_id,
@@ -206,20 +206,19 @@ class ParallelOrchestrator(BaseService):
         if accumulated_warnings:
             error_message = "; ".join(accumulated_warnings)
 
-        # Step 4: Create the Knowledge Card in the database
+        # Step 4: DO NOT create the Knowledge Card. Instead, prepare the data for output.
         final_title = page_title or "Untitled Document"
-        card_id = self.task_db_service.create_knowledge_card_from_blocks(orchestrator_input.user_id, final_title, json.loads(json.dumps(final_content_blocks, default=lambda o: o.dict())) , conn)
-
-        # Step 5: Finalize and return the result with the new card_id
+        
+        # Step 5: Finalize and return the result with the raw content
         log_extra = {'task_id': job_id}
-        logger.info(f"Finalizing and preparing output, card created: {card_id}", extra=log_extra)
+        logger.info(f"Finalizing and preparing output with raw content", extra=log_extra)
 
         output = self._prepare_final_output(
             orchestrator_input, processed_source_identifier, OrchestrationStatusCodeEnum.SUCCESS,
-            page_title, final_content_blocks, processed_images_data_dict, error_message,
-            final_url, determined_final_source_type, document_metadata_obj, is_long, card_id
+            final_title, final_content_blocks, processed_images_data_dict, error_message,
+            final_url, determined_final_source_type, document_metadata_obj, is_long
         )
-        
+
         self.task_db_service.update_task_status_completed(job_id, output.model_dump(), conn)
         
         duration = time.time() - start_time
@@ -227,16 +226,44 @@ class ParallelOrchestrator(BaseService):
         
         return output
 
-    def _is_long_article(self, content_blocks: List[ContentBlock]) -> bool:
-        total_char_count = sum(len(block.content) for block in content_blocks if block.type == "text" and block.content)
+    def _is_long_article(self, content_blocks: List[Any]) -> bool:
+        """
+        Calculates the total character count from text-based blocks to determine if an
+        article is "long". This is used to decide whether to trigger summarization.
+        """
+        total_char_count = 0
+        
+        # Create a stack for depth-first traversal of content blocks and their children
+        stack = list(content_blocks)
+
+        while stack:
+            block = stack.pop()
+
+            # Ensure we are dealing with a ContentBlock object before proceeding
+            if not hasattr(block, 'type'):
+                continue
+
+            # Add children to the stack to be processed
+            if hasattr(block, 'children') and block.children:
+                stack.extend(block.children)
+
+            # Process content if it exists
+            if hasattr(block, 'content') and block.content and isinstance(block.content, list):
+                # block.content is a List of objects, hopefully InlineContent
+                for content_item in block.content:
+                    # Check for InlineContent-like structure
+                    if hasattr(content_item, 'type') and content_item.type == 'text' and hasattr(content_item, 'text'):
+                        total_char_count += len(content_item.text or '')
+        
         long_article_threshold = self.settings.long_article_char_threshold if self.settings else 3000
+        self.logger.info(f"Calculated total character count for article: {total_char_count}. Threshold: {long_article_threshold}")
         return total_char_count > long_article_threshold
 
     def _prepare_final_output(self, original_input: OrchestrationInput, used_source_identifier: str, 
-                              status_code: Union[OrchestrationStatusCodeEnum, str], extracted_title: Optional[str], 
+                              status_code: Union[OrchestrationStatusCodeEnum, str], title: Optional[str], 
                               content_blocks: List[ContentBlock], processed_images_data: Dict[str, EnrichedImageMetadata],
                               error_message: Optional[str], final_url: Optional[str], final_source_type: Optional[str], 
-                              document_metadata: Optional[DocumentMetadata], is_long_article: bool = False, card_id: Optional[str] = None) -> OrchestrationOutput:
+                              document_metadata: Optional[DocumentMetadata], is_long_article: bool = False) -> OrchestrationOutput:
         
         status_enum_member = status_code
         if isinstance(status_code, str):
@@ -245,25 +272,27 @@ class ParallelOrchestrator(BaseService):
             except KeyError:
                 status_enum_member = OrchestrationStatusCodeEnum.FAILURE_UNHANDLED_EXCEPTION
         
-        final_title = extracted_title or (document_metadata.title if document_metadata else None) or "Untitled"
+        final_title = title or (document_metadata.title if document_metadata else None) or "Untitled"
         
         final_output = OrchestrationOutput(
             status_code=status_enum_member.value,
             user_id=original_input.user_id,
             document_id=original_input.job_id,
             source_identifier=used_source_identifier,
-            source_type=final_source_type,
+            source_type=final_source_type or "unknown",
             processing_level_used=original_input.processing_level,
-            extracted_title=final_title,
+            title=final_title,
+            content_blocks=content_blocks,
             is_long_article=is_long_article,
-            original_content_blocks=content_blocks,
             processed_images_data=processed_images_data,
             document_metadata=document_metadata,
             error_message=error_message,
-            card_id=card_id
+            card_id=None # Explicitly set to None as it's no longer created here
         )
         return final_output
 
     async def execute(self, *args: Any, **kwargs: Any) -> ServiceResult[Any]:
-        self.logger.error("The 'execute' method is not the primary entry point for ParallelOrchestrator. Use 'process' instead.")
-        return ServiceResult.failure(error_message="Not Implemented: Use the 'process' method for ParallelOrchestrator.")
+        """Provide a concrete implementation for the abstract method."""
+        # This implementation will depend on how you intend to use the `execute` method.
+        # For now, it can be a placeholder.
+        raise NotImplementedError("The 'execute' method must be implemented in the derived class.")

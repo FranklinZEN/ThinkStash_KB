@@ -81,6 +81,7 @@ class ContentStructuringService(BaseService):
                 
                 elif p_block.type == 'image_placeholder':
                     img_ref = p_block.image_id_ref
+                    
                     if not img_ref:
                         continue
 
@@ -103,7 +104,7 @@ class ContentStructuringService(BaseService):
                             id=str(uuid.uuid4()),
                             type='image',
                             props=BlockProps(
-                                url=final_url,
+                                src=final_url,
                                 caption=caption
                             ),
                             content=[] # Image blocks have no inline content

@@ -1,13 +1,21 @@
 from enum import Enum
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field, validator
 import datetime
+import uuid
 
 class TaskStatus(str, Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+class TaskPayload(BaseModel):
+    id: str
+    userId: str
+    type: str
+    status: str
+    payload: Dict[str, Any]
 
 class RewriteTaskPayload(BaseModel):
     task_id: str
@@ -29,3 +37,71 @@ class TaskStatusUpdate(BaseModel):
 
     class Config:
         use_enum_values = True 
+
+# Represents the properties of a block, which vary by type.
+class BlockProps(BaseModel):
+    level: Optional[int] = None  # For headings
+    language: Optional[str] = None  # For code blocks
+    ordered: Optional[bool] = None  # For lists
+    src: Optional[str] = None      # For images
+    caption: Optional[str] = None  # For images
+    
+class InlineContent(BaseModel):
+    type: str
+    text: str
+    styles: Dict[str, Any] = {}
+    href: Optional[str] = None
+
+class ContentBlock(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    type: str  # E.g., 'paragraph', 'heading', 'list', 'image', 'code'
+    props: BlockProps = Field(default_factory=BlockProps)
+    content: Optional[Union[str, List['ContentBlock'], List[InlineContent]]] = None
+    children: List['ContentBlock'] = []
+
+    # The following are for compatibility/transformation and should not be directly used by the frontend.
+    gcs_url: Optional[str] = Field(None, exclude=True)
+    caption: Optional[str] = Field(None, exclude=True)
+    level: Optional[int] = Field(None, exclude=True)
+    language: Optional[str] = Field(None, exclude=True)
+
+    @validator('props', pre=True, always=True)
+    def assemble_props(cls, v, values):
+        # If props is already a BlockProps instance, use it
+        if isinstance(v, BlockProps):
+            props = v
+        # If it's a dictionary, create a BlockProps instance
+        elif isinstance(v, dict):
+            props = BlockProps(**v)
+        # Otherwise, create a new one
+        else:
+            props = BlockProps()
+
+        # For image blocks, transfer gcs_url and caption to props
+        if values.get('type') == 'image':
+            if 'gcs_url' in values and values['gcs_url']:
+                props.src = values['gcs_url']
+            if 'caption' in values and values['caption']:
+                props.caption = values['caption']
+        
+        # For heading blocks, transfer level to props
+        if values.get('type') == 'heading':
+            if 'level' in values and values['level']:
+                props.level = values['level']
+
+        # For code blocks, transfer language to props
+        if values.get('type') == 'code':
+             if 'language' in values and values['language']:
+                props.language = values['language']
+                
+        return props
+
+# Ensure forward references are resolved after all models are defined
+ContentBlock.model_rebuild()
+
+class DocumentMetadata(BaseModel):
+    document_id: str
+    user_id: str
+    source_identifier: str
+    source_type: str
+    title: Optional[str] = None 

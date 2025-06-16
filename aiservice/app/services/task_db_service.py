@@ -76,7 +76,7 @@ class TaskDBService:
     def update_task_status_completed(self, task_id: str, result_data: Dict[str, Any], conn):
         """Updates the task status to COMPLETED and stores the result data."""
         result_data_json = json.dumps(result_data, default=json_serial_converter)
-        sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
+        sql = 'UPDATE "Task" SET status = %s, payload = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
         params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with results")
 
@@ -93,6 +93,24 @@ class TaskDBService:
         params = (stage_message, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, f"update progressMessage to '{stage_message}'")
         
+    def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches a single task by its ID."""
+        conn = None
+        try:
+            conn = self.get_connection()
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute('SELECT id, "userId", type, status, payload, result FROM "Task" WHERE id = %s', (task_id,))
+                task_record = cur.fetchone()
+                if task_record:
+                    return dict(task_record)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to fetch task {task_id}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                self.release_connection(conn)
+
     def create_knowledge_card_from_blocks(self, user_id: str, title: str, blocks: list, conn) -> str:
         """
         Creates a new KnowledgeCard in the database from the processed content blocks.

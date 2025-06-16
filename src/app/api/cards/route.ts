@@ -20,7 +20,7 @@ const CreateCardBodySchema = z.object({
   content: CardContentSchema, // Use the imported schema for BlockNote content
   folderId: z
     .string()
-    .cuid({ message: 'Invalid folder ID format.' })
+    .uuid({ message: 'Invalid folder ID format.' })
     .nullable()
     .optional(),
   tags: z

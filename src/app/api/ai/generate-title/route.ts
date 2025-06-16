@@ -41,6 +41,27 @@ export async function POST(req: Request) {
       },
     });
 
+    // Dispatch the task to the Python AI worker
+    try {
+      await fetch('http://localhost:8000/dispatch-task', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          task_id: task.id,
+          task_type: task.type,
+        }),
+      });
+    } catch (dispatchError) {
+      console.error(
+        'Failed to dispatch title generation task to worker:',
+        dispatchError,
+      );
+      // If dispatch fails, we should probably mark the task as failed
+      // For now, we'll just log the error but still return 202
+    }
+
     return NextResponse.json({ taskId: task.id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create title generation task:', error);

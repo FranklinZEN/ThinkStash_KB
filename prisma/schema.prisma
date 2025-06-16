@@ -19,7 +19,7 @@ datasource db {
 
 // User model (adjust fields as needed, e.g., add password for Credentials provider)
 model User {
-  id            String    @id @default(cuid())
+  id            String    @id @default(uuid())
   name          String?
   email         String   @unique
   password      String    // Added for local auth
@@ -38,7 +38,7 @@ model User {
 }
 
 model Account {
-  id                String  @id @default(cuid())
+  id                String  @id @default(uuid())
   userId            String
   type              String
   provider          String
@@ -57,7 +57,7 @@ model Account {
 }
 
 model Session {
-  id           String   @id @default(cuid())
+  id           String   @id @default(uuid())
   sessionToken String   @unique
   userId       String
   expires      DateTime
@@ -75,7 +75,7 @@ model VerificationToken {
 // --- Application Models ---
 
 model Folder {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   name      String
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -95,7 +95,7 @@ model Folder {
 }
 
 model KnowledgeCard {
-  id        String   @id @default(cuid())
+  id        String   @id @default(uuid())
   title     String
   content   Json // Using Json type as per ADR-004
   userId    String
@@ -116,7 +116,7 @@ model KnowledgeCard {
 }
 
 model Tag {
-  id        String          @id @default(cuid())
+  id        String          @id @default(uuid())
   name      String          @unique
   cards     KnowledgeCard[] @relation("CardTags")
   createdAt DateTime        @default(now())
@@ -124,7 +124,7 @@ model Tag {
 }
 
 model Task {
-  id          String   @id @default(cuid())
+  id          String   @id @default(uuid())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   userId      String

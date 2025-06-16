@@ -1,26 +1,44 @@
 // --- Common Types ---
+export interface BlockProps {
+  level?: 1 | 2 | 3;
+  language?: string;
+  ordered?: boolean;
+  src?: string;
+  caption?: string;
+  [key: string]: any;
+}
+export interface InlineContent {
+  type: 'text' | 'link' | 'mention';
+  text: string;
+  styles?: Record<string, string>;
+  href?: string;
+  content?: InlineContent[];
+}
+
 export interface ContentBlock {
-  block_id: string;
-  tmp_id?: string | null;
-  user_id: string;
-  document_id: string;
-  type: string; // e.g., 'text', 'heading', 'list', 'image', 'code_snippet', etc.
+  id: string;
+  type: string;
+  props?: BlockProps;
+  content?: string | InlineContent[];
+  children?: ContentBlock[];
+  // Deprecated fields, kept for potential legacy data, but should not be used in new code.
+  block_id?: string;
+  user_id?: string;
+  document_id?: string;
   order_index?: number | null;
-  content?: string | null; // Primary text for 'text', 'heading', 'code_snippet', 'table'
   page_number?: number | null;
   bbox?: number[] | null;
-  level?: number | null; // For 'heading'
-  language?: string | null; // For 'code_snippet'
-  items?: (string | ContentBlock)[] | null; // For 'list' - Changed Record<string, any> to ContentBlock
-  ordered?: boolean | null; // For 'list'
-  list_start_number?: number | null; // For 'list'
-  image_id_ref?: string | null; // For 'image'
-  gcs_url?: string | null; // For 'image'
-  alt_text?: string | null; // For 'image'
-  caption?: string | null; // For 'image'
-  llm_description?: string | null; // For 'image'
-  width?: number | null; // For 'image'
-  height?: number | null; // For 'image'
+  level?: number | null;
+  language?: string | null;
+  items?: (string | ContentBlock)[] | null;
+  list_start_number?: number | null;
+  image_id_ref?: string | null;
+  gcs_url?: string | null;
+  alt_text?: string | null;
+  caption?: string | null;
+  llm_description?: string | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface DocumentMetadata {

@@ -3,6 +3,7 @@ import type { ContentBlock as AIServiceContentBlock } from '@/types/api/ai-servi
 import { v4 as uuidv4 } from 'uuid';
 import {
   type AppPartialBlock,
+  type AppInlineContent,
   type AppInlineContentArray,
 } from '@/lib/blocknote/appSchema';
 
@@ -11,113 +12,71 @@ import {
 // ====================================================================================
 export const mapContentBlocksToPartialBlocks = (
   aiBlocks: AIServiceContentBlock[] | undefined | null,
-): PartialBlock[] => {
+): AppPartialBlock[] => {
   if (!aiBlocks || aiBlocks.length === 0) return [];
 
-  const mapAIServiceListToPartialBlocks = (
-    items: (string | AIServiceContentBlock)[],
-    ordered: boolean,
-  ): PartialBlock[] => {
-    const listItems: PartialBlock[] = [];
-    items.forEach(item => {
-      if (typeof item === 'string') {
-        listItems.push({
-          type: ordered ? 'numberedListItem' : 'bulletListItem',
-          content: [{ type: 'text', text: item, styles: {} }],
-        });
-      } else if (item && item.type === 'list' && item.items) {
-        listItems.push({
-          type: ordered ? 'numberedListItem' : 'bulletListItem',
-          content: [],
-          children: mapAIServiceListToPartialBlocks(
-            item.items as (string | AIServiceContentBlock)[],
-            item.ordered || false,
-          ),
-        });
-      }
-    });
-    return listItems;
-  };
+  const result = aiBlocks.flatMap((block): AppPartialBlock | AppPartialBlock[] | null => {
+      const blockId = block.id || uuidv4();
 
-  const result = aiBlocks.flatMap(block => {
-    const blockId = block.block_id || block.tmp_id || uuidv4();
-    let partialBlock: PartialBlock | PartialBlock[];
+      switch (block.type) {
+        case 'heading':
+          return {
+            id: blockId,
+            type: 'heading',
+            props: {
+              level: block.props?.level || 2,
+            },
+            content: extractTextFromContent(block.content),
+          };
 
-    switch (block.type) {
-      case 'heading':
-        const level = block.level ? Math.max(1, Math.min(3, block.level)) : 2;
-        partialBlock = {
-          id: blockId,
-          type: 'heading',
-          props: {
-            level: level as 1 | 2 | 3,
-          },
-          content: block.content || '',
-        };
-        break;
-
-      case 'list':
-        if (block.items && Array.isArray(block.items)) {
-          partialBlock = mapAIServiceListToPartialBlocks(
-            block.items as (string | AIServiceContentBlock)[],
-            block.ordered || false,
-          );
-        } else {
-          partialBlock = [];
-        }
-        break;
-
-      case 'image':
-        if (block.gcs_url) {
-          partialBlock = {
+        case 'image':
+          return {
             id: blockId,
             type: 'image',
             props: {
-              url: block.gcs_url,
-              caption: block.caption || '',
+              url: block.props?.src || '',
+              caption: block.props?.caption || '',
             },
           };
-        } else {
-          partialBlock = {
+        
+        case 'code':
+        case 'code_snippet':
+            return {
+                id: blockId,
+                type: 'codeBlock',
+                content: extractTextFromContent(block.content),
+                props: {
+                    language: block.props?.language || 'auto'
+                }
+            }
+
+        case 'list': {
+          const isOrdered = block.props?.ordered || false;
+          return (block.children || []).map((child): AppPartialBlock => {
+            return {
+              id: child.id || uuidv4(),
+              type: isOrdered ? 'numberedListItem' : 'bulletListItem',
+              content: extractTextFromContent(child.content),
+              children: mapContentBlocksToPartialBlocks(child.children)
+            };
+          });
+        }
+        
+        case 'paragraph':
+        case 'text':
+        default:
+          return {
             id: blockId,
             type: 'paragraph',
-            content: '[Image source missing]',
+            content: extractTextFromContent(block.content),
           };
-        }
-        break;
-
-      case 'code_snippet':
-        partialBlock = {
-          id: blockId,
-          type: 'codeBlock',
-          props: {
-            language: block.language || 'auto',
-          },
-          content: block.content || '',
-        };
-        break;
-      
-      case 'table':
-        partialBlock = {
-          id: blockId,
-          type: 'paragraph',
-          content: block.content || '[Table Content]',
-        };
-        break;
-
-      default:
-        partialBlock = {
-          id: blockId,
-          type: 'paragraph',
-          content: block.content || '',
-        };
-        break;
+      }
     }
-    return partialBlock;
-  });
+  );
 
-  return result;
+  return result.filter((b): b is AppPartialBlock => b !== null);
 };
+
 
 // ====================================================================================
 // FUNCTION 2: Convert BlockNote Editor Blocks TO AI Service Blocks (for SAVING)
@@ -127,72 +86,56 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
   userId: string,
   documentId?: string | null,
 ): AIServiceContentBlock[] => {
-  if (!partialBlocks) return [];
+  if (!partialBlocks || partialBlocks.length === 0) return [];
 
   const document_id_str = documentId || '';
-
-  const recursivelyMapChildren = (
-    children: AppPartialBlock[],
-    isOrdered: boolean,
-  ): (string | AIServiceContentBlock)[] => {
-    return children.map(child => {
-      if (child.children && child.children.length > 0) {
-        return {
-          type: 'list',
-          ordered: isOrdered,
-          items: recursivelyMapChildren(child.children as AppPartialBlock[], isOrdered),
-          block_id: child.id || uuidv4(),
-          user_id: userId,
-          document_id: document_id_str,
-        } as AIServiceContentBlock;
-      }
-      // This is the line we are fixing. We are adding 'as AppInlineContentArray'.
-      return extractTextFromInlineContent(child.content as AppInlineContentArray);
-    });
-  };
 
   const aiBlocks: AIServiceContentBlock[] = [];
   let i = 0;
   while (i < partialBlocks.length) {
     const block = partialBlocks[i];
-    const baseAIBlock = {
-      block_id: block.id || uuidv4(),
+    const baseAIBlock: Partial<AIServiceContentBlock> = {
+      id: block.id || uuidv4(),
       user_id: userId,
       document_id: document_id_str,
       order_index: i,
     };
 
+    // Group list items together
     if (block.type === 'bulletListItem' || block.type === 'numberedListItem') {
       const isOrdered = block.type === 'numberedListItem';
-      const listItemsCollector = [];
+      const listItems: AIServiceContentBlock[] = [];
+      
+      // Collect all consecutive list items of the same type
       while (
         i < partialBlocks.length &&
         partialBlocks[i].type === block.type
       ) {
         const currentItem = partialBlocks[i];
-        if (currentItem.children && currentItem.children.length > 0) {
-          listItemsCollector.push({
-            type: 'list',
-            ordered: isOrdered,
-            items: recursivelyMapChildren(currentItem.children as AppPartialBlock[], isOrdered),
-            block_id: currentItem.id || uuidv4(),
-            user_id: userId,
-            document_id: document_id_str,
-          } as AIServiceContentBlock);
-        } else {
-          // This is the line we are fixing. We are adding 'as AppInlineContentArray'.
-          listItemsCollector.push(extractTextFromInlineContent(currentItem.content as AppInlineContentArray));
-        }
+        const children = currentItem.children 
+          ? mapPartialBlocksToAIServiceContentBlocks(currentItem.children as AppPartialBlock[], userId, documentId)
+          : [];
+
+        listItems.push({
+          id: currentItem.id || uuidv4(),
+          type: 'paragraph', // Individual list items are stored as paragraphs
+          content: extractTextFromContent(currentItem.content),
+          children: children,
+          user_id: userId,
+          document_id: document_id_str,
+        });
         i++;
       }
+
       aiBlocks.push({
         ...baseAIBlock,
-        block_id: uuidv4(),
+        id: uuidv4(), // The list container gets a new ID
         type: 'list',
-        ordered: isOrdered,
-        items: listItemsCollector,
-      });
-      continue;
+        props: { ordered: isOrdered },
+        children: listItems,
+        content: '',
+      } as AIServiceContentBlock);
+      continue; // Continue to next block in the outer loop
     }
 
     let aiBlock: AIServiceContentBlock | null = null;
@@ -201,32 +144,41 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
         aiBlock = {
           ...baseAIBlock,
           type: 'heading',
-          level: block.props?.level,
-          content: extractTextFromInlineContent(block.content as AppInlineContentArray),
-        };
+          props: { level: block.props?.level },
+          content: extractTextFromContent(block.content),
+          children: [],
+        } as AIServiceContentBlock;
         break;
       case 'paragraph':
         aiBlock = {
           ...baseAIBlock,
-          type: 'text',
-          content: extractTextFromInlineContent(block.content as AppInlineContentArray),
-        };
+          type: 'paragraph',
+          content: extractTextFromContent(block.content),
+          children: [],
+        } as AIServiceContentBlock;
         break;
       case 'image':
         aiBlock = {
           ...baseAIBlock,
           type: 'image',
-          gcs_url: block.props?.url,
-          caption: block.props?.caption,
-        };
+          props: {
+            src: block.props?.url,
+            caption: block.props?.caption,
+          },
+          content: '',
+          children: [],
+        } as AIServiceContentBlock;
         break;
       case 'codeBlock':
         aiBlock = {
           ...baseAIBlock,
-          type: 'code_snippet',
-          language: block.props?.language,
-          content: extractTextFromInlineContent(block.content as AppInlineContentArray),
-        };
+          type: 'code',
+          props: {
+            language: block.props?.language,
+          },
+          content: extractTextFromContent(block.content),
+          children: [],
+        } as AIServiceContentBlock;
         break;
     }
 
@@ -242,17 +194,38 @@ export const mapPartialBlocksToAIServiceContentBlocks = (
 // ====================================================================================
 // FUNCTION 3: Helper to extract plain text from BlockNote's content format.
 // ====================================================================================
+function extractTextFromContent(content: any): string {
+  if (!content) {
+    return '';
+  }
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map(extractTextFromContent).join('');
+  }
+  if (typeof content === 'object' && content.text) {
+    return content.text;
+  }
+  return '';
+}
+
 export const extractTextFromInlineContent = (
-  inlineContent: AppInlineContentArray | string | undefined,
+  inlineContent: AppInlineContentArray | string | undefined | null,
 ): string => {
   if (!inlineContent) return '';
   if (typeof inlineContent === 'string') return inlineContent;
   return inlineContent
-    .map(item => {
-      if (typeof item === 'string') return item;
-      if (item.type === 'text') return item.text;
-      if (item.type === 'link')
-        return extractTextFromInlineContent(item.content);
+    .map((content) => {
+      if (typeof content === 'string') {
+        return content;
+      }
+      if (content.type === 'link') {
+        return extractTextFromInlineContent(content.content);
+      }
+      if ('text' in content) {
+        return content.text;
+      }
       return '';
     })
     .join('');

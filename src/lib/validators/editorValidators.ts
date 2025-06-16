@@ -210,11 +210,3 @@ export const UploadedFileMetadataSchema = z.object({
     .number()
     .max(5 * 1024 * 1024, { message: 'File size cannot exceed 5MB.' }),
 });
-
-// Example usage (not part of the file, just for illustration):
-// try {
-//   const validatedContent = CardContentSchema.parse(someJsonContent);
-//   // If successful, validatedContent is typed and structurally correct
-// } catch (error) {
-//   // Handle validation error (e.g., error.format())
-// }

@@ -14,5 +14,15 @@ services:
       - postgres_data:/var/lib/postgresql/data # Persist data using a named volume
     restart: always # Always restart the container if it stops
 
+  redis:
+    image: redis:alpine
+    container_name: thinkstash-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
 volumes:
-  postgres_data: # Define the named volume 
+  postgres_data: # Define the named volume
+  redis_data: 

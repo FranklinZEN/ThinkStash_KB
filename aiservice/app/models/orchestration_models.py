@@ -23,7 +23,7 @@ class BlockProps(BaseModel):
     level: Optional[int] = Field(None, description="Heading level (1-6)")
     language: Optional[str] = Field(None, description="Language for code blocks")
     ordered: Optional[bool] = Field(None, description="For list blocks")
-    url: Optional[str] = Field(None, description="URL for image blocks")
+    src: Optional[str] = Field(None, description="Source URL for image blocks")
     caption: Optional[str] = Field(None, description="Caption for image blocks")
     # Add other props as needed, e.g., backgroundColor, textColor
 
@@ -82,13 +82,11 @@ class OrchestrationOutput(BaseModel):
     document_id: Optional[str] = Field(default=None, description="Document identifier (job_id) for the entire orchestration, if available.")
     source_identifier: str
     source_type: str
-    user_id: Optional[str] = Field(None, description="Identifier of the user who initiated the request, mirrored from input or document_metadata.")
-    document_id: Optional[str] = Field(None, description="Unique identifier for the processed document instance, mirrored from document_metadata.")
     processing_level_used: str
-    extracted_title: Optional[str] = None
+    title: Optional[str] = Field(None, description="The final title for the document.")
+    content_blocks: List[ContentBlock] = Field(default_factory=list, description="The final, structured content blocks.")
     is_long_article: bool = False
-    original_content_blocks: List[ContentBlock] = []
     processed_images_data: Dict[str, EnrichedImageMetadata] = Field(default_factory=dict, description="Dictionary mapping image_id to EnrichedImageMetadata.")
     document_metadata: Optional[DocumentMetadata] = Field(None, description="Comprehensive metadata about the processed document.")
     error_message: Optional[str] = None
-    card_id: Optional[str] = Field(None, description="The ID of the newly created KnowledgeCard on success.") 
+    card_id: Optional[str] = Field(None, description="[DEPRECATED] The ID of the newly created KnowledgeCard on success. The card is no longer created by the orchestrator.")

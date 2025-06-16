@@ -1,9 +1,13 @@
-import prisma from '@/lib/prisma';
+import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { NextResponse } from 'next/server';
 
-export async function GET(req: Request, { params }: { params: { taskId: string } }) {
+const AI_WORKER_URL = process.env.AI_WORKER_URL || 'http://localhost:8000';
+
+export async function GET(
+  req: Request,
+  { params }: { params: { taskId: string } },
+) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -11,20 +15,29 @@ export async function GET(req: Request, { params }: { params: { taskId: string }
     }
 
     const { taskId } = params;
-    const task = await prisma.task.findFirst({
-      where: {
-        id: taskId,
-        userId: session.user.id,
-      }
-    });
-
-    if (!task) {
-      return new NextResponse('Task not found', { status: 404 });
+    if (!taskId) {
+      return new NextResponse('Task ID is required', { status: 400 });
     }
 
-    return NextResponse.json(task);
+    const response = await fetch(`${AI_WORKER_URL}/tasks/${taskId}/status`);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(
+        `Failed to get task status from AI worker for task ${taskId}:`,
+        response.status,
+        errorBody,
+      );
+      return new NextResponse(
+        `Error from AI service: ${errorBody}`,
+        { status: response.status },
+      );
+    }
+
+    const data = await response.json();
+    return NextResponse.json(data);
   } catch (error) {
-    console.error(`Failed to fetch task status for ${params.taskId}:`, error);
+    console.error('Error in task status proxy:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

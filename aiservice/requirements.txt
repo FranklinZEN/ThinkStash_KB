@@ -55,6 +55,11 @@ google-auth
 # === Database ===
 psycopg2-binary
 
+# === Task Queue ===
+celery==5.4.0
+redis==5.0.7
+gevent==24.2.1
+
 # === Utilities ===
 python-dotenv>=1.0.0
 cachetools
@@ -75,3 +80,4 @@ ruff
 
 # === Additional Dependencies ===
 gunicorn
+tenacity

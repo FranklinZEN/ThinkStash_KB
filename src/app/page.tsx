@@ -74,6 +74,7 @@ export default function Home() {
     setData: setStagedData,
     setError: setStagedError,
     isLoading: isStaging,
+    clearData: clearStagedData,
   } = useStagingCardStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -152,6 +153,101 @@ export default function Home() {
     return normalized;
   };
 
+  const pollTaskStatus = useCallback(async (taskId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/status`);
+        if (!res.ok) {
+          clearInterval(interval);
+          setStagedError('Failed to get task status.');
+          toast({
+            title: 'Error checking task status',
+            description: 'Could not retrieve task progress. Please try again.',
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
+          return;
+        }
+
+        const data = await res.json();
+
+        if (data.status === 'COMPLETED') {
+          clearInterval(interval);
+          
+          let resultPayload = null;
+          if (data.payload && typeof data.payload === 'string') {
+            try {
+              resultPayload = JSON.parse(data.payload);
+            } catch (e) {
+              console.error("Failed to parse task result payload:", e);
+              setStagedError('Could not read the processing result.');
+              toast({
+                  title: 'Content Error',
+                  description: "The AI service returned a result, but it couldn't be read.",
+                  status: 'error',
+                  duration: 5000,
+                  isClosable: true,
+              });
+              return;
+            }
+          } else if (data.payload && typeof data.payload === 'object') {
+            resultPayload = data.payload;
+          }
+          
+          if (resultPayload?.title && resultPayload?.content_blocks) {
+            toast({
+              title: 'Success!',
+              description: 'Content extracted. Redirecting to the editor.',
+              status: 'success',
+              duration: 3000,
+              isClosable: true,
+            });
+            setStagedData(resultPayload.title, resultPayload.content_blocks, null, taskId);
+            router.push('/cards/new');
+          } else {
+             setStagedError('Processing finished, but the content was empty.');
+             toast({
+                title: 'Processing Error',
+                description: "The AI service couldn't extract content from the URL.",
+                status: 'error',
+                duration: 5000,
+                isClosable: true,
+            });
+          }
+        } else if (data.status === 'FAILED') {
+          clearInterval(interval);
+          setStagedError(data.error || 'Content processing failed.');
+           toast({
+            title: 'Processing Failed',
+            description: data.error || 'Something went wrong while processing your content.',
+            status: 'error',
+            duration: 5000,
+            isClosable: true,
+          });
+        }
+      } catch (error) {
+        clearInterval(interval);
+        setStagedError('An error occurred while polling for task status.');
+        console.error('Polling error:', error);
+      }
+    }, 3000);
+
+    const timeout = setTimeout(() => {
+        clearInterval(interval);
+        if (useStagingCardStore.getState().isLoading) {
+             setStagedError('Processing is taking longer than expected. Please check back later.');
+             toast({
+                title: 'Processing Timed Out',
+                description: "It's taking a while. You can find the card on the home page once it's ready.",
+                status: 'warning',
+                duration: 5000,
+                isClosable: true,
+            });
+        }
+    }, 120000); 
+  }, [router, toast, setStagedData, setStagedError, clearStagedData]);
+
   const handleReconstructFromUrl = async () => {
     if (!reconstructUrl.trim()) {
       toast({
@@ -162,63 +258,44 @@ export default function Home() {
       });
       return;
     }
+    
     startLoading();
+    onCloseUrlModal();
+    
     try {
       const normalizedUrl = normalizeUrlInput(reconstructUrl.trim());
-      console.log('Normalized URL for reconstruction:', normalizedUrl);
 
-      // Call the API that creates a task
-      const response = await fetch('/api/ai/reconstruct-and-analyze', {
+      const response = await fetch('/api/ai/draft-from-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sourceUrl: normalizedUrl }),
       });
 
       if (response.status !== 202) {
-        // Handle non-202 responses, which indicate an error before task creation
         const errorData = await response.json();
-        throw new Error(
-          errorData.error ||
-            `Failed to create reconstruction task. Status: ${response.status}`,
-        );
+        throw new Error(errorData.error || `Server responded with ${response.status}`);
       }
-
+      
       const { taskId } = await response.json();
-
-      if (!taskId) {
-        throw new Error('Task ID was not returned from the API.');
-      }
-
-      // Instead of processing the result directly, we now store the task ID
-      // and let the polling mechanism on the destination page handle it.
-      // We could also implement polling here in a modal if the design required it.
-      // For now, we will use the staging store to pass the task ID.
-      setStagedData(null, null, null, taskId);
-
       toast({
-        title: 'Reconstruction Started!',
-        description:
-          'Your content is being processed. You will be redirected.',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
+          title: 'Processing Started',
+          description: "We're fetching the content from the URL. You'll be redirected when it's ready.",
+          status: 'info',
+          duration: 5000,
+          isClosable: true,
       });
+      await pollTaskStatus(taskId);
 
-      onCloseUrlModal();
-      setReconstructUrl('');
-      router.push('/cards/new');
-    } catch (error: unknown) {
-      console.error('[HomePage] Error in handleReconstructFromUrl:', error);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setStagedError(errorMessage);
       toast({
-        title: 'Error Reconstructing Content',
-        description:
-          error instanceof Error ? error.message : 'An unknown error occurred.',
+        title: 'Failed to Start Processing',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
       });
-    } finally {
-      onCloseUrlModal();
     }
   };
 
@@ -233,104 +310,47 @@ export default function Home() {
   const handleReconstructFromFile = async () => {
     if (!selectedFile) {
       toast({
-        title: 'Please select a file.',
-        status: 'warning',
+        title: 'No file selected',
+        status: 'error',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
+
     startLoading();
+    onCloseFileModal();
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
 
     try {
-      // Step 1: Upload the file to GCS
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-
-      const uploadResponse = await fetch('/api/files/upload', {
+      const response = await fetch('/api/files/upload', {
         method: 'POST',
         body: formData,
-        // headers: { 'Content-Type': 'multipart/form-data' } // Not needed, browser sets it with boundary
       });
 
-      if (!uploadResponse.ok) {
-        const uploadErrorData = await uploadResponse.json();
-        throw new Error(
-          uploadErrorData.error ||
-            `File upload failed with status: ${uploadResponse.status}`,
-        );
+      if (response.status !== 202) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Server responded with ${response.status}`);
       }
 
-      const uploadResult = await uploadResponse.json();
-      const fileId = uploadResult.file_id; // This should be the gs:// path
-
-      if (!fileId) {
-        throw new Error('File ID not received from upload service.');
-      }
-
+      const { taskId } = await response.json();
       toast({
-        title: 'File Uploaded!',
-        description: 'Now reconstructing content...',
-        status: 'info',
-        duration: 2000,
-        isClosable: true,
+          title: 'File Uploaded, Processing Started',
+          description: "We're processing your file. You'll be redirected when it's ready.",
+          status: 'info',
+          duration: 5000,
+          isClosable: true,
       });
+      await pollTaskStatus(taskId);
 
-      // Step 2: Call reconstruct-and-analyze with the file_id
-      const reconstructResponse = await fetch(
-        '/api/ai/reconstruct-and-analyze',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file_id: fileId }), // Sending file_id instead of source_url
-        },
-      );
-
-      const reconstructData: OrchestrationOutput =
-        await reconstructResponse.json();
-
-      if (
-        !reconstructResponse.ok ||
-        reconstructData.error_message ||
-        !reconstructData.status_code.startsWith('success')
-      ) {
-        const errorMsg =
-          reconstructData.error_message || 'Failed to reconstruct from file.';
-        throw new Error(errorMsg);
-      }
-
-      const titleToSet =
-        reconstructData.extracted_title ||
-        reconstructData.document_metadata?.title ||
-        selectedFile.name.split('.')[0].replace(/_/g, ' ') ||
-        'Untitled Card';
-      const keywordsToSet: string[] = []; // Keywords are not auto-generated at this stage
-
-      setStagedData(
-        titleToSet,
-        reconstructData.original_content_blocks,
-        keywordsToSet,
-      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setStagedError(errorMessage);
       toast({
-        title: 'Content Reconstructed!',
-        description: 'Navigating to create card page...',
-        status: 'success',
-        duration: 2000,
-        isClosable: true,
-      });
-      onCloseFileModal();
-      setSelectedFile(null);
-      router.push('/cards/new');
-    } catch (error) {
-      const errMsg =
-        error instanceof Error
-          ? error.message
-          : 'An unknown error occurred during file processing.';
-      console.error('Reconstruction from file failed:', errMsg);
-      setStagedError(errMsg);
-      toast({
-        title: 'Processing Failed',
-        description: errMsg,
+        title: 'Failed to Process File',
+        description: errorMessage,
         status: 'error',
         duration: 5000,
         isClosable: true,
