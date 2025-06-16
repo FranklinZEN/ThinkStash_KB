@@ -7,6 +7,7 @@ langchain_community
 langchain_openai
 langchain_anthropic
 langchain-text-splitters
+langchain-google-genai
 openai
 
 # === Web Service Framework ===
