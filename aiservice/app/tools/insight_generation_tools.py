@@ -114,8 +114,8 @@ class OptimizedLLMInteractionTool(BaseTool):
             
             response = self.llm_client.invoke(
                 lc_messages,
-                max_tokens=max_tokens, # Pass max_tokens here
-                temperature=temperature # Pass temperature here
+                max_tokens=max_tokens,
+                temperature=temperature
             )
             
             if hasattr(response, 'content'):

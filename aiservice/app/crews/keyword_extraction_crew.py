@@ -20,9 +20,10 @@ from aiservice.app.tools.content_processing_tools import FullTextContentExtracto
 # KeywordToTagFormatterTool is used by the agent, not directly by the crew typically
 
 class GeneralPurposeKeywordExtractionCrew:
-    def __init__(self, content_blocks: List[Dict[str, Any]]):
+    def __init__(self, content_blocks: str):
         self.logger = get_logger(self.__class__.__name__)
-        self.content_blocks = content_blocks
+        # The 'content_blocks' parameter now holds the pre-extracted full text string.
+        self.full_text_content = content_blocks
         
         self.settings = Settings() # MODIFIED: Initialize Settings
         llm_instance = self.settings.get_crew_llm() # MODIFIED: Get LLM instance via Settings
@@ -33,7 +34,7 @@ class GeneralPurposeKeywordExtractionCrew:
         self.keyword_agent = agent_factory.keyword_identifier_agent()
 
         # Initialize tools for tasks (if any are directly used by tasks and not just agents)
-        self.full_text_extractor_tool = FullTextContentExtractorTool()
+        # self.full_text_extractor_tool = FullTextContentExtractorTool() # No longer needed
 
     def _create_keyword_extraction_task_description_suffix(self) -> str:
         """Helper to keep the main task description part tidy."""
@@ -51,12 +52,8 @@ class GeneralPurposeKeywordExtractionCrew:
     def run(self) -> Union[List[str], str]:
         self.logger.info("Starting Keyword Extraction Crew execution...")
         
-        try:
-            full_text_content = self.full_text_extractor_tool._run(content_block_dicts=self.content_blocks)
-            self.logger.debug(f"Full text extracted (first 500 chars): {full_text_content[:500]}...")
-        except Exception as e:
-            self.logger.error(f"Error during full text extraction: {e}", exc_info=True)
-            return f"Error: Failed to extract text from content blocks - {str(e)}"
+        full_text_content = self.full_text_content
+        self.logger.debug(f"Using pre-extracted full text (first 500 chars): {full_text_content[:500]}...")
 
         if not full_text_content or (isinstance(full_text_content, str) and full_text_content.startswith("Error:")):
             error_msg = full_text_content if isinstance(full_text_content, str) and full_text_content.strip() else "Error: Extracted text content is empty."

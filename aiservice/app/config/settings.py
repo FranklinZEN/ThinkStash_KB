@@ -80,17 +80,17 @@ class Settings(BaseSettings):
     
     # Model name for the text generation, as used by the OpenAI compatibility layer
     # This will load GEMINI_TEXT_MODEL_COMPAT from the .env file
-    gemini_text_model_compat: str = Field(default="models/gemini-2.5-flash", env="GEMINI_TEXT_MODEL_COMPAT", description="Gemini text model for OpenAI compatibility layer.")
+    gemini_text_model_compat: str = Field(default="gemini-1.5-flash-latest", env="GEMINI_TEXT_MODEL_COMPAT", description="Gemini text model for OpenAI compatibility layer.")
     
     # Base URL for the Gemini OpenAI compatibility endpoint
     # This will load GEMINI_COMPATIBILITY_BASE_URL from the .env file
     gemini_compatibility_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1beta/openai/", env="GEMINI_COMPATIBILITY_BASE_URL", description="Base URL for Gemini OpenAI compatibility.")
 
     # Fallback/general default LLM model (can be the same as gemini_text_model_compat if only using that)
-    default_llm_model: str = Field(default="models/gemini-2.5-flash", env="DEFAULT_LLM_MODEL", description="Default LLM model name if not using compatibility layer or for other purposes. Ensure .env defines this if used differently.")
+    default_llm_model: str = Field(default="gemini-1.5-flash-latest", env="DEFAULT_LLM_MODEL", description="Default LLM model name if not using compatibility layer or for other purposes. Ensure .env defines this if used differently.")
     
     # Multimodal model - align with your .env or set a sensible default
-    default_multimodal_llm_model: str = Field(default="models/gemini-2.5-flash", env="DEFAULT_MULTIMODAL_MODEL_NAME", description="Default LLM for multimodal tasks.")
+    default_multimodal_llm_model: str = Field(default="gemini-1.5-flash-latest", env="DEFAULT_MULTIMODAL_MODEL_NAME", description="Default LLM for multimodal tasks.")
 
     # Service Behavior Flags
     use_llm_for_routing: bool = Field(default=False, description="Use LLM for routing (V2.4 style, should be False for V2.5 deterministic). Set to False for V2.5.")
@@ -173,16 +173,11 @@ def get_crew_llm(self: Settings) -> Any: # Using Any for now, will be ChatOpenAI
         print(f"[Settings]   Model: {self.gemini_text_model_compat}")
         print(f"[Settings]   Base URL: {self.gemini_compatibility_base_url}")
 
-        # For CrewAI, it's common to pass the model instance directly.
-        # The ChatOpenAI client handles the API key via environment variable OPENAI_API_KEY by default,
-        # but when using a custom base_url for Gemini, we might need to pass it explicitly or ensure
-        # the environment is set up in a way it expects for custom providers.
-        # CrewAI/Langchain typically expect OPENAI_API_KEY, so we set it temporarily if needed.
-        # However, for Google's OpenAI-compatible endpoint, the key is passed in the Authorization header.
-        # langchain-openai ChatOpenAI should handle this if base_url is set correctly and api_key is provided.
+        # Based on Google's OpenAI compatibility documentation, the model name should be passed
+        # without any prefixes, and the base_url should point to the specific compatibility endpoint.
         
         llm_params = {
-            "model_name": self.gemini_text_model_compat,
+            "model_name": f"gemini/{self.gemini_text_model_compat}",
             "openai_api_base": self.gemini_compatibility_base_url,
             "openai_api_key": self.gemini_api_key,
             "temperature": 0.2, # Default temperature, can be made configurable

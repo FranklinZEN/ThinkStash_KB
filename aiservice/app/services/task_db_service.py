@@ -92,6 +92,17 @@ class TaskDBService:
         sql = 'UPDATE "Task" SET "progressMessage" = %s, "updatedAt" = %s WHERE id = %s'
         params = (stage_message, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, f"update progressMessage to '{stage_message}'")
+
+    def update_task_with_rewrite_result(self, task_id: str, rewritten_blocks: list, conn):
+        """Updates a COMPLETED task with the result of a content rewrite."""
+        result_payload = {
+            "status": "success",
+            "rewritten_content_blocks": rewritten_blocks
+        }
+        result_data_json = json.dumps(result_payload, default=json_serial_converter)
+        sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
+        params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
+        self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with rewrite results")
         
     def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Fetches a single task by its ID."""

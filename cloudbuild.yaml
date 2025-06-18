@@ -88,49 +88,49 @@ steps:
   ]
 
 # ==============================================================================
-# WORKER - Build and Deploy the Python AI Service Worker
+# AISERVICE - Build and Deploy the Python AI FastAPI Service
 # ==============================================================================
 
-# 7. Build Worker Docker Image
+# 7. Build aiservice Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'worker-docker-build'
-  waitFor: ['webapp-docker-push']
+  id: 'aiservice-docker-build'
+  waitFor: ['webapp-docker-push'] # Can run in parallel with webapp deployment
   args: [
     'build',
     '--no-cache',
     '-t',
-    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
-    '-f', 'aiservice/worker.Dockerfile',
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA',
+    '-f', 'Dockerfile', # Use the new Dockerfile in the root
     '.'
   ]
 
-# 8. Push Worker Docker Image
+# 8. Push aiservice Docker Image
 - name: 'gcr.io/cloud-builders/docker'
-  id: 'worker-docker-push'
-  waitFor: ['worker-docker-build']
-  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
+  id: 'aiservice-docker-push'
+  waitFor: ['aiservice-docker-build']
+  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA']
 
-# 9. Deploy AI Worker as a Cloud Run Service
+# 9. Deploy AI Service to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  id: 'worker-service-deploy'
-  waitFor: ['worker-docker-push']
+  id: 'aiservice-deploy'
+  waitFor: ['aiservice-docker-push']
   entrypoint: 'bash'
   args:
     - '-c'
     - |
-      gcloud run deploy thinkstash-worker \
-        --image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA \
+      gcloud run deploy thinkstash-aiservice \
+        --image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-aiservice:$COMMIT_SHA \
         --region=${_GCP_REGION} \
         --platform=managed \
         --no-allow-unauthenticated \
         --service-account=${_CLOUD_RUN_SA_EMAIL} \
         --add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance \
-        --cpu=1 \
-        --memory=1Gi \
-        --min-instances=1 \
-        --max-instances=3 \
-        --port=8080 \
-        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,GCS_BUCKET_NAME=thinkstash-gcs-bucket-name:latest \
+        --cpu=2 \
+        --memory=4Gi \
+        --min-instances=0 \
+        --max-instances=5 \
+        --port=8000 \
+        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,GCS_BUCKET_NAME=thinkstash-gcs-bucket-name:latest,REDIS_URL=redis-url:latest \
         --set-env-vars=^##^
           PYTHONUNBUFFERED=1,##
           PYTHONDONTWRITEBYTECODE=1,##
@@ -151,6 +151,65 @@ steps:
           DEFAULT_REQUEST_TIMEOUT_SECONDS=30,##
           MAX_CONCURRENT_TASKS=10
 
+# ==============================================================================
+# WORKER - Build and Deploy the Python AI Service Worker
+# ==============================================================================
+
+# 10. Build Worker Docker Image
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'worker-docker-build'
+  waitFor: ['webapp-docker-push'] # Can run in parallel
+  args: [
+    'build',
+    '--no-cache',
+    '-t',
+    '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA',
+    '-f', 'worker.Dockerfile', # Use the new worker.Dockerfile in the root
+    '.'
+  ]
+
+# 11. Push Worker Docker Image
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'worker-docker-push'
+  waitFor: ['worker-docker-build']
+  args: ['push', '${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA']
+
+# 12. Deploy AI Worker as a Cloud Run Service
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'worker-service-deploy'
+  waitFor: ['worker-docker-push', 'aiservice-deploy'] # Wait for aiservice to be deployed
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      gcloud run deploy thinkstash-worker \
+        --image=${_GCP_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/thinkstash-worker:$COMMIT_SHA \
+        --region=${_GCP_REGION} \
+        --platform=managed \
+        --no-allow-unauthenticated \
+        --service-account=${_CLOUD_RUN_SA_EMAIL} \
+        --add-cloudsql-instances=thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance \
+        --cpu=4 \
+        --memory=16Gi \
+        --min-instances=1 \
+        --max-instances=3 \
+        --port=8080 \
+        --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,GCS_BUCKET_NAME=thinkstash-gcs-bucket-name:latest,REDIS_URL=redis-url:latest \
+        --set-env-vars=^##^
+          PYTHONUNBUFFERED=1,##
+          PYTHONDONTWRITEBYTECODE=1,##
+          USE_GEMINI_VIA_OPENAI_COMPATIBILITY=true,##
+          GEMINI_TEXT_MODEL_COMPAT=models/gemini-2.5-flash,##
+          GEMINI_COMPATIBILITY_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/,##
+          IMG_FILTER_MIN_WIDTH_PX=75,##
+          IMG_FILTER_MIN_HEIGHT_PX=75,##
+          IMG_FILTER_MIN_AREA=5000,##
+          IMG_FILTER_MAX_ASPECT_RATIO_DEVIATION=999.0,##
+          DEFAULT_REQUEST_TIMEOUT_SECONDS=30,##
+          MAX_CONCURRENT_TASKS=10,##
+          # Add a reference to the aiservice for the worker to call back
+          AISERVICE_URL=https://thinkstash-aiservice-${_GCP_REGION}-uc.a.run.app
+
 # Define available secrets from Secret Manager
 availableSecrets:
   secretManager:
@@ -160,6 +219,8 @@ availableSecrets:
     env: 'DB_PASSWORD'
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
     env: 'DB_NAME'
+  - versionName: projects/${_PROJECT_ID}/secrets/redis-url/versions/latest
+    env: 'REDIS_URL'
 
 options:
   logging: CLOUD_LOGGING_ONLY

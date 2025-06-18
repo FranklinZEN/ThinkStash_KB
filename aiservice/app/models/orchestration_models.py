@@ -10,6 +10,8 @@ class OrchestrationInput(BaseModel):
     job_id: Optional[str] = Field(default=None, description="Unique job identifier")
     user_id: Optional[str] = Field(default=None, description="User identifier")
     output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
+    run_title_generation: bool = Field(default=False, description="Flag to run the title generation crew.")
+    run_keyword_extraction: bool = Field(default=False, description="Flag to run the keyword extraction crew.")
 
 # --- BlockNote Compliant Models ---
 

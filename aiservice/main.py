@@ -32,7 +32,7 @@ from aiservice.app.services.processing.image_processing_service import ImageProc
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
 from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput, ContentBlock
 from aiservice.app.services.task_db_service import TaskDBService
-from aiservice.app.tasks import process_reconstruction_task, generate_title_task
+from aiservice.app.tasks import process_reconstruction_task, generate_title_task, process_rewrite_task
 from .celery_app import app as celery_app
 # --- End Service Imports ---
 
@@ -131,11 +131,23 @@ async def create_and_dispatch_task(payload: CreateTaskPayload = Body(...)):
             logger.info(f"Successfully created task {new_task_id} of type {task_type} for user {user_id}")
 
             # Now, prepare and dispatch the task
-            source_identifier = payload.payload.get('url') or payload.payload.get('text')
-            source_type = 'url' if 'url' in payload.payload else 'text'
+            source_identifier = None
+            source_type = None
+
+            if task_type == 'REWRITE_CONTENT':
+                if 'content_blocks' not in payload.payload:
+                    raise HTTPException(status_code=400, detail="Payload for REWRITE_CONTENT must contain 'content_blocks'")
+                source_identifier = f"content-rewrite-for-task-{new_task_id}"
+                source_type = 'content_blocks'
+            else:
+                source_identifier = payload.payload.get('url') or payload.payload.get('text')
+                if 'url' in payload.payload:
+                    source_type = 'url'
+                elif 'text' in payload.payload:
+                    source_type = 'text'
 
             if not source_identifier:
-                raise HTTPException(status_code=400, detail="Payload must contain 'url' or 'text'")
+                raise HTTPException(status_code=400, detail="Payload must contain 'url', 'text', or 'content_blocks' for the given task type.")
 
             task_data = {
                 "task_id": new_task_id,
@@ -158,6 +170,10 @@ async def create_and_dispatch_task(payload: CreateTaskPayload = Body(...)):
                 task_payload_for_celery = payload.payload
             elif task_type == 'GENERATE_TITLE':
                 task_to_run = 'aiservice.app.tasks.generate_title_task'
+                task_payload_for_celery = payload.payload
+            elif task_type == 'REWRITE_CONTENT':
+                task_to_run = 'aiservice.app.tasks.process_rewrite_task'
+                # The payload for this task is the 'payload' part of the incoming request
                 task_payload_for_celery = payload.payload
             # Add other task types here in the future
             

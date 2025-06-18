@@ -31,18 +31,20 @@ class TitleOutput(BaseModel):
 class GeneralPurposeTitleGenerationCrew:
     """Creates and runs a CrewAI crew for generating titles from content blocks."""
 
-    def __init__(self, request_model: Optional[TitleGenerationRequest] = None):
+    def __init__(self, full_text_content: str, request_model: Optional[TitleGenerationRequest] = None):
         """
         Initializes the crew.
         Args:
+            full_text_content: The pre-extracted full text content of the document.
             request_model: Optional TitleGenerationRequest object, not used in the current implementation.
         """
         print("Initializing GeneralPurposeTitleGenerationCrew...")
+        self.full_text_content = full_text_content
         self.request_model = request_model
         # Initialize agents and tools here if they are to be reused across runs
         # or if their initialization is expensive.
         self.title_agents = TitleGenerationAgents()
-        self.full_text_extractor_tool = FullTextContentExtractorTool() # Instantiate for direct use
+        # self.full_text_extractor_tool = FullTextContentExtractorTool() # No longer needed
         self.settings = Settings() # Corrected class name
         self.llm = self.settings.get_crew_llm()
 
@@ -82,22 +84,14 @@ class GeneralPurposeTitleGenerationCrew:
             # output_file for very long outputs, not applicable here
         )
 
-    def run(self, content_block_dicts: List[Dict[str, Any]]) -> TitleGenerationOutput:
-        print(f"GeneralPurposeTitleGenerationCrew running with {len(content_block_dicts)} content block(s).")
+    def run(self) -> TitleGenerationOutput:
+        print(f"GeneralPurposeTitleGenerationCrew running with pre-extracted text.")
 
-        # Step 1: Extract full text directly using the tool
-        # The FullTextContentExtractorTool's _run method expects List[Dict[str, Any]]
-        # Ensure the input format matches what the tool expects.
-        try:
-            print("[TitleGenerationCrew] Attempting to extract text using FullTextContentExtractorTool...")
-            # The tool's _run method needs to be called correctly. 
-            # If it's a BaseTool, it's usually agent.invoke(tool_input)
-            # If we are using it directly, we call its _run method.
-            extracted_text = self.full_text_extractor_tool._run(content_block_dicts=content_block_dicts)
-            print(f"[TitleGenerationCrew] Extracted text (first 300 chars): {extracted_text[:300]}...")
-        except Exception as e:
-            print(f"[TitleGenerationCrew ERROR] Error during direct text extraction: {e}")
-            extracted_text = "Error: Failed to extract text content for title generation."
+        # Text is now passed during initialization, no need to extract it here.
+        # The orchestrator is responsible for text extraction.
+        extracted_text = self.full_text_content
+            
+        print(f"[TitleGenerationCrew] Using pre-extracted text (first 300 chars): {extracted_text[:300]}...")
 
         # Prepare task for the agent with the extracted text
         title_task = self._create_title_generation_task(extracted_text=extracted_text)
@@ -190,20 +184,20 @@ if __name__ == '__main__':
     # For this refactoring, request_model is optional in __init__ and not directly used by run()
     # request = TitleGenerationRequest(content_blocks=sample_content_blocks) 
     
-    crew_runner = GeneralPurposeTitleGenerationCrew()
+    crew_runner = GeneralPurposeTitleGenerationCrew(full_text_content="")
     
     # The run method now directly takes the list of content block dictionaries
-    result_output = crew_runner.run(content_block_dicts=sample_content_blocks)
+    result_output = crew_runner.run()
     print(f"\nSuggested Title from Crew: {result_output.suggested_title}")
 
     # Test with empty content
     empty_content_blocks = []
-    result_empty = crew_runner.run(content_block_dicts=empty_content_blocks)
+    result_empty = crew_runner.run()
     print(f"\nSuggested Title from Crew (empty input): {result_empty.suggested_title}")
 
     # Test with content that should result in an error from the agent's perspective
     error_sim_content = [
          {'block_id': '1', 'user_id': 'test_user', 'document_id': 'doc1', 'type': 'text', 'content': 'Error: Malformed input data detected previously.', 'order_index': 0, 'version': 1, 'page_number':1, 'coordinates': None, 'created_at': '2024-01-01T00:00:00', 'updated_at': '2024-01-01T00:00:00'}
     ]
-    result_error_content = crew_runner.run(content_block_dicts=error_sim_content)
+    result_error_content = crew_runner.run()
     print(f"\nSuggested Title from Crew (error content input): {result_error_content.suggested_title}") 

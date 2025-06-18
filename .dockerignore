@@ -1,83 +1,78 @@
 # Git
 .git
 .gitignore
-.gcloudignore
+.dockerignore
 
-# Node.js
-node_modules
-.next
-.swc
-package-lock.json
-package.json
-tsconfig.json
-tsconfig.jest.json
-tsconfig.tsbuildinfo
-next.config.mjs
-next.config.cjs
-next-env.d.ts
-jest.config.mjs
-jest.config.backend.js
-jest.setup.js
-jest.setup.backend.mjs
-jest.setup.backend.js
-eslint.config.js
-.eslintrc.json
-.prettierrc.json
-.nvmrc
-
-# Python virtual env
-.venv
-__pycache__
-
-# Root level files not needed for the backend build
-cloud_sql_proxy.exe
-cloudbuild.yaml
-cloudbuild.yaml.bak
-test_connection.py
-README.md
-BlockNoteEditorComponent- Initial.tsx
-
-# Directories not needed for the backend build
-.husky
-.image_cache
-coverage
-devlog
-documentation
-generated
-html
-lib
-pages
-pgvector
-prisma
-public
-src
-terraform
-tests
-version_control
-
-# IDE / OS generated
-.idea
-.vscode
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-*debug.log*
-*error.log*
-.logs
-
-# Build artifacts / large files
+# Python
+**/.venv
+**/venv
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
 build/
 dist/
-out/
-coverage/
-*.bak
-*.exe
 
-# Terraform
-.terraform
-*.tfstate
-*.tfstate.*
-*.tfplan
-*.tfvars 
+# Node.js
+node_modules/
+.next/
+npm-debug.log
+**/node_modules
+
+# IDE/Editor specific
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Other
+.DS_Store
+*.log
+docs/
+notebooks/
+tests/
+pgvector/
+generated/
+devlog/
+html/
+public/
+terraform/
+prisma/
+src/
+
+# Environment variables
+.env
+aiservice/.env
+aiservice/.venv/
+
+# Exclude test files
+tests/
+aiservice/tests/
+
+# Exclude IDE folders
+.idea/
+.vscode/
+
+# Cloud stuff
+cloud_sql_proxy.exe
+
+# Backups
+*.bak
+
+# Local Next.js build artifacts
+.next/
+
+# Jest cache
+.jest/
+
+# Temporary files
+*.tmp
+
+# OS-specific files
+Thumbs.db
+
+# We want to include the README.md in aiservice, so we un-ignore it.
+!aiservice/README.md
+# But not the root one for now
+README.md 

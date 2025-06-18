@@ -4,6 +4,11 @@ from pydantic import BaseModel, Field, validator
 import datetime
 import uuid
 
+class TaskType(str, Enum):
+    """Defines the types of tasks the system can handle."""
+    RECONSTRUCT_AND_ANALYZE = "RECONSTRUCT_AND_ANALYZE"
+    REWRITE_CONTENT = "REWRITE_CONTENT"
+
 class TaskStatus(str, Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"

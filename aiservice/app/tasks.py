@@ -61,20 +61,26 @@ def process_reconstruction_task(self, task_payload_dict: dict):
     """
     orchestrator = get_orchestrator_instance()
     
-    # Extract necessary info from the payload
+    # The main payload from the API is nested inside the 'payload' key of the task data
+    main_payload = task_payload_dict.get('payload', {})
+    
+    # Extract necessary info
     task_id = task_payload_dict.get('task_id')
     user_id = task_payload_dict.get('user_id')
-    source_identifier = task_payload_dict.get('source_identifier')
-    source_type = task_payload_dict.get('source_type')
+    source_identifier = main_payload.get('url') # Correctly get URL from nested payload
+    source_type = 'url' if source_identifier else 'text' # Determine source type
     
     logger.info(f"Starting reconstruction task for task_id: {task_id}")
 
     try:
+        # Construct OrchestrationInput using the unpacked main_payload
+        # This allows flags like 'run_title_generation' to be passed through
         orchestrator_input = OrchestrationInput(
             source_identifier=source_identifier,
             source_type=source_type,
             user_id=user_id,
-            job_id=task_id  # Use the task_id from the payload as the job_id
+            job_id=task_id,
+            **main_payload  # Unpack the rest of the payload here
         )
         
         # Since orchestrator.process is async, we need to run it in an event loop
@@ -121,4 +127,65 @@ def generate_title_task(self, task_id: str):
     # 1. Fetch card content from DB using task_id (which might be the card_id)
     # 2. Instantiate and run the TitleGenerationCrew
     # 3. Update the card with the new title
-    return {"status": "success", "message": f"Title generation for {task_id} completed."} 
+    return {"status": "success", "message": f"Title generation for {task_id} completed."}
+
+@app.task(bind=True)
+def process_rewrite_task(self, task_payload_dict: dict):
+    """
+    Celery task to process a content rewrite request asynchronously.
+    """
+    task_db_service, orchestrator = _initialize_services()
+    
+    task_id = task_payload_dict.get('task_id')
+    user_id = task_payload_dict.get('user_id')
+    # The content to be rewritten is expected in the 'payload'
+    main_payload = task_payload_dict.get('payload', {})
+    original_content_blocks = main_payload.get('content_blocks')
+
+    logger.info(f"Starting content rewrite task for task_id: {task_id}")
+
+    if not original_content_blocks:
+        logger.error(f"Task {task_id} failed: No 'content_blocks' found in payload.")
+        task_db_service.update_task_status_failed(task_id, "Payload missing 'content_blocks'.")
+        # Do not raise an exception, as this is a data error, not a processing failure.
+        # Let the task succeed from Celery's perspective.
+        return
+
+    conn = None
+    try:
+        conn = task_db_service.get_connection()
+        task_db_service.update_task_progress_stage(task_id, "Starting AI Content Rewrite", conn)
+        
+        # Run the dedicated rewrite pipeline
+        rewritten_blocks = asyncio.run(
+            orchestrator._run_content_rewrite_pipeline(
+                content_blocks=original_content_blocks,
+                job_id=task_id,
+                conn=conn
+            )
+        )
+        
+        # On success, update the task with the final result
+        task_db_service.update_task_with_rewrite_result(task_id, rewritten_blocks, conn)
+        conn.commit()
+        
+        logger.info(f"Task {task_id} (rewrite) completed successfully.")
+        return {"status": "success", "rewritten_content_blocks": rewritten_blocks}
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in rewrite task {task_id}: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+        # Use a fresh connection for final error reporting if the original one is bad
+        error_conn = None
+        try:
+            error_conn = task_db_service.get_connection()
+            task_db_service.update_task_status_failed(task_id, str(e), error_conn)
+            error_conn.commit()
+        finally:
+            if error_conn:
+                task_db_service.release_connection(error_conn)
+        raise
+    finally:
+        if conn:
+            task_db_service.release_connection(conn) 

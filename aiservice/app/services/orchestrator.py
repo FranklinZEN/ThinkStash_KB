@@ -20,6 +20,8 @@ from aiservice.app.services.processing.image_processing_service import ImageProc
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService, ContentStructuringServiceInput
 from aiservice.app.utils.url_utils import custom_normalize_url
 from aiservice.app.services.task_db_service import TaskDBService
+from ..crews.title_generation_crew import GeneralPurposeTitleGenerationCrew
+from ..crews.keyword_extraction_crew import GeneralPurposeKeywordExtractionCrew
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +201,64 @@ class ParallelOrchestrator(BaseService):
             raise Exception(f"Content structuring failed: {structuring_result.error_message}")
 
         final_content_blocks = structuring_result.data
+
+        # --- MANUAL BYPASS: Extract full text from content blocks ---
+        # This logic is placed here to bypass the faulty FullTextContentExtractorTool.
+        # It robustly extracts text from the structured blocks before passing it to the AI crews.
+        extracted_text = ""
+        try:
+            texts = []
+            if isinstance(final_content_blocks, list):
+                for block in final_content_blocks:
+                    block_dict = block.model_dump() # Convert ContentBlock to dict
+                    if isinstance(block_dict, dict):
+                        content = block_dict.get('content')
+                        if isinstance(content, list):
+                            for inline_item in content:
+                                if isinstance(inline_item, dict) and 'text' in inline_item and inline_item['text']:
+                                    texts.append(str(inline_item['text']))
+                        elif isinstance(content, str) and content:
+                            texts.append(content)
+            if texts:
+                extracted_text = "\\n\\n".join(texts)
+        except Exception as e_text:
+            self.logger.error(f"Job {job_id}: Failed to extract text from content blocks: {e_text}", exc_info=True)
+            accumulated_warnings.append(f"Text Extraction Failed: {e_text}")
         
+        # --- Title Generation (Synchronous) ---
+        if orchestrator_input.run_title_generation and extracted_text:
+            self.logger.info(f"Job {job_id}: Title generation requested. Running crew synchronously.")
+            try:
+                # Pass the extracted text directly to the crew
+                title_crew = GeneralPurposeTitleGenerationCrew(full_text_content=extracted_text)
+                title_output = title_crew.run() # No need to pass content_block_dicts anymore
+
+                if document_metadata_obj and title_output.suggested_title and not title_output.suggested_title.startswith("Error:"):
+                    document_metadata_obj.title = title_output.suggested_title
+                    page_title = title_output.suggested_title
+                elif title_output.suggested_title and title_output.suggested_title.startswith("Error:"):
+                    accumulated_warnings.append(f"Title Generation Failed: {title_output.suggested_title}")
+            except Exception as e_title:
+                self.logger.error(f"Job {job_id}: Title generation crew failed with an exception: {e_title}", exc_info=True)
+                accumulated_warnings.append(f"Title Generation Failed: {str(e_title)}")
+        
+        # --- Keyword Extraction (Synchronous) ---
+        if orchestrator_input.run_keyword_extraction and extracted_text:
+            self.logger.info(f"Job {job_id}: Keyword extraction requested. Running crew synchronously.")
+            try:
+                # Pass the extracted text directly to the crew
+                keyword_crew = GeneralPurposeKeywordExtractionCrew(content_blocks=extracted_text) # content_blocks will now hold the string
+                keywords_result = keyword_crew.run()
+                if isinstance(keywords_result, list):
+                    if document_metadata_obj:
+                        document_metadata_obj.keywords = keywords_result
+                else:
+                    accumulated_warnings.append(f"Keyword Extraction Failed: {keywords_result}")
+
+            except Exception as e_kw:
+                self.logger.error(f"Job {job_id}: Keyword extraction crew failed with an exception: {e_kw}", exc_info=True)
+                accumulated_warnings.append(f"Keyword Extraction Failed: {str(e_kw)}")
+
         self.task_db_service.update_task_progress_stage(job_id, "Finalizing and preparing output", conn)
         
         is_long = self._is_long_article(final_content_blocks)
@@ -296,3 +355,15 @@ class ParallelOrchestrator(BaseService):
         # This implementation will depend on how you intend to use the `execute` method.
         # For now, it can be a placeholder.
         raise NotImplementedError("The 'execute' method must be implemented in the derived class.")
+
+    async def _run_content_rewrite_pipeline(self, content_blocks: List[Dict[str, Any]], job_id: str, conn) -> List[Dict[str, Any]]:
+        """
+        Runs the content rewrite crew for a given set of content blocks.
+        This is a separate pipeline for asynchronous execution.
+        """
+        self.logger.info(f"Job {job_id}: Starting content rewrite pipeline.")
+        # TODO: Implement the call to the ContentRewriteCrewManager
+        # For now, we'll just return the original content blocks as a placeholder
+        await asyncio.sleep(1) # Simulate async work
+        self.logger.info(f"Job {job_id}: Content rewrite pipeline placeholder finished.")
+        return content_blocks
