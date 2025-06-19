@@ -15,16 +15,16 @@ from psycopg2.extensions import connection as Connection
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
-from aiservice.app.config.settings import Settings
-from aiservice.app.models.orchestration_models import OrchestrationInput, OrchestrationOutput
-from aiservice.app.models.task_models import TaskRequest
-from aiservice.app.services.task_db_service import TaskDBService
-from aiservice.app.services.orchestrator import ParallelOrchestrator
-from aiservice.app.services.routing_service import RoutingService
-from aiservice.app.services.processing.image_processing_service import ImageProcessingService
-from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
+from app.config.settings import Settings
+from app.models.orchestration_models import OrchestrationInput, OrchestrationOutput
+from app.models.task_models import TaskRequest
+from app.services.task_db_service import TaskDBService
+from app.services.orchestrator import ParallelOrchestrator
+from app.services.routing_service import RoutingService
+from app.services.processing.image_processing_service import ImageProcessingService
+from app.services.structuring.content_structuring_service import ContentStructuringService
 from .celery_app import app as celery_app
-from aiservice.app.tasks import process_reconstruction_task, generate_title_task, generate_keywords_task, process_rewrite_task
+from app.tasks import process_reconstruction_task, generate_title_task, generate_keywords_task, process_rewrite_task
 import logging
 
 # --- Pydantic Models for API ---
