@@ -36,7 +36,6 @@ pgvector/
 generated/
 devlog/
 html/
-public/
 terraform/
 src/
 
