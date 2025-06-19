@@ -175,6 +175,28 @@ export interface GenerateKeywordsResponse {
   error_message?: string;
 }
 
+// --- /api/tasks/[taskId]/status ---
+export interface TaskStatusResponse {
+  task_id: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SUCCESS';
+  progressMessage?: string;
+  task_type?: 'RECONSTRUCT_AND_ANALYZE' | 'GENERATE_TITLE' | 'GENERATE_KEYWORDS' | 'REWRITE_CONTENT' | 'reconstruct_from_url';
+  result?: {
+    // For title generation
+    generated_title?: string;
+    // For keyword generation
+    suggested_keywords?: string[];
+    // For rewrite
+    rewritten_content_blocks?: ContentBlock[];
+    // For reconstruction
+    content_blocks?: ContentBlock[];
+    title?: string;
+    // Allow other properties, as the result can vary
+    [key: string]: any;
+  } | null;
+  error?: string | null;
+}
+
 // --- Knowledge Card related types (if they are part of ai-service.ts, otherwise move them) ---
 // These seem more general and might belong in a different types file (e.g., knowledge-card.ts)
 // For now, keeping them if they were part of the original linting error context.

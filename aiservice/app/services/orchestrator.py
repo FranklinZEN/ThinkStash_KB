@@ -201,9 +201,24 @@ class ParallelOrchestrator(BaseService):
                     message="No content provided for title generation."
                 )
 
-            title_crew = GeneralPurposeTitleGenerationCrew()
-            crew_input = {'content_block_dicts': content_blocks_data}
-            title_output = title_crew.run(crew_input)
+            # Extract full text from content blocks before initializing the crew
+            full_text = " ".join(
+                block.get('content', '') or '' 
+                for block in content_blocks_data 
+                if isinstance(block.get('content'), str)
+            )
+
+            if not full_text.strip():
+                self.logger.warning(f"Job {job_id}: Content blocks contain no text for title generation.")
+                return TaskResult(
+                    status=TaskStatus.FAILED,
+                    message="Content blocks contain no text for title generation."
+                )
+
+            title_crew = GeneralPurposeTitleGenerationCrew(full_text_content=full_text)
+            
+            # The crew's run method does not need arguments anymore
+            title_output = title_crew.run()
 
             if title_output and getattr(title_output, 'suggested_title', None) and not title_output.suggested_title.startswith("Error:"):
                 self.logger.info(f"Job {job_id}: Title generation successful.")

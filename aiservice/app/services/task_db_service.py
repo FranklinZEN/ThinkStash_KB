@@ -23,21 +23,16 @@ class TaskDBService:
     This class is responsible for executing DB commands but does not manage
     transactions (commit/rollback), which is left to the calling service (e.g., Orchestrator).
     """
-    def __init__(self, min_conn=1, max_conn=10):
-        if not settings.database_url:
-            logger.error("DATABASE_URL is not configured in settings.", extra={'error_type': 'configuration', 'setting_name': 'DATABASE_URL'})
-            raise ValueError("Database configuration error: DATABASE_URL not set.")
-        
-        try:
-            self.pool = psycopg2.pool.SimpleConnectionPool(
-                min_conn,
-                max_conn,
-                dsn=settings.database_url
+
+    def __init__(self, db_pool):
+        if db_pool is None:
+            logger.error(
+                "Database connection pool is not provided to TaskDBService.",
+                extra={'error_type': 'configuration'},
             )
-            logger.info(f"Database connection pool created with min={min_conn}, max={max_conn}")
-        except Exception as e:
-            logger.error("Failed to create database connection pool", extra={'error_type': 'connection_pool', 'exception_message': str(e)}, exc_info=True)
-            raise ConnectionError(f"Database pool creation error: {e}")
+            raise ValueError("Database configuration error: db_pool cannot be None.")
+        self.pool = db_pool
+        logger.info("TaskDBService initialized with provided connection pool.")
 
     def get_connection(self):
         """Gets a connection from the pool."""
@@ -83,7 +78,7 @@ class TaskDBService:
             serializable_data = result_data
 
         result_data_json = json.dumps(serializable_data, default=json_serial_converter)
-        sql = 'UPDATE "Task" SET status = %s, payload = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
+        sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
         params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with results")
 
@@ -171,10 +166,13 @@ class TaskDBService:
         return card_id
 
     def close_pool(self):
-        """Closes all connections in the pool."""
+        """
+        Closes all connections in the pool.
+        This should be called on application shutdown.
+        """
         if self.pool:
             self.pool.closeall()
-            logger.info("Database connection pool closed.")
+            logger.info("Database connection pool closed via TaskDBService.")
 
 # Potential future additions:
 # def create_ai_task(...) -> str:

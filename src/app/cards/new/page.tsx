@@ -38,6 +38,7 @@ import {
   mapContentBlocksToPartialBlocks,
 } from '@/lib/contentUtils';
 import { v4 as uuidv4 } from 'uuid';
+import type { TaskStatusResponse } from '@/types/api/ai-service';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (blocks: PartialBlock[] | undefined): boolean => {
@@ -195,21 +196,18 @@ export default function NewCardPage() {
   );
   const [showComparisonView, setShowComparisonView] = useState(false);
 
-  // ADDED for asynchronous polling
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [pollingIntervalId, setPollingIntervalId] =
-    useState<NodeJS.Timeout | null>(null);
-  const [pollingAttempts, setPollingAttempts] = useState(0);
+  // Unified state for asynchronous tasks
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [currentProgressMessage, setCurrentProgressMessage] = useState<
     string | null
   >(null);
+
   const [
     hasShownInitialContentReadyToast,
     setHasShownInitialContentReadyToast,
   ] = useState(false);
 
-  const POLLING_INTERVAL_MS = 3000; // 3 seconds
-  const MAX_POLLING_ATTEMPTS = 60; // 60 attempts * 3 seconds = 3 minutes timeout
+  const POLLING_INTERVAL_MS = 2000; // 2 seconds
 
   useEffect(() => {
     console.log(
@@ -248,6 +246,7 @@ export default function NewCardPage() {
 
     if (stagedTitle) {
       titleToUse = stagedTitle;
+      autoExtractedTitleValue = stagedTitle; // Store it to check against final title
       processedNewDataInThisRun = true;
     }
 
@@ -325,25 +324,13 @@ export default function NewCardPage() {
 
     if (processedNewDataInThisRun && !hasShownInitialContentReadyToast) {
       toast({
-        title: 'Content Ready for New Card',
-        description:
-          'Your previously started content (or content from another tab/tool) has been loaded. Review and continue.',
-        status: 'info',
-        duration: 7000,
+        title: 'Ready to Edit',
+        description: 'Your content has been loaded into the editor.',
+        status: 'success',
+        duration: 4000,
         isClosable: true,
       });
       setHasShownInitialContentReadyToast(true);
-      console.log(
-        '[NewCardPage Staging useEffect] setHasShownInitialContentReadyToast to true.',
-      );
-    } else if (processedNewDataInThisRun && hasShownInitialContentReadyToast) {
-      console.log(
-        '[NewCardPage Staging useEffect] Processed new data, but initial content ready toast already shown for this batch.',
-      );
-    } else if (!processedNewDataInThisRun) {
-      console.log(
-        '[NewCardPage Staging useEffect] No new data processed in this run, not showing content ready toast.',
-      );
     }
 
     if (stagingError) {
@@ -403,311 +390,124 @@ export default function NewCardPage() {
     [showComparisonView, rewrittenEditorContent],
   );
 
+  // This is the primary function for handling content rewrites.
   const handleRewriteContent = async () => {
-    if (!editorContent || isEditorEmpty(editorContent)) {
+    // 1. Check for content
+    if (isEditorEmpty(editorContent)) {
       toast({
-        title: 'Cannot Rewrite Empty Content',
-        description: 'Please add some content to the editor before rewriting.',
-        status: 'warning',
+        title: 'Content is empty',
+        description: 'Please add some content before rewriting.',
+        status: 'info',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
 
-    // Reset relevant states before starting
-    setRewrittenEditorContent(undefined);
-    setShowComparisonView(true); // Show comparison view immediately
+    if (!session?.user?.id) {
+      toast({
+        title: 'User not authenticated',
+        status: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
+    // 2. Set up UI states for rewrite
     setIsRewritingContent(true);
     setRewriteError(null);
-    setTaskId(null); // Reset task ID
-    setPollingAttempts(0); // Reset polling attempts
-    setCurrentProgressMessage('Initiating rewrite process...');
-    if (pollingIntervalId) clearInterval(pollingIntervalId); // Clear any existing interval
-    setPollingIntervalId(null);
+    setRewrittenEditorContent(undefined); // Clear previous rewrites
+    setOriginalEditorContent(editorContent);
+    setCurrentProgressMessage('Initiating rewrite...');
+    setShowComparisonView(true); // Show the comparison modal immediately
 
-    const currentAppPartialBlocks: AppPartialBlock[] = editorContent;
-    setOriginalEditorContent(currentAppPartialBlocks);
-
+    // 3. Prepare and dispatch the task
     try {
-      const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        currentAppPartialBlocks,
-        session?.user.id ?? 'unknown-user',
+      if (!editorContent) return; // Should be caught by isEditorEmpty, but for TS safety
+      const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        editorContent,
+        session.user.id,
+        clientSideDocumentId,
       );
 
-      const payloadToApi = {
-        content_blocks_to_rewrite: aiServiceBlocks,
+      const payload = {
+        content_blocks_to_rewrite: aiServiceContentBlocks,
+        document_metadata: {
+          document_id: clientSideDocumentId,
+          user_id: session.user.id,
+          source_identifier: 'new-card-creation',
+          source_type: 'knowledge_card',
+          title: title, // Send current title
+        },
+        user_id: session.user.id,
       };
-
-      console.log(
-        '[NewCardPage] handleRewriteContent: Sending payload to /api/ai/rewrite-content for task submission:',
-        JSON.stringify(payloadToApi, null, 2),
-      );
 
       const response = await fetch('/api/ai/rewrite-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloadToApi),
+        body: JSON.stringify(payload),
       });
 
-      if (response.status === 202) {
-        const result = await response.json();
-        if (result.task_id) {
-          setTaskId(result.task_id);
-          toast({
-            title: 'Rewrite Task Submitted',
-            description: `Task ID: ${result.task_id}. Polling for results...`,
-            status: 'info',
-            duration: 3000,
-            isClosable: true,
-          });
-          // Polling will be handled by the useEffect hook watching `taskId`
-        } else {
-          throw new Error('Task ID not found in submission response.');
-        }
-      } else {
+      if (!response.ok) {
         const errorData = await response.json();
         throw new Error(
-          errorData.message ||
-            `HTTP error ${response.status} ${response.statusText}`,
+          errorData.message || 'Failed to dispatch rewrite task.',
         );
       }
-    } catch (error) {
-      console.error('Error submitting rewrite task:', error);
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : 'An unknown error occurred during submission';
-      setRewriteError(errorMessage);
+
+      const result = await response.json();
+      if (result.task_id) {
+        setCurrentTaskId(result.task_id);
+        toast({
+          title: 'Rewrite task submitted',
+          description: 'The AI is working on it. Please wait.',
+          status: 'info',
+          duration: 3000,
+        });
+      } else {
+        throw new Error('Did not receive a task ID from the server.');
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'An unexpected error occurred.';
+      setRewriteError(message);
+      setIsRewritingContent(false);
+      setCurrentProgressMessage(null);
       toast({
-        title: 'Submission Error',
-        description: errorMessage,
+        title: 'Error Submitting Task',
+        description: message,
         status: 'error',
         duration: 5000,
-        isClosable: true,
       });
-      setIsRewritingContent(false); // Stop loading on submission error
-      setShowComparisonView(false); // Hide comparison view if submission fails
     }
-    // No finally block setting setIsRewritingContent(false) here, polling handles it
   };
-
-  // useEffect for polling task status
-  useEffect(() => {
-    if (!taskId || !isRewritingContent) {
-      if (pollingIntervalId) {
-        clearInterval(pollingIntervalId);
-        setPollingIntervalId(null);
-      }
-      return;
-    }
-
-    const intervalId = setInterval(async () => {
-      // Stop polling if max attempts reached
-      if (pollingAttempts >= MAX_POLLING_ATTEMPTS) {
-        console.error(
-          `[NewCardPage] Polling timed out for task ${taskId}. Stopping.`,
-        );
-        setRewriteError(
-          'Polling timed out. The task may still be running in the background, but the status could not be retrieved in time.',
-        );
-        clearInterval(intervalId);
-        setPollingIntervalId(null);
-        setIsRewritingContent(false);
-        setPollingAttempts(0);
-        setCurrentProgressMessage('Task timed out.');
-        return;
-      }
-
-      // console.log(`[NewCardPage] Polling task status for ID: ${taskId}, Attempt: ${currentAttemptForLog}`); // REMOVED to reduce console noise
-      setPollingAttempts((prev) => prev + 1);
-
-      try {
-        const response = await fetch(`/api/ai/rewrite-status/${taskId}`);
-        if (!response.ok) {
-          throw new Error(
-            `Polling request failed with status ${response.status}`,
-          );
-        }
-
-        const data = await response.json();
-        // The following log is very verbose and appears on every poll. Removing it for a cleaner console.
-        // console.log(`[NewCardPage] Polling response data for task ${taskId}, attempt ${pollingAttempts}:`, JSON.stringify(data, null, 2));
-
-        if (data.status === 'COMPLETED') {
-          console.log(
-            `[NewCardPage] Task ${taskId} COMPLETED. Full data:`,
-            JSON.stringify(data, null, 2),
-          );
-          // Original logic for COMPLETED status
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0);
-          setTaskId(null);
-          if (data.ai_rewritten_content_blocks) {
-            try {
-              const newRewrittenContent = mapContentBlocksToPartialBlocks(
-                data.ai_rewritten_content_blocks,
-              ) as AppPartialBlock[];
-              if (newRewrittenContent) {
-                setRewrittenEditorContent(newRewrittenContent);
-                setCurrentProgressMessage(null);
-                toast({
-                  title: 'Content Rewritten Successfully',
-                  description: 'AI has completed rewriting the content.',
-                  status: 'success',
-                  duration: 3000,
-                  isClosable: true,
-                });
-              } else {
-                const mappingError =
-                  'Rewrite completed, content was present, but mapping resulted in empty content.';
-                setRewriteError(mappingError);
-                setCurrentProgressMessage(null);
-                toast({
-                  title: 'Rewrite Mapping Error',
-                  description: mappingError,
-                  status: 'error',
-                  duration: 5000,
-                  isClosable: true,
-                });
-                setShowComparisonView(false);
-              }
-            } catch (mappingOrSetError) {
-              const processingError =
-                'Error processing or setting rewritten content.';
-              setRewriteError(
-                processingError +
-                  (mappingOrSetError instanceof Error
-                    ? `: ${mappingOrSetError.message}`
-                    : ''),
-              );
-              setCurrentProgressMessage(null);
-              toast({
-                title: 'Rewrite Processing Error',
-                description: processingError,
-                status: 'error',
-                duration: 5000,
-                isClosable: true,
-              });
-              setShowComparisonView(false);
-            }
-          } else {
-            const completionError =
-              'Rewrite completed, but data.ai_rewritten_content_blocks was falsy.';
-            setRewriteError(completionError);
-            setCurrentProgressMessage(null);
-            toast({
-              title: 'Rewrite Data Missing',
-              description: completionError,
-              status: 'error',
-              duration: 5000,
-              isClosable: true,
-            });
-            setShowComparisonView(false);
-          }
-        } else if (data.status === 'FAILED') {
-          // Original logic for FAILED status
-          console.error(
-            `[NewCardPage] Task ${taskId} FAILED. Reason:`,
-            data.errorMessage,
-          );
-          clearInterval(intervalId);
-          setPollingIntervalId(null);
-          setIsRewritingContent(false);
-          setPollingAttempts(0);
-          setTaskId(null);
-          setCurrentProgressMessage(null);
-          const errorMessage =
-            data.errorMessage ||
-            'Rewrite task failed with no specific error message.';
-          setRewriteError(errorMessage);
-          toast({
-            title: 'Rewrite Task Failed',
-            description: errorMessage,
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
-          });
-          setShowComparisonView(false);
-        } else if (data.status === 'PENDING' || data.status === 'PROCESSING') {
-          // Use progressStage if available, otherwise a generic message
-          setCurrentProgressMessage(
-            data.progressStage || `Processing... (Status: ${data.status})`,
-          );
-        } else {
-          // Original logic for unknown status or simply continue polling if that was the intent
-          console.warn(
-            `[NewCardPage] Task ${taskId} has unknown status: ${data.status}`,
-          );
-          setCurrentProgressMessage(
-            `Unknown status: ${data.status}. Polling...`,
-          ); // Removed attempt count from UI
-        }
-      } catch (error) {
-        clearInterval(intervalId);
-        setPollingIntervalId(null);
-        setIsRewritingContent(false);
-        setPollingAttempts(0); // Reset attempts on polling error
-        setTaskId(null);
-        setCurrentProgressMessage(null);
-        const errorMessage =
-          error instanceof Error
-            ? error.message
-            : 'An unknown error occurred during polling';
-        setRewriteError(errorMessage);
-        toast({
-          title: 'Polling Error',
-          description: errorMessage,
-          status: 'error',
-          duration: 5000,
-          isClosable: true,
-        });
-        setShowComparisonView(false);
-      }
-    }, POLLING_INTERVAL_MS);
-
-    setPollingIntervalId(intervalId);
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-      setPollingIntervalId(null);
-    };
-  }, [taskId, isRewritingContent, toast, pollingAttempts, pollingIntervalId]);
 
   const handleUseOriginalFromComparison = () => {
-    if (originalEditorContent) {
-      setEditorContent(originalEditorContent);
-      if (_editor) {
-        _editor.replaceBlocks(_editor.document, originalEditorContent);
-      }
-      setDisplayMode('original');
-    }
+    // The original content is already in the main editor state,
+    // so we just need to exit the comparison view.
     setShowComparisonView(false);
-    toast({
-      title: 'Original Content Selected',
-      status: 'info',
-      duration: 2000,
-      isClosable: true,
-    });
+    setRewrittenEditorContent(undefined); // Clear the rewritten content
+    setOriginalEditorContent(undefined); // Clear the comparison original
+    setIsRewritingContent(false); // Ensure loading state is off
+    setCurrentTaskId(null); // Stop any polling
   };
 
+  // This is for when the user clicks 'Use Rewritten Content' in the comparison modal.
   const handleUseRewrittenFromComparison = () => {
     if (rewrittenEditorContent) {
       setEditorContent(rewrittenEditorContent);
-      if (_editor) {
-        _editor.replaceBlocks(_editor.document, rewrittenEditorContent);
-      }
-      setDisplayMode('rewritten');
+      setEditorKey(Date.now()); // Force re-render of the editor with new content
+      toast({
+        title: 'Content Updated',
+        description: 'The rewritten content is now in the editor.',
+        status: 'success',
+        duration: 3000,
+      });
     }
     setShowComparisonView(false);
-    toast({
-      title: 'Rewritten Content Selected',
-      status: 'success',
-      duration: 2000,
-      isClosable: true,
-    });
+    setRewrittenEditorContent(undefined);
+    setOriginalEditorContent(undefined);
+    setIsRewritingContent(false); // Ensure loading state is off
   };
 
   const handleSubmit = async (event: FormEvent) => {
@@ -821,21 +621,28 @@ export default function NewCardPage() {
   };
 
   const handleSuggestTitle = async () => {
-    if (sessionStatus !== 'authenticated' || !session?.user?.id) {
+    toast({
+      title: 'DEBUG: handleSuggestTitle fired!',
+      status: 'info',
+      duration: 2000,
+    });
+    // Check if editor content is available and not empty
+    if (isEditorEmpty(editorContent)) {
       toast({
-        title: 'Authentication Required',
-        description: 'You must be logged in to suggest titles.',
-        status: 'error',
+        title: 'Content is empty',
+        description: 'Please add some content before suggesting a title.',
+        status: 'info',
         duration: 3000,
         isClosable: true,
       });
       return;
     }
-    if (!_editor || isEditorEmpty(editorContent)) {
+
+    if (!session?.user?.id) {
       toast({
-        title: 'Content Required',
-        description: 'Cannot suggest title for empty content.',
-        status: 'warning',
+        title: 'Error',
+        description: 'User not authenticated.',
+        status: 'error',
         duration: 3000,
         isClosable: true,
       });
@@ -844,83 +651,83 @@ export default function NewCardPage() {
 
     setIsSuggestingTitle(true);
     setSuggestedTitle(null);
+    setCurrentProgressMessage('Sending content to AI for title suggestion...');
+
     try {
-      const currentContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        editorContent as AppPartialBlock[],
+      if (!editorContent) {
+        throw new Error('Editor content is not available.');
+      }
+      const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+        editorContent,
         session.user.id,
+        clientSideDocumentId, // Use the client-side generated UUID
       );
 
-      if (currentContentBlocks.length === 0) {
+      if (aiServiceContentBlocks.length === 0) {
         toast({
-          title: 'Cannot Suggest Title',
-          description: 'Failed to prepare content for title suggestion.',
-          status: 'warning',
+          title: 'No processable content found for title suggestion.',
+          status: 'info',
           duration: 3000,
-          isClosable: true,
         });
         setIsSuggestingTitle(false);
         return;
       }
 
-      console.log(
-        '[NewCardPage] handleSuggestTitle: Sending content for title suggestion:',
-        JSON.stringify(currentContentBlocks, null, 2),
-      );
-
       const response = await fetch('/api/ai/generate-title', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: currentContentBlocks }),
+        body: JSON.stringify({
+          content_blocks: aiServiceContentBlocks,
+        }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.message || `HTTP error! status: ${response.status}`,
-        );
-      }
       const data = await response.json();
-      console.log(
-        '[NewCardPage] handleSuggestTitle: Received suggested title:',
-        data.suggested_title,
-      );
-      setSuggestedTitle(data.suggested_title);
-      toast({
-        title: 'Title Suggested',
-        description: 'A new title has been suggested.',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      });
-    } catch (error) {
-      console.error('Error suggesting title:', error);
+
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Failed to dispatch title generation task.');
+      }
+
+      if (data.taskId) {
+        setCurrentTaskId(data.taskId);
+        setCurrentProgressMessage('Title generation task started...');
+        toast({
+          title: 'Title suggestion initiated',
+          description: 'The AI is generating a title. Please wait.',
+          status: 'info',
+          duration: 3000,
+        });
+      } else {
+        throw new Error('Did not receive a task ID from the server.');
+      }
+    } catch (err: unknown) {
       const message =
-        error instanceof Error
-          ? error.message
-          : 'Unknown error suggesting title';
+        err instanceof Error ? err.message : 'An unexpected error occurred.';
       toast({
-        title: 'Title Suggestion Failed',
+        title: 'Error suggesting title',
         description: message,
         status: 'error',
-        duration: 3000,
+        duration: 5000,
         isClosable: true,
       });
-    } finally {
-      setIsSuggestingTitle(false);
+      setIsSuggestingTitle(false); // Stop loading on dispatch error
+      setCurrentProgressMessage(null);
     }
   };
 
   const applySuggestedTitle = () => {
     if (suggestedTitle) {
       setTitle(suggestedTitle);
-      setSuggestedTitle(null); // Clear suggestion after applying
+      setSuggestedTitle(null);
     }
   };
 
   const handleKeywordsInputChange = (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
-    const newKeywords = event.target.value.split(',').map((kw) => kw.trim());
+    const newKeywords = event.target.value
+      .split(',')
+      .map((kw) => kw.trim())
+      .filter((kw) => kw !== '');
     setKeywords(newKeywords);
   };
 
@@ -999,6 +806,130 @@ export default function NewCardPage() {
       setIsGeneratingKeywords(false);
     }
   };
+
+  // Unified polling useEffect for all async tasks
+  useEffect(() => {
+    if (!currentTaskId) {
+      return;
+    }
+
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tasks/${currentTaskId}/status`);
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(
+            errorData.error || `Failed to fetch task status: ${res.status}`,
+          );
+        }
+
+        const data: TaskStatusResponse = await res.json();
+
+        if (data.progressMessage) {
+          setCurrentProgressMessage(data.progressMessage);
+        }
+        
+        console.log('[NewCardPage Polling] Received data:', JSON.stringify(data, null, 2));
+
+        if (data.status === 'SUCCESS') {
+          clearInterval(intervalId);
+          setCurrentProgressMessage(null);
+          setCurrentTaskId(null);
+
+          console.log('[NewCardPage Polling] Task SUCCESS. Task type:', data.task_type);
+
+          if (data.task_type === 'GENERATE_TITLE') {
+            console.log('[NewCardPage Polling] Handling generate_title completion. Result object:', data.result);
+            
+            let resultData = data.result;
+            if (typeof resultData === 'string') {
+              try {
+                resultData = JSON.parse(resultData);
+              } catch (e) {
+                console.error('Error parsing task result:', e);
+                resultData = null;
+              }
+            }
+
+            const newTitle = resultData?.generated_title;
+            console.log('[NewCardPage Polling] Extracted title:', newTitle);
+            if (newTitle) {
+              setSuggestedTitle(newTitle);
+              toast({
+                title: 'Title suggestion received!',
+                status: 'success',
+                duration: 3000,
+              });
+            } else {
+               console.error('[NewCardPage Polling] Title was not found in the result object.');
+                toast({
+                title: 'Error processing title',
+                description: 'The AI task completed, but a title was not returned.',
+                status: 'error',
+                duration: 5000,
+              });
+            }
+            setIsSuggestingTitle(false);
+          } else if (
+            data.task_type === 'rewrite_content' &&
+            data.result?.content_blocks
+          ) {
+            const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(
+              data.result.content_blocks,
+            );
+            setRewrittenEditorContent(editorFriendlyBlocks);
+            setIsRewritingContent(false);
+            toast({
+              title: 'Rewrite Complete!',
+              description: 'You can now compare the content.',
+              status: 'success',
+              duration: 5000,
+            });
+          }
+          // Handle other task types like keywords if they become async
+        } else if (data.status === 'FAILED') {
+          clearInterval(intervalId);
+          const finalErrorMessage = data.error || 'An unknown error occurred.';
+          toast({
+            title: 'Task Failed',
+            description: finalErrorMessage,
+            status: 'error',
+            duration: 5000,
+          });
+
+          // Reset relevant loading states based on task type
+          if (data.task_type === 'generate_title') {
+            setIsSuggestingTitle(false);
+          } else if (data.task_type === 'rewrite_content') {
+            setRewriteError(finalErrorMessage);
+            setIsRewritingContent(false);
+          }
+          setCurrentProgressMessage(null);
+          setCurrentTaskId(null);
+        }
+      } catch (error) {
+        clearInterval(intervalId);
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : 'An unknown error occurred during polling.';
+        toast({
+          title: 'Polling Error',
+          description: errorMessage,
+          status: 'error',
+          duration: 5000,
+        });
+        // Reset all loading states on polling failure
+        setIsSuggestingTitle(false);
+        setIsRewritingContent(false);
+        setRewriteError(errorMessage);
+        setCurrentProgressMessage(null);
+        setCurrentTaskId(null);
+      }
+    }, POLLING_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [currentTaskId, toast]);
 
   if (sessionStatus === 'loading' || isStagingLoading) {
     return (

@@ -47,12 +47,12 @@ import {
   // type AppInlineContent as _AppInlineContent, // Removed as unused
   // type AppInlineContentArray, // Removed as unused
 } from '@/lib/blocknote/appSchema';
-import type { ContentBlock } from '@/types/api/ai-service';
 import {
   // extractTextFromInlineContent, // Removed as unused
   mapPartialBlocksToAIServiceContentBlocks,
   mapContentBlocksToPartialBlocks,
 } from '../../../lib/contentUtils';
+import type { TaskStatusResponse } from '@/types/api/ai-service';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (
@@ -381,6 +381,7 @@ export default function CardDetailPage() {
   const [currentProgressMessage, setCurrentProgressMessage] = useState<
     string | null
   >(null); // ADDED
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
 
   const [pollingAttemptsRewrite, setPollingAttemptsRewrite] = useState(0);
 
@@ -579,7 +580,7 @@ export default function CardDetailPage() {
       }
     }
 
-    if (!contentToProcess || contentToProcess.length === 0) {
+    if (isEditorEmpty(contentToProcess)) {
       toast({
         title: 'Content is empty, cannot suggest title.',
         status: 'info',
@@ -612,15 +613,22 @@ export default function CardDetailPage() {
         body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
       });
       const data = await response.json();
-      if (!response.ok || data.error_message) {
-        throw new Error(data.error_message || 'Failed to suggest title');
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Failed to dispatch title generation task.');
       }
-      setSuggestedTitle(data.suggested_title);
-      toast({
-        title: 'Title suggestion received!',
-        status: 'success',
-        duration: 3000,
-      });
+      
+      if (data.taskId) {
+        setCurrentTaskId(data.taskId);
+        setCurrentProgressMessage('Title generation task started...');
+        toast({
+          title: 'Title suggestion initiated',
+          description: 'The AI is generating a title. Please wait.',
+          status: 'info',
+          duration: 3000,
+        });
+      } else {
+         throw new Error('Did not receive a task ID from the server.');
+      }
     } catch (err) {
       console.error('Suggest title error:', err);
       const message =
@@ -631,8 +639,7 @@ export default function CardDetailPage() {
         status: 'error',
         duration: 5000,
       });
-    } finally {
-      setIsSuggestingTitle(false);
+      setIsSuggestingTitle(false); // Only set to false on initial dispatch error
     }
   };
 
@@ -853,11 +860,11 @@ export default function CardDetailPage() {
       if (response.status === 202) {
         // Task submitted successfully
         const result = await response.json();
-        if (result.task_id) {
-          setTaskId(result.task_id);
+        if (result.taskId) {
+          setTaskId(result.taskId);
           toast({
             title: 'Rewrite Task Submitted',
-            description: `Task ID: ${result.task_id}. Polling for results...`,
+            description: `Task ID: ${result.taskId}. Polling for results...`,
             status: 'info',
             duration: 3000,
             isClosable: true,
@@ -865,7 +872,7 @@ export default function CardDetailPage() {
           // Polling will be handled by the useEffect hook watching `taskId`
           // setIsRewritingContent(true) is already set and polling will turn it off
         } else {
-          // This case should ideally not happen if backend sends 202 correctly with task_id
+          // This case should ideally not happen if backend sends 202 correctly with taskId
           throw new Error(
             'Task ID not found in submission response despite 202 status.',
           );
@@ -970,7 +977,7 @@ export default function CardDetailPage() {
             Array.isArray(data.ai_rewritten_content_blocks)
           ) {
             const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(
-              data.ai_rewritten_content_blocks as ContentBlock[],
+              data.ai_rewritten_content_blocks as AppPartialBlock[],
             ) as AppPartialBlock[];
             setRewrittenContentBlocks(editorFriendlyBlocks);
             setCurrentProgressMessage(null);
@@ -1345,6 +1352,97 @@ export default function CardDetailPage() {
       setIsDeleting(false);
     }
   };
+
+  // Polling logic for async tasks
+  useEffect(() => {
+    if (!currentTaskId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tasks/${currentTaskId}/status`);
+        if (!res.ok) {
+          // Stop polling on non-200 responses, but don't clear the error for the user to see
+          clearInterval(interval);
+          console.error('Failed to fetch task status');
+          // Optionally, set an error state here
+          return;
+        }
+
+        const data: TaskStatusResponse = await res.json();
+        
+        // Update progress message for all tasks
+        if (data.progressMessage) {
+          setCurrentProgressMessage(data.progressMessage);
+        }
+
+        if (data.status === 'SUCCESS') {
+          clearInterval(interval);
+          setCurrentTaskId(null);
+          setCurrentProgressMessage(null);
+          
+          if (data.task_type === 'GENERATE_TITLE') {
+            let resultData = data.result;
+            if (typeof resultData === 'string') {
+              try {
+                resultData = JSON.parse(resultData);
+              } catch (e) {
+                console.error('Error parsing task result:', e);
+                resultData = null;
+              }
+            }
+            const newTitle = resultData?.generated_title;
+            if (newTitle) {
+              setSuggestedTitle(newTitle);
+              toast({
+                title: 'Title suggestion received!',
+                status: 'success',
+                duration: 3000,
+              });
+            } else {
+              toast({
+                title: 'Error processing title',
+                description: 'The AI task completed, but a title was not returned.',
+                status: 'error',
+                duration: 5000,
+              });
+            }
+            setIsSuggestingTitle(false);
+          } else if (data.task_type === 'generate_keywords' && data.result?.suggested_keywords) {
+            setKeywords(data.result.suggested_keywords);
+            toast({
+              title: 'Keywords Suggested',
+              description: 'AI has suggested keywords.',
+              status: 'success',
+              duration: 3000,
+              isClosable: true,
+            });
+          }
+          // Handle other completed task types if necessary
+          
+        } else if (data.status === 'FAILED') {
+          clearInterval(interval);
+          setCurrentTaskId(null);
+          setCurrentProgressMessage(null);
+          const finalErrorMessage = data.error || 'An unknown error occurred.';
+          toast({
+            title: 'Task Failed',
+            description: finalErrorMessage,
+            status: 'error',
+            duration: 5000,
+          });
+          if (data.task_type === 'GENERATE_TITLE') {
+            setIsSuggestingTitle(false);
+          }
+        }
+      } catch (error) {
+        clearInterval(interval);
+        setCurrentTaskId(null);
+        console.error('Error polling task status:', error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [currentTaskId, toast]);
 
   // --- Render Logic ---
   if (status === 'loading' || (isLoading && !error && !card)) {

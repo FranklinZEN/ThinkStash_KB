@@ -1,4 +1,5 @@
 import logging
+import psycopg2.pool
 from .worker_setup import app
 from aiservice.app.config.settings import Settings
 from aiservice.app.services.orchestrator import ParallelOrchestrator
@@ -9,21 +10,45 @@ from aiservice.app.models.orchestration_models import OrchestrationInput
 from aiservice.app.services.task_db_service import TaskDBService
 from aiservice.app.crews.title_generation_crew import GeneralPurposeTitleGenerationCrew as TitleGenerationCrew
 from aiservice.app.models.task_models import TaskPayload
-import psycopg2
 import psycopg2.extras
 import json
 import asyncio
+from aiservice.app.models.task_models import TaskStatus
+import os
 
 logger = logging.getLogger(__name__)
 
-# It's crucial to initialize services within the task function for process safety.
-# This ensures that each Celery worker process has its own service instances
-# and database connection pools, avoiding shared state issues.
+# --- Worker-Global State ---
+# Each Celery worker process will have its own instance of these globals.
+# This prevents creating new connection pools for every single task.
+_worker_db_pool = None
+_task_db_service = None
+
+def get_worker_db_pool():
+    """Initializes and returns a singleton DB pool for the worker process."""
+    global _worker_db_pool
+    if _worker_db_pool is None:
+        settings = Settings()
+        _worker_db_pool = psycopg2.pool.SimpleConnectionPool(
+            minconn=settings.db_pool_min_size,
+            maxconn=settings.db_pool_max_size,
+            dsn=settings.database_url,
+        )
+        logger.info(f"Celery worker (PID: {os.getpid()}) created a new DB connection pool.")
+    return _worker_db_pool
+
+def get_task_db_service_for_worker():
+    """Initializes and returns a singleton TaskDBService for the worker process."""
+    global _task_db_service
+    if _task_db_service is None:
+        pool = get_worker_db_pool()
+        _task_db_service = TaskDBService(db_pool=pool)
+    return _task_db_service
 
 def _initialize_services():
     """Initializes and returns all necessary services for a task."""
     settings = Settings()
-    task_db_service = TaskDBService(min_conn=settings.db_pool_min_size, max_conn=settings.db_pool_max_size)
+    task_db_service = get_task_db_service_for_worker()
     routing_s = RoutingService(settings=settings)
     img_proc_s = ImageProcessingService(settings=settings)
     content_struct_s = ContentStructuringService(settings=settings)
@@ -37,9 +62,11 @@ def _initialize_services():
     return task_db_service, orchestrator_instance
 
 def get_orchestrator_instance() -> ParallelOrchestrator:
-    """Creates and returns a new instance of the orchestrator and its dependencies."""
+    """
+    Creates and returns a new instance of the orchestrator, reusing worker-level services.
+    """
     settings = Settings()
-    task_db_service = TaskDBService(min_conn=settings.db_pool_min_size, max_conn=settings.db_pool_max_size)
+    task_db_service = get_task_db_service_for_worker()
     routing_s = RoutingService(settings=settings)
     img_proc_s = ImageProcessingService(settings=settings)
     content_struct_s = ContentStructuringService(settings=settings)
@@ -133,7 +160,8 @@ def generate_title_task(self, task_payload_dict: dict):
     """
     Celery task to generate a title for a given document's content.
     """
-    task_db_service, orchestrator = _initialize_services()
+    task_db_service = get_task_db_service_for_worker()
+    orchestrator = get_orchestrator_instance()
     
     task_id = self.request.id
     if not task_id:
@@ -167,19 +195,27 @@ def generate_title_task(self, task_payload_dict: dict):
         task_db_service.update_task_progress_stage(task_id, "Starting AI Title Generation", conn)
         conn.commit() # Commit progress update
 
-        generated_title = asyncio.run(
+        task_result = asyncio.run(
             orchestrator._run_title_generation_pipeline(
-                content_blocks=content_blocks,
+                content_blocks_data=content_blocks,
                 job_id=task_id
             )
         )
         
-        # On success, update the task with the final result
-        task_db_service.update_task_with_title_result(task_id, generated_title, conn)
-        conn.commit()
-        
-        logger.info(f"Task {task_id} (title generation) completed successfully.")
-        return {"status": "success", "generated_title": generated_title}
+        if task_result.status == TaskStatus.COMPLETED and task_result.result:
+            generated_title = task_result.result.get("title")
+            # On success, update the task with the final result
+            task_db_service.update_task_with_title_result(task_id, generated_title, conn)
+            conn.commit()
+            logger.info(f"Task {task_id} (title generation) completed successfully.")
+            return {"status": "success", "result": {"title": generated_title}}
+        else:
+            # If the pipeline returned a FAILED status, log it and update the DB
+            error_message = task_result.message or "Title generation failed with no specific message."
+            logger.error(f"Title generation pipeline failed for task {task_id}: {error_message}")
+            task_db_service.update_task_status_failed(task_id, error_message, conn)
+            conn.commit()
+            return {"status": "failed", "error": error_message}
 
     except Exception as e:
         logger.error(f"An unexpected error occurred in title generation task {task_id}: {e}", exc_info=True)
@@ -204,7 +240,8 @@ def process_rewrite_task(self, task_payload_dict: dict):
     """
     Celery task to process a content rewrite request asynchronously.
     """
-    task_db_service, orchestrator = _initialize_services()
+    task_db_service = get_task_db_service_for_worker()
+    orchestrator = get_orchestrator_instance()
     
     task_id = task_payload_dict.get('task_id')
     user_id = task_payload_dict.get('user_id')

@@ -19,7 +19,9 @@ export async function GET(
       return new NextResponse('Task ID is required', { status: 400 });
     }
 
-    const response = await fetch(`${AI_WORKER_URL}/tasks/${taskId}/status`);
+    const response = await fetch(
+      `${AI_WORKER_URL}/tasks/${taskId}/status?include_result=true`,
+    );
 
     if (!response.ok) {
       const errorBody = await response.text();

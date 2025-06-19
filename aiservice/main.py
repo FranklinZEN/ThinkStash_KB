@@ -60,8 +60,10 @@ app = FastAPI(title="ThinkStash AI Service", lifespan=lifespan)
 def get_settings() -> Settings:
     return Settings()
 
-def get_task_db_service(settings: Settings = Depends(get_settings)) -> TaskDBService:
-    return TaskDBService(min_conn=settings.db_pool_min_size, max_conn=settings.db_pool_max_size)
+def get_task_db_service() -> TaskDBService:
+    if db_pool is None:
+        raise RuntimeError("Database connection pool is not initialized.")
+    return TaskDBService(db_pool=db_pool)
 
 def get_orchestrator(
     settings: Settings = Depends(get_settings),
@@ -148,13 +150,73 @@ async def create_and_dispatch_task(
             task_db_service.release_connection(conn)
 
 @app.get("/tasks/{task_id}/status")
-async def get_task_status(task_id: str):
-    # This endpoint can remain simple as it only checks the Celery result backend
-    result = celery_app.AsyncResult(task_id)
-    response_data = {
-        "task_id": task_id,
-        "status": result.status,
-        "result": result.result if result.successful() else None,
-        "error": str(result.result) if result.failed() else None,
-    }
-    return response_data 
+async def get_task_status(
+    task_id: str,
+    include_result: bool = False,
+    task_db_service: TaskDBService = Depends(get_task_db_service),
+):
+    """
+    Retrieves the status and result of a task from the database.
+    If include_result is true, it will return the full result payload.
+    """
+    conn = None
+    try:
+        conn = task_db_service.get_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            cursor.execute(
+                'SELECT id, status, result, type as task_type, "progressMessage" FROM "Task" WHERE id = %s',
+                (task_id,),
+            )
+            task_record = cursor.fetchone()
+
+        if not task_record:
+            # Fallback to Celery backend if not in DB, though DB should be the source of truth
+            celery_result = celery_app.AsyncResult(task_id)
+            if not celery_result:
+                 raise HTTPException(status_code=404, detail="Task not found in database or Celery backend.")
+            return {
+                "task_id": task_id,
+                "status": celery_result.status,
+                "result": celery_result.result if celery_result.successful() else None,
+                "error": str(celery_result.result) if celery_result.failed() else None,
+                "progressMessage": None, 
+                "task_type": None
+            }
+        
+        db_status = task_record["status"]
+        
+        # Translate internal DB status to the public API status contract
+        api_status = db_status
+        if db_status == "COMPLETED":
+            api_status = "SUCCESS"
+        # The frontend handles PENDING, so we don't need to map PROCESSING for now.
+        # If we did, it would be:
+        # elif db_status == "PROCESSING":
+        #     api_status = "PENDING"
+
+        response_data = {
+            "task_id": task_record["id"],
+            "status": api_status,
+            "progressMessage": task_record["progressMessage"],
+            "task_type": task_record["task_type"],
+            "result": None,
+            "error": None,
+        }
+
+        if db_status == "COMPLETED" and include_result:
+            response_data["result"] = task_record["result"]
+        elif db_status == "FAILED":
+            # The 'result' column stores the error message on failure
+            response_data["error"] = str(task_record["result"])
+
+        return response_data
+    except Exception as e:
+        logging.error(
+            f"Error fetching task status for {task_id}: {e}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=500, detail="Internal server error while fetching task status."
+        )
+    finally:
+        if conn:
+            task_db_service.release_connection(conn) 
