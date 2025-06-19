@@ -19,6 +19,7 @@ from aiservice.app.services.structuring.content_structuring_service import Conte
 from aiservice.app.utils.url_utils import custom_normalize_url
 from aiservice.app.services.task_db_service import TaskDBService
 from ..crews.title_generation_crew import GeneralPurposeTitleGenerationCrew
+from ..crews.keyword_extraction_crew import GeneralPurposeKeywordExtractionCrew
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,45 @@ class ParallelOrchestrator(BaseService):
 
         except Exception as e:
             self.logger.error(f"Job {job_id}: Title generation pipeline failed with an exception: {e}", exc_info=True)
+            return TaskResult(status=TaskStatus.FAILED, message=f"An unexpected error occurred: {str(e)}")
+
+    async def _run_keyword_extraction_pipeline(self, job_id: str, content_blocks_data: List[dict]) -> TaskResult:
+        """
+        Runs the keyword extraction crew with the provided content blocks.
+        """
+        self.logger.info(f"Job {job_id}: Running keyword extraction pipeline.")
+        try:
+            if not content_blocks_data:
+                self.logger.warning(f"Job {job_id}: No content blocks provided for keyword extraction.")
+                return TaskResult(status=TaskStatus.FAILED, message="No content provided for keyword extraction.")
+
+            full_text = " ".join(
+                block.get('content', '') or '' 
+                for block in content_blocks_data 
+                if isinstance(block.get('content'), str)
+            )
+
+            if not full_text.strip():
+                self.logger.warning(f"Job {job_id}: Content blocks contain no text for keyword extraction.")
+                return TaskResult(status=TaskStatus.FAILED, message="Content blocks contain no text for keyword extraction.")
+
+            keyword_crew = GeneralPurposeKeywordExtractionCrew(content_blocks=full_text)
+            keywords_output = keyword_crew.run()
+
+            if keywords_output and isinstance(keywords_output, list):
+                self.logger.info(f"Job {job_id}: Keyword extraction successful.")
+                return TaskResult(
+                    status=TaskStatus.COMPLETED,
+                    result={"keywords": keywords_output},
+                    message="Keywords extracted successfully."
+                )
+            else:
+                error_message = f"Keyword Extraction Failed: {keywords_output or 'No output from crew.'}"
+                self.logger.error(f"Job {job_id}: {error_message}")
+                return TaskResult(status=TaskStatus.FAILED, message=error_message)
+
+        except Exception as e:
+            self.logger.error(f"Job {job_id}: Keyword extraction pipeline failed with an exception: {e}", exc_info=True)
             return TaskResult(status=TaskStatus.FAILED, message=f"An unexpected error occurred: {str(e)}")
 
     def _prepare_final_output(self, original_input: OrchestrationInput, used_source_identifier: str, 

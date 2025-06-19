@@ -24,7 +24,7 @@ from aiservice.app.services.routing_service import RoutingService
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService
 from aiservice.app.services.structuring.content_structuring_service import ContentStructuringService
 from .celery_app import app as celery_app
-from .app import tasks  # Import tasks to have access to the task functions
+from aiservice.app.tasks import process_reconstruction_task, generate_title_task, generate_keywords_task, process_rewrite_task
 import logging
 
 # --- Pydantic Models for API ---
@@ -115,11 +115,13 @@ async def create_and_dispatch_task(
         
         # Determine the target task based on the task_type
         if task_request.task_type == "RECONSTRUCT_AND_ANALYZE":
-            target_task = tasks.process_reconstruction_task
+            target_task = process_reconstruction_task
         elif task_request.task_type == "GENERATE_TITLE":
-            target_task = tasks.generate_title_task
+            target_task = generate_title_task
+        elif task_request.task_type == "GENERATE_KEYWORDS":
+            target_task = generate_keywords_task
         elif task_request.task_type == "REWRITE_CONTENT":
-            target_task = tasks.process_rewrite_task
+            target_task = process_rewrite_task
         else:
             raise HTTPException(status_code=400, detail=f"Unknown task type: {task_request.task_type}")
 

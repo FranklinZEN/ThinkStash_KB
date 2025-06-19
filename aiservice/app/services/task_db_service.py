@@ -118,6 +118,17 @@ class TaskDBService:
         params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with title result")
 
+    def update_task_with_keywords_result(self, task_id: str, generated_keywords: list, conn):
+        """Updates a COMPLETED task with the result of a keyword generation."""
+        result_payload = {
+            "status": "success",
+            "generated_keywords": generated_keywords
+        }
+        result_data_json = json.dumps(result_payload, default=json_serial_converter)
+        sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
+        params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
+        self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with keywords result")
+
     def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Fetches a single task by its ID."""
         conn = None

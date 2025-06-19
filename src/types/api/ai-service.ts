@@ -185,7 +185,7 @@ export interface TaskStatusResponse {
     // For title generation
     generated_title?: string;
     // For keyword generation
-    suggested_keywords?: string[];
+    generated_keywords?: string[];
     // For rewrite
     rewritten_content_blocks?: ContentBlock[];
     // For reconstruction
