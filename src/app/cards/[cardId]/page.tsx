@@ -52,7 +52,7 @@ import {
   mapPartialBlocksToAIServiceContentBlocks,
   mapContentBlocksToPartialBlocks,
 } from '../../../lib/contentUtils';
-import type { TaskStatusResponse } from '@/types/api/ai-service';
+import type { TaskStatusResponse, ContentBlock as AIServiceContentBlock } from '@/types/api/ai-service';
 
 // Helper function to check if editor content is effectively empty
 const isEditorEmpty = (
@@ -355,14 +355,8 @@ export default function CardDetailPage() {
   // ADDED: State for AI suggestions
   const [suggestedTitle, setSuggestedTitle] = useState<string | null>(null);
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false);
-  // const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>( // REMOVED OLD
-  //   null,
-  // );
-  // const [isSuggestingKeywords, setIsSuggestingKeywords] = useState(false); // REMOVED OLD - will be replaced by isGeneratingKeywords
-
-  // New state for simplified keyword generation
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
-  const [keywordError, setKeywordError] = useState<string | null>(null);
+  const [suggestedKeywords, setSuggestedKeywords] = useState<string[] | null>(null);
 
   // ADDED: State for AI Content Rewrite
   const [isRewritingContent, setIsRewritingContent] = useState(false);
@@ -590,7 +584,7 @@ export default function CardDetailPage() {
     }
 
     const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-      contentToProcess,
+      contentToProcess || [],
       card.userId,
       cardId,
     );
@@ -643,102 +637,95 @@ export default function CardDetailPage() {
     }
   };
 
-  // New handler for AI Keyword Generation Button Click
-  const handleGenerateKeywordsAIClick = async () => {
-    setIsGeneratingKeywords(true);
-    setKeywordError(null);
+  const applySuggestedTitle = () => {
+    if (suggestedTitle) {
+      setTitle(suggestedTitle);
+      setSuggestedTitle(null);
+    }
+  };
 
-    let contentToProcess: AppPartialBlock[] | undefined;
-    if (isEditing && editorContent && !isEditorEmpty(editorContent)) {
-      contentToProcess = editorContent;
-    } else if (card?.content) {
-      if (typeof card.content === 'string') {
-        try {
-          const parsed = JSON.parse(card.content);
-          if (Array.isArray(parsed)) {
-            contentToProcess = parsed as AppPartialBlock[];
-          } else {
-            contentToProcess = [
-              {
-                type: 'paragraph',
-                content: [{ type: 'text', text: card.content, styles: {} }],
-              },
-            ];
-          }
-        } catch {
-          contentToProcess = [
-            {
-              type: 'paragraph',
-              content: [{ type: 'text', text: card.content, styles: {} }],
-            },
-          ];
+  // New handler for AI Keyword Generation Button Click
+  const handleGenerateKeywords = async () => {
+    if (!editor && !card?.content) {
+      toast({
+        title: 'No content available for keyword generation.',
+        status: 'warning',
+        duration: 3000,
+      });
+      return;
+    }
+    if (!card || !card.userId || !cardId) {
+      toast({ title: 'Card data not loaded.', status: 'error', duration: 3000 });
+      return;
+    }
+
+    let contentToProcess: AppPartialBlock[] | undefined = editorContent;
+     if (!isEditing || !editorContent || editorContent.length === 0) {
+      if (card?.content) {
+        if (typeof card.content === 'string') {
+          contentToProcess = [{ type: 'paragraph', content: [{ type: 'text', text: card.content, styles: {} }] }];
+        } else {
+          contentToProcess = card.content as AppPartialBlock[];
         }
-      } else {
-        contentToProcess = card.content as AppPartialBlock[];
       }
     }
 
     if (isEditorEmpty(contentToProcess)) {
-      setKeywordError('Cannot generate keywords: Content is empty.');
-      setIsGeneratingKeywords(false);
+      toast({ title: 'Content is empty, cannot suggest keywords.', status: 'info', duration: 3000 });
       return;
     }
 
-    const currentUserId = session?.user?.id || card?.userId;
-    if (!currentUserId) {
-      setKeywordError(
-        'User information not available. Please ensure you are logged in or card data is loaded.',
-      );
-      setIsGeneratingKeywords(false);
+    const aiServiceContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
+      contentToProcess || [],
+      card.userId,
+      cardId,
+    );
+
+    if (aiServiceContentBlocks.length === 0) {
+      toast({ title: 'No processable content found.', status: 'info', duration: 3000 });
       return;
     }
 
-    const currentCardId = cardId || card?.id;
-    if (!currentCardId) {
-      setKeywordError('Card ID not available.');
-      setIsGeneratingKeywords(false);
-      return;
-    }
-
+    setIsGeneratingKeywords(true);
+    setSuggestedKeywords(null); // Clear previous suggestions
     try {
-      const aiServiceBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        contentToProcess || [],
-        currentUserId,
-        currentCardId,
-      );
-
       const response = await fetch('/api/ai/generate-keywords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content_blocks: aiServiceBlocks }),
+        body: JSON.stringify({ content_blocks: aiServiceContentBlocks }),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.message || 'Failed to generate keywords from API',
-        );
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Failed to dispatch keyword generation task.');
       }
-
-      const result = await response.json();
-      setKeywords(result.suggested_keywords || []);
+      if (data.taskId) {
+        setCurrentTaskId(data.taskId);
+        setCurrentProgressMessage('Keyword generation task started...');
+        toast({
+          title: 'Keyword generation initiated',
+          description: 'The AI is generating keywords. Please wait.',
+          status: 'info',
+          duration: 3000,
+        });
+      } else {
+         throw new Error('Did not receive a task ID from the server.');
+      }
+    } catch (err) {
+      console.error('Suggest keywords error:', err);
       toast({
-        title: 'Keywords Suggested',
-        description: 'AI has suggested keywords.',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
+        title: 'Error suggesting keywords',
+        description: err instanceof Error ? err.message : 'Could not suggest keywords.',
+        status: 'error',
+        duration: 5000,
       });
-    } catch (error: unknown) {
-      console.error('Error generating keywords:', error);
-      setKeywordError(
-        error instanceof Error
-          ? error.message
-          : 'An unexpected error occurred while generating keywords.',
-      );
-      // setKeywords([]); // Decide if keywords should be cleared on error
-    } finally {
       setIsGeneratingKeywords(false);
+    }
+  };
+
+  const applySuggestedKeywords = () => {
+    if (suggestedKeywords) {
+      setKeywords(suggestedKeywords);
+      setSuggestedKeywords(null);
     }
   };
 
@@ -977,7 +964,7 @@ export default function CardDetailPage() {
             Array.isArray(data.ai_rewritten_content_blocks)
           ) {
             const editorFriendlyBlocks = mapContentBlocksToPartialBlocks(
-              data.ai_rewritten_content_blocks as AppPartialBlock[],
+              data.ai_rewritten_content_blocks as AIServiceContentBlock[],
             ) as AppPartialBlock[];
             setRewrittenContentBlocks(editorFriendlyBlocks);
             setCurrentProgressMessage(null);
@@ -1407,15 +1394,35 @@ export default function CardDetailPage() {
               });
             }
             setIsSuggestingTitle(false);
-          } else if (data.task_type === 'generate_keywords' && data.result?.suggested_keywords) {
-            setKeywords(data.result.suggested_keywords);
-            toast({
-              title: 'Keywords Suggested',
-              description: 'AI has suggested keywords.',
-              status: 'success',
-              duration: 3000,
-              isClosable: true,
-            });
+          } else if (data.task_type === 'GENERATE_KEYWORDS') {
+            let resultData = data.result;
+            if (typeof resultData === 'string') {
+              try {
+                resultData = JSON.parse(resultData);
+              } catch (e) {
+                console.error('Error parsing task result:', e);
+                resultData = null;
+              }
+            }
+            const newKeywords = resultData?.generated_keywords;
+            if (newKeywords && Array.isArray(newKeywords)) {
+              setSuggestedKeywords(newKeywords);
+              toast({
+                title: 'Keywords Suggested',
+                description: 'AI has suggested keywords. Click "Apply" to use them.',
+                status: 'success',
+                duration: 4000,
+                isClosable: true,
+              });
+            } else {
+               toast({
+                title: 'Error processing keywords',
+                description: 'The AI task completed, but keywords were not returned in the expected format.',
+                status: 'error',
+                duration: 5000,
+              });
+            }
+            setIsGeneratingKeywords(false);
           }
           // Handle other completed task types if necessary
           
@@ -1432,6 +1439,8 @@ export default function CardDetailPage() {
           });
           if (data.task_type === 'GENERATE_TITLE') {
             setIsSuggestingTitle(false);
+          } else if (data.task_type === 'GENERATE_KEYWORDS') {
+            setIsGeneratingKeywords(false);
           }
         }
       } catch (error) {
@@ -1805,10 +1814,7 @@ export default function CardDetailPage() {
                       size="sm"
                       colorScheme="teal"
                       variant="outline"
-                      onClick={() => {
-                        setTitle(suggestedTitle);
-                        setSuggestedTitle(null);
-                      }}
+                      onClick={applySuggestedTitle}
                       isDisabled={!isEditing || isSaving}
                     >
                       Apply: &quot;{suggestedTitle.substring(0, 30)}
@@ -1845,21 +1851,45 @@ export default function CardDetailPage() {
                 fontFamily="'Open Sans', sans-serif"
                 fontSize="16px"
               />
-              <Button
-                onClick={handleGenerateKeywordsAIClick}
-                isLoading={isGeneratingKeywords}
-                loadingText="Generating..."
-                colorScheme="blue"
-                variant="outline"
-                size="sm"
-                isDisabled={isSaving || !isEditing || isGeneratingKeywords}
-              >
-                Suggest Keywords with AI
-              </Button>
-              {keywordError && (
-                <Text color="red.500" mt={1} fontSize="sm">
-                  Error: {keywordError}
-                </Text>
+              <HStack mt={2} spacing={2}>
+                <Button
+                  onClick={handleGenerateKeywords}
+                  isLoading={isGeneratingKeywords}
+                  loadingText="Generating..."
+                  colorScheme="blue"
+                  variant="outline"
+                  size="sm"
+                  isDisabled={isSaving || !isEditing || isGeneratingKeywords}
+                >
+                  Suggest Keywords with AI
+                </Button>
+              </HStack>
+              {suggestedKeywords && (
+                <VStack align="start" mt={3} p={3} borderWidth="1px" borderRadius="md" spacing={3} bg="gray.50">
+                  <Text fontWeight="bold">AI Suggestions:</Text>
+                  <HStack spacing={2} flexWrap="wrap">
+                    {suggestedKeywords.map((keyword, index) => (
+                      <ChakraTag
+                        key={index}
+                        size="lg"
+                        borderRadius="md"
+                        variant="solid"
+                        colorScheme="purple"
+                      >
+                        <TagLabel>{keyword}</TagLabel>
+                      </ChakraTag>
+                    ))}
+                  </HStack>
+                  <Button
+                    size="sm"
+                    colorScheme="teal"
+                    variant="outline"
+                    onClick={applySuggestedKeywords}
+                    isDisabled={!isEditing || isSaving}
+                  >
+                    Apply Suggestions
+                  </Button>
+                </VStack>
               )}
             </FormControl>
 

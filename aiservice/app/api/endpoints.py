@@ -30,7 +30,7 @@ from aiservice.app.crews.keyword_extraction_crew import GeneralPurposeKeywordExt
 from aiservice.app.config.settings import Settings, settings # To get DATABASE_URL
 from aiservice.app.services.orchestrator import ParallelOrchestrator
 from aiservice.app.services.routing_service import RoutingService
-from aiservice.app.services.acquisition.web_service import WebAcquisitionService
+from aiservice.app.services.acquisition.correct_web_service import CorrectWebAcquisitionService
 from aiservice.app.services.acquisition.pdf_service import PDFAcquisitionService
 from aiservice.app.services.acquisition.file_service import FileAcquisitionService
 from aiservice.app.services.processing.image_processing_service import ImageProcessingService
@@ -60,25 +60,23 @@ logger = get_logger(__name__) # Instantiate logger at module level
 # return Settings()
 
 async def get_orchestrator() -> ParallelOrchestrator:
-    settings = Settings()
+    settings_obj = Settings()
     # Instantiate all services needed by ParallelOrchestrator
     # This assumes these services can be instantiated simply with settings or no args
     # This might need adjustment if services have more complex dependencies
-    routing_s = RoutingService(settings=settings)
-    web_acq_s = WebAcquisitionService(settings=settings)
-    pdf_acq_s = PDFAcquisitionService(settings=settings) # Assuming PDF service init
-    file_acq_s = FileAcquisitionService(settings=settings) # Assuming File service init
-    img_proc_s = ImageProcessingService(settings=settings)
-    content_struct_s = ContentStructuringService(settings=settings) # Assuming Content Structuring service init
+    from aiservice.app.services.task_db_service import TaskDBService # Local import to avoid circular dependency issues at startup
+    
+    task_db_s = TaskDBService(settings=settings_obj)
+    routing_s = RoutingService(settings=settings_obj)
+    img_proc_s = ImageProcessingService(settings=settings_obj)
+    content_struct_s = ContentStructuringService(settings=settings_obj) 
     
     return ParallelOrchestrator(
+        task_db_service=task_db_s,
         routing_service=routing_s,
-        web_acquisition_service=web_acq_s,
-        pdf_acquisition_service=pdf_acq_s,
-        file_acquisition_service=file_acq_s,
         image_processing_service=img_proc_s,
         content_structuring_service=content_struct_s,
-        settings=settings
+        settings=settings_obj
     )
 
 

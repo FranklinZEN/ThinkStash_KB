@@ -33,7 +33,7 @@ services:
     container_name: thinkstash-aiservice
     ports:
       - target: 8000
-        published: 8001
+        published: 8000
         protocol: tcp
         mode: host
     env_file:

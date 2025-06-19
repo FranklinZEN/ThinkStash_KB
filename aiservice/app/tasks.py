@@ -236,6 +236,90 @@ def generate_title_task(self, task_payload_dict: dict):
         raise # Re-raise the original exception for Celery to mark as failed
 
 @app.task(bind=True)
+def generate_keywords_task(self, task_payload_dict: dict):
+    """
+    Celery task to generate keywords for a given document's content.
+    """
+    task_db_service = get_task_db_service_for_worker()
+    orchestrator = get_orchestrator_instance()
+    
+    task_id = self.request.id
+    if not task_id:
+        logger.error("Could not find task_id in request context.")
+        return
+
+    main_payload = task_payload_dict.get('payload', {})
+    content_blocks = main_payload.get('content_blocks')
+
+    logger.info(f"Starting keyword generation task for task_id: {task_id}")
+
+    if not content_blocks:
+        logger.error(f"Task {task_id} failed: No 'content_blocks' found in payload.")
+        conn = None
+        try:
+            conn = task_db_service.get_connection()
+            task_db_service.update_task_status_failed(task_id, "Payload missing 'content_blocks'.", conn)
+            conn.commit()
+        except Exception as db_e:
+            logger.error(f"DB Error while failing task {task_id}: {db_e}", exc_info=True)
+            if conn: conn.rollback()
+        finally:
+            if conn: task_db_service.release_connection(conn)
+        return
+
+    conn = None
+    try:
+        conn = task_db_service.get_connection()
+        task_db_service.update_task_progress_stage(task_id, "Starting AI Keyword Generation", conn)
+        conn.commit()
+
+        task_result = asyncio.run(
+            orchestrator._run_keyword_extraction_pipeline(
+                content_blocks_data=content_blocks,
+                job_id=task_id
+            )
+        )
+        
+        if task_result.status == TaskStatus.COMPLETED and task_result.result:
+            # THIS IS THE CRITICAL FIX: The pipeline now returns 'keywords'
+            # and the DB service expects 'generated_keywords'. We must align them.
+            # The most robust fix is to ensure the DB service receives what it expects.
+            final_keywords = task_result.result.get("keywords")
+            
+            # Call the correct database update function
+            task_db_service.update_task_with_keywords_result(task_id, final_keywords, conn)
+            conn.commit()
+            
+            logger.info(f"Task {task_id} (keyword generation) completed successfully.")
+            
+            # The return value for Celery's own backend result store.
+            # This should also be consistent for debugging purposes.
+            return {"status": "success", "result": {"generated_keywords": final_keywords}}
+        else:
+            error_message = task_result.message or "Keyword generation failed with no specific message."
+            logger.error(f"Keyword generation pipeline failed for task {task_id}: {error_message}")
+            task_db_service.update_task_status_failed(task_id, error_message, conn)
+            conn.commit()
+            return {"status": "failed", "error": error_message}
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in keyword generation task {task_id}: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
+        error_conn = None
+        try:
+            error_conn = task_db_service.get_connection()
+            task_db_service.update_task_status_failed(task_id, str(e), error_conn)
+            error_conn.commit()
+        except Exception as db_e:
+            logger.error(f"DB Error while failing task {task_id} on exception: {db_e}", exc_info=True)
+            if error_conn: error_conn.rollback()
+        finally:
+            if error_conn:
+                task_db_service.release_connection(error_conn)
+        raise
+
+@app.task(bind=True)
 def process_rewrite_task(self, task_payload_dict: dict):
     """
     Celery task to process a content rewrite request asynchronously.
