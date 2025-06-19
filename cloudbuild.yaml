@@ -63,8 +63,10 @@ steps:
       /tmp/cloud-sql-proxy "thinkstash-knowledge-base:us-central1:knowledge-base-ts-db-instance" &
       echo "Waiting for proxy to initialize (10s)..."
       sleep 10
-      # The DATABASE_URL for the migration must point to the local proxy, using the env vars directly.
-      export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME}?sslmode=disable"
+      # The DATABASE_URL for the migration must point to the local proxy.
+      # The $$ syntax escapes the variable for Cloud Build's templating,
+      # allowing the shell to expand the environment variable at runtime.
+      export DATABASE_URL="postgresql://$${DB_USER}:$${DB_PASSWORD}@127.0.0.1:5432/$${DB_NAME}?sslmode=disable"
       echo "DATABASE_URL set for migration. Running migrations..."
       npx prisma migrate deploy
       echo "Migrations complete."
