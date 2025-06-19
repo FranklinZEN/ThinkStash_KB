@@ -219,8 +219,6 @@ availableSecrets:
     env: 'DB_PASSWORD'
   - versionName: projects/${_PROJECT_ID}/secrets/kc-db-name/versions/latest
     env: 'DB_NAME'
-  - versionName: projects/${_PROJECT_ID}/secrets/redis-url/versions/latest
-    env: 'REDIS_URL'
 
 options:
   logging: CLOUD_LOGGING_ONLY
