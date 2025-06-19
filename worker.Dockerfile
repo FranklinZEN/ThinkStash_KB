@@ -51,10 +51,10 @@ USER appuser
 RUN python -m playwright install chromium
 
 # Copy the rest of the application code
-COPY --chown=appuser:appgroup aiservice/ /app/aiservice/
+COPY --chown=appuser:appgroup aiservice/ .
 
 # Command to run the Celery worker
-CMD ["celery", "-A", "aiservice.celery_app:app", "worker", "--loglevel=info"]
+CMD ["celery", "-A", "celery_app:app", "worker", "--loglevel=info"]
 
 # Make port 8000 available to the world outside this container
 # EXPOSE 8000 # Workers don't typically need exposed ports unless for monitoring 

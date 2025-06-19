@@ -132,6 +132,7 @@ steps:
         --min-instances=0 \
         --max-instances=5 \
         --port=8000 \
+        --vpc-connector=default \
         --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,GCS_BUCKET_NAME=thinkstash-gcs-bucket-name:latest,REDIS_URL=redis-url:latest \
         --set-env-vars=^##^
           PYTHONUNBUFFERED=1,##
@@ -196,6 +197,7 @@ steps:
         --min-instances=1 \
         --max-instances=3 \
         --port=8080 \
+        --vpc-connector=default \
         --set-secrets=DATABASE_URL=thinkstash-db-url:latest,GEMINI_API_KEY=gemini-api-key:latest,GCS_BUCKET_NAME=thinkstash-gcs-bucket-name:latest,REDIS_URL=redis-url:latest \
         --set-env-vars=^##^
           PYTHONUNBUFFERED=1,##
