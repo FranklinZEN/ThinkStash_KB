@@ -261,11 +261,6 @@ class FullTextContentExtractorTool(BaseTool):
         except Exception as e:
             return f"Error processing content blocks: {e}"
 
-# Langchain's @tool decorator version - more modern and integrates better with some LCEL patterns
-@tool("full_text_content_extractor_tool", args_schema=ContentExtractorInput)
-class ContentExtractorInput(BaseModel):
-    # ... existing code ...
-
 # Example Usage:
 if __name__ == '__main__':
     # ImageDownloaderTool Example

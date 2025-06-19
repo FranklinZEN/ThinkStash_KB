@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any, Union
 from .pipeline_models import DocumentMetadata, EnrichedImageMetadata
 import enum
+import uuid
 
 class OrchestrationInput(BaseModel):
     source_identifier: str = Field(..., description="URL or filepath")
@@ -10,39 +11,68 @@ class OrchestrationInput(BaseModel):
     job_id: Optional[str] = Field(default=None, description="Unique job identifier")
     user_id: Optional[str] = Field(default=None, description="User identifier")
     output_format_options: Optional[Dict[str, Any]] = Field(default=None, description="Options for output formatting")
-    run_title_generation: bool = Field(default=False, description="Flag to run the title generation crew.")
-    run_keyword_extraction: bool = Field(default=False, description="Flag to run the keyword extraction crew.")
+    additional_context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context to pass through.")
 
-# --- BlockNote Compliant Models ---
-
-class InlineContent(BaseModel):
-    type: str = Field(..., description="e.g., 'text', 'link'")
-    text: str
-    styles: Dict[str, Any] = Field(default_factory=dict)
-    href: Optional[str] = Field(None, description="URL for 'link' type content")
-
+# Represents the properties of a block, which vary by type.
 class BlockProps(BaseModel):
-    level: Optional[int] = Field(None, description="Heading level (1-6)")
-    language: Optional[str] = Field(None, description="Language for code blocks")
-    ordered: Optional[bool] = Field(None, description="For list blocks")
-    src: Optional[str] = Field(None, description="Source URL for image blocks")
-    caption: Optional[str] = Field(None, description="Caption for image blocks")
-    # Add other props as needed, e.g., backgroundColor, textColor
+    level: Optional[int] = None  # For headings
+    language: Optional[str] = None  # For code blocks
+    ordered: Optional[bool] = None  # For lists
+    src: Optional[str] = None      # For images
+    caption: Optional[str] = None  # For images
+    
+class InlineContent(BaseModel):
+    type: str
+    text: str
+    styles: Dict[str, Any] = {}
+    href: Optional[str] = None
 
 class ContentBlock(BaseModel):
-    id: str = Field(..., description="Unique ID for this block.")
-    type: str = Field(..., description="BlockNote-compatible type (e.g., 'paragraph', 'heading', 'bulletListItem', 'image').")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    type: str  # E.g., 'paragraph', 'heading', 'list', 'image', 'code'
     props: BlockProps = Field(default_factory=BlockProps)
-    content: Union[List[InlineContent], str] = Field(default_factory=list, description="For text-based blocks, a list of InlineContent. For other blocks like 'image', this can be empty or hold simple content.")
-    children: List['ContentBlock'] = Field(default_factory=list)
-    
-    # --- Deprecated/Legacy Fields for ThinkStash Backend ---
-    # These are kept for reference during transition but are not part of the core BlockNote structure.
-    # The data they hold should be mapped to the new structure.
-    block_id: Optional[str] = Field(None, description="[DEPRECATED] Use id.")
-    user_id: Optional[str] = Field(None, description="[DEPRECATED] Data is now scoped to the document/card.")
-    document_id: Optional[str] = Field(None, description="[DEPRECATED] Data is now scoped to the document/card.")
-    order_index: Optional[int] = Field(None, description="[DEPRECATED] Order is implicit in the list.")
+    content: Optional[Union[str, List['ContentBlock'], List[InlineContent]]] = None
+    children: List['ContentBlock'] = []
+
+    # The following are for compatibility/transformation and should not be directly used by the frontend.
+    gcs_url: Optional[str] = Field(None, exclude=True)
+    caption: Optional[str] = Field(None, exclude=True)
+    level: Optional[int] = Field(None, exclude=True)
+    language: Optional[str] = Field(None, exclude=True)
+
+    @validator('props', pre=True, always=True)
+    def assemble_props(cls, v, values):
+        # If props is already a BlockProps instance, use it
+        if isinstance(v, BlockProps):
+            props = v
+        # If it's a dictionary, create a BlockProps instance
+        elif isinstance(v, dict):
+            props = BlockProps(**v)
+        # Otherwise, create a new one
+        else:
+            props = BlockProps()
+
+        # For image blocks, transfer gcs_url and caption to props
+        if values.get('type') == 'image':
+            if 'gcs_url' in values and values['gcs_url']:
+                props.src = values['gcs_url']
+            if 'caption' in values and values['caption']:
+                props.caption = values['caption']
+        
+        # For heading blocks, transfer level to props
+        if values.get('type') == 'heading':
+            if 'level' in values and values['level']:
+                props.level = values['level']
+
+        # For code blocks, transfer language to props
+        if values.get('type') == 'code':
+             if 'language' in values and values['language']:
+                props.language = values['language']
+                
+        return props
+
+# Ensure forward references are resolved after all models are defined
+ContentBlock.model_rebuild()
 
 class OrchestrationStatusCodeEnum(str, enum.Enum):
     """Standardized status codes for orchestration and processing."""
@@ -61,14 +91,14 @@ class OrchestrationStatusCodeEnum(str, enum.Enum):
     UNSUPPORTED_TYPE = "unsupported_type"
 
     # AI Rewrite Process Specific Statuses (Task Progress Stages)
-    REWRITE_PENDING = "rewrite_pending" # Initial state in DB before processing starts
+    REWRITE_PENDING = "rewrite_pending"
     REWRITE_STARTED = "rewrite_started"
     REWRITE_SUMMARIZATION_AGENT_STARTED = "rewrite_summarization_agent_started"
     REWRITE_SUMMARIZATION_AGENT_PROCESSING = "rewrite_summarization_agent_processing"
     REWRITE_SUMMARIZATION_AGENT_COMPLETED = "rewrite_summarization_agent_completed"
     REWRITE_RECONSTRUCTION_STARTED = "rewrite_reconstruction_started"
     REWRITE_RECONSTRUCTION_COMPLETED = "rewrite_reconstruction_completed"
-    REWRITE_SUCCESS = "rewrite_success" # Final success state for the rewrite task
+    REWRITE_SUCCESS = "rewrite_success"
 
     # AI Rewrite Process Specific Failure Statuses
     REWRITE_FAILED_EMPTY_INPUT = "rewrite_failed_empty_input"
@@ -76,19 +106,20 @@ class OrchestrationStatusCodeEnum(str, enum.Enum):
     REWRITE_FAILED_SUMMARIZATION_OUTPUT_PARSING = "rewrite_failed_summarization_output_parsing"
     REWRITE_FAILED_RECONSTRUCTION = "rewrite_failed_reconstruction"
     REWRITE_FAILED_UNHANDLED_EXCEPTION = "rewrite_failed_unhandled_exception"
-    REWRITE_FAILED_DB_UPDATE = "rewrite_failed_db_update" # For when DB updates fail within the crew manager
+    REWRITE_FAILED_DB_UPDATE = "rewrite_failed_db_update"
 
 class OrchestrationOutput(BaseModel):
     status_code: str = Field(..., examples=["success", "partial_success", "failure_acquisition", "failure_image_processing", "failure_structuring", "unsupported_type"])
     user_id: Optional[str] = Field(default=None, description="User identifier for the entire orchestration, if available.")
-    document_id: Optional[str] = Field(default=None, description="Document identifier (job_id) for the entire orchestration, if available.")
+    request_id: Optional[str] = Field(None, description="Request identifier (job_id) for the entire orchestration.")
     source_identifier: str
-    source_type: str
-    processing_level_used: str
+    final_url: Optional[str] = None
+    source_type: Optional[str] = None
     title: Optional[str] = Field(None, description="The final title for the document.")
     content_blocks: List[ContentBlock] = Field(default_factory=list, description="The final, structured content blocks.")
-    is_long_article: bool = False
-    processed_images_data: Dict[str, EnrichedImageMetadata] = Field(default_factory=dict, description="Dictionary mapping image_id to EnrichedImageMetadata.")
+    images_metadata: List[EnrichedImageMetadata] = Field(default_factory=list)
     document_metadata: Optional[DocumentMetadata] = Field(None, description="Comprehensive metadata about the processed document.")
     error_message: Optional[str] = None
-    card_id: Optional[str] = Field(None, description="[DEPRECATED] The ID of the newly created KnowledgeCard on success. The card is no longer created by the orchestrator.")
+    is_long_form_content: bool = False
+    processing_level: Optional[str] = None
+    additional_context: Optional[Dict[str, Any]] = None

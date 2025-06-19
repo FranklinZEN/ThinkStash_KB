@@ -1,36 +1,60 @@
-# Stage 1: Build stage - with dependencies and build tools
-FROM python:3.11-slim as builder
+# Use the official Python 3.11 slim image as a parent image
+FROM python:3.11-slim
 
-# Set the working directory
-WORKDIR /app
-
-# Install uv, a fast Python package installer
-RUN pip install uv
-
-# Copy only the requirements file to leverage Docker cache
-COPY aiservice/requirements.txt .
-
-# Install dependencies using uv
-RUN uv pip install --system --no-cache -r requirements.txt
-
-
-# Stage 2: Final stage - minimal runtime environment
-FROM python:3.11-slim as final
-
-# Set the working directory
-WORKDIR /app
-
-# Set environment variables to prevent Python from writing pyc files
+# Set environment variables
+# Prevents Python from writing pyc files to disc
 ENV PYTHONDONTWRITEBYTECODE 1
+# Prevents Python from buffering stdout and stderr
 ENV PYTHONUNBUFFERED 1
+# Set the path for Playwright browsers to be installed system-wide
+ENV PLAYWRIGHT_BROWSERS_PATH=/var/lib/playwright
 
-# Copy the installed dependencies from the builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Set the working directory in the container
+WORKDIR /app
 
-# Copy the application code
-COPY aiservice/ /app/
+# Install system-level dependencies required for the application and Playwright
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    # Dependencies for Playwright
+    libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libdbus-1-3 \
+    libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 \
+    libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 libasound2 \
+    # Dependencies for other packages might go here
+    build-essential \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user and group for security
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/bash --create-home appuser
+
+# Create and set permissions for a cache directory if needed by the app
+RUN mkdir -p /app/.image_cache && \
+    chown -R appuser:appgroup /app/.image_cache
+
+# Copy the requirements file and install Python dependencies as the new user
+COPY --chown=appuser:appgroup aiservice/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright and its browser dependencies.
+# The --with-deps flag will attempt to install system dependencies, which we've already done.
+# Running this as appuser ensures browsers are correctly cached if not using PLAYWRIGHT_BROWSERS_PATH=0
+# but with PLAYWRIGHT_BROWSERS_PATH=0 it will install to a system location we can create and permission.
+RUN mkdir -p /var/lib/playwright && \
+    chown -R appuser:appgroup /var/lib/playwright
+    
+# Switch to the non-root user
+USER appuser
+
+# Now, as the non-root user, install the browser binaries.
+# These will be installed in the location specified by PLAYWRIGHT_BROWSERS_PATH
+RUN python -m playwright install chromium
+
+# Copy the rest of the application code
+COPY --chown=appuser:appgroup aiservice/ /app/aiservice/
 
 # Command to run the Celery worker
-# The -A flag specifies the application instance, which is located in the celery_app.py file
-CMD ["celery", "-A", "celery_app.app", "worker", "--loglevel=info"] 
+CMD ["celery", "-A", "aiservice.celery_app:app", "worker", "--loglevel=info"]
+
+# Make port 8000 available to the world outside this container
+# EXPOSE 8000 # Workers don't typically need exposed ports unless for monitoring 

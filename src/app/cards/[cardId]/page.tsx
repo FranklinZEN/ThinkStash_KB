@@ -423,12 +423,14 @@ export default function CardDetailPage() {
       }
       // console.log('[CardDetail Page] Setting editorContentForInitialLoad:', newInitialContent);
       setEditorContentForInitialLoad(newInitialContent);
+      setEditorContent(newInitialContent); // <<< FIX: Synchronize state on load
       if (card && card.updatedAt) {
         setEditorKey((prevKey) => prevKey + 1); // A simple increment, or use card.updatedAt
       }
     } else if (card) {
       // console.log('[CardDetail Page] Card content is null or undefined, setting editorContentForInitialLoad to undefined');
       setEditorContentForInitialLoad(undefined);
+      setEditorContent(undefined); // <<< FIX: Synchronize state on load
     }
     // Only run when `card` itself changes. Content is part of `card`.
   }, [card]);
@@ -1661,8 +1663,8 @@ export default function CardDetailPage() {
       ) : isEditing ? (
         <Box
           as="form"
-          onSubmit={(_e) => {
-            _e.preventDefault();
+          onSubmit={(e: React.FormEvent) => {
+            e.preventDefault();
             handleSaveChanges();
           }}
         >
@@ -1768,13 +1770,28 @@ export default function CardDetailPage() {
                 Content
               </FormLabel>
               <Box borderWidth="1px" borderRadius="md" p={0} minH="500px">
-                <BlockNoteEditorComponent
-                  key={`editor-main-editing-${editorKey}`}
-                  onEditorChange={handleEditorInstanceReady}
-                  onContentUpdate={handleEditorContentUpdate}
-                  editable={true}
-                  initialContent={editorContentForInitialLoad}
-                />
+                {isEditing ? (
+                  <BlockNoteEditorComponent
+                    key={`editor-main-editing-${editorKey}`}
+                    onEditorChange={handleEditorInstanceReady}
+                    onContentUpdate={handleEditorContentUpdate}
+                    editable={true}
+                    initialContent={editorContentForInitialLoad}
+                  />
+                ) : (
+                  <BlockNoteEditorComponent
+                    key={card.id}
+                    initialContent={
+                      card.content
+                        ? typeof card.content === 'string'
+                          ? JSON.parse(card.content)
+                          : card.content
+                        : undefined
+                    }
+                    editable={false}
+                    onEditorChange={() => {}}
+                  />
+                )}
               </Box>
             </FormControl>
           </VStack>
@@ -1816,11 +1833,16 @@ export default function CardDetailPage() {
             mt={card && card.tags && card.tags.length > 0 ? 0 : 4}
           >
             <BlockNoteEditorComponent
-              key={`editor-main-readonly-${editorKey}`}
-              onEditorChange={handleEditorInstanceReady}
-              onContentUpdate={handleEditorContentUpdate}
+              key={card.id}
+              initialContent={
+                card.content
+                  ? typeof card.content === 'string'
+                    ? JSON.parse(card.content)
+                    : card.content
+                  : undefined
+              }
               editable={false}
-              initialContent={editorContentForInitialLoad}
+              onEditorChange={() => {}}
             />
           </Box>
         </Box>
@@ -1834,8 +1856,8 @@ export default function CardDetailPage() {
         <AlertDialogOverlay>
           <AlertDialogContent
             as="form"
-            onSubmit={(_e) => {
-              _e.preventDefault();
+            onSubmit={(e: React.FormEvent) => {
+              e.preventDefault();
               handleDelete();
             }}
           >

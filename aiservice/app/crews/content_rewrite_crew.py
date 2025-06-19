@@ -5,7 +5,18 @@ Defines the ContentRewriteCrew, responsible for orchestrating agents
 to rewrite/summarize content based on the V2.6 plan.
 """
 
-from crewai import Crew, Process, Task
+from crewai import Agent, Task, Crew, Process
+from crewai.project import CrewBase, agent, crew, task
+from langchain_community.tools import DuckDuckGoSearchRun
+from aiservice.app.config.logging_config import get_logger
+from aiservice.app.models.task_output_models import SummarizerTaskOutput, StructuredSummary, Segment
+
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain_core.messages import SystemMessage
+from aiservice.app.config.settings import settings
+from aiservice.app.tools.content_processing_tools import FullTextContentExtractorTool
+from langchain.pydantic_v1 import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import json
 import re
@@ -15,19 +26,18 @@ import ast
 from textwrap import dedent
 from pydantic import BaseModel, Field, ValidationError
 
-from crewai.process import Process
-from crewai.tasks.task_output import TaskOutput
-
 from aiservice.app.config.logging_config import get_logger
 from aiservice.app.agents.content_rewrite_agents import ContentRewriteAgents
 from aiservice.app.config.settings import Settings
 
 from aiservice.app.models.orchestration_models import ContentBlock, OrchestrationStatusCodeEnum
 from aiservice.app.models.insight_generation_models import RewriteContentInput, RewriteContentOutput
-from aiservice.app.models.task_output_models import SummarizerTaskOutput, StructuredSummary, Segment
-from aiservice.app.services.task_db_service import update_task_progress_stage, update_task_status_completed, update_task_status_failed
 
 logger = get_logger(__name__)
+
+# 1. Create a Pydantic model for the final desired output
+class FinalContentStructure(BaseModel):
+    segments: List[Dict[str, Any]] = Field(description="List of content segments, can be text or image references.")
 
 class ContentRewriteCrewManager:
     """Manages the creation and execution of the Content Rewrite Crew."""
@@ -181,9 +191,7 @@ class ContentRewriteCrewManager:
                 The system will directly parse this JSON string into the 'StructuredSummary' Pydantic model.
                 """),
             expected_output=(
-                "A single, valid JSON string representing a structured summary. This JSON string must conform to the specified structure: "
-                "an object with a 'segments' key, where 'segments' is a list of objects, each having 'type' and either 'content' or 'image_id_ref'. "
-                "This JSON string will be used to populate the 'structured_summary' field of the 'SummarizerTaskOutput' Pydantic model."
+                "A single, valid JSON string representing a structured summary."
             ),
             agent=summarization_agent,
             context_data_from_main_crew_inputs = ['concatenated_text', 'essential_image_metadata_for_summarizer_prompt']

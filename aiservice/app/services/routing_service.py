@@ -130,7 +130,7 @@ class RoutingService(BaseService):
 
         try:
             if determined_source_type == RoutingService.URL_TYPE:
-                target_service_name = "WebAcquisitionService"
+                target_service_name = "CorrectWebAcquisitionService"
             elif determined_source_type == 'pdf' or determined_source_type == 'gcs_pdf':
                 target_service_name = "PDFAcquisitionService"
             elif determined_source_type in ['docx', 'txt', 'md'] or \

@@ -6,6 +6,12 @@ import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import type { RewriteContentRequest } from '@/types/api/ai-service';
 
+// Define the expected structure of the successful response from the AI service
+interface AIServiceSuccessResponse {
+  message: string;
+  task_id: string;
+}
+
 export async function POST(req: Request) {
   const correlationId = uuidv4();
   try {
@@ -15,6 +21,7 @@ export async function POST(req: Request) {
     }
 
     const body = (await req.json()) as RewriteContentRequest;
+    // The backend task expects 'content_blocks'
     const { content_blocks_to_rewrite, document_metadata } = body;
 
     if (
@@ -31,23 +38,45 @@ export async function POST(req: Request) {
       );
     }
 
-    const task = await prisma.task.create({
-      data: {
-        userId: session.user.id,
-        type: 'REWRITE_CONTENT',
-        status: 'PENDING',
-        payload: {
-          correlationId,
-          content_blocks_to_rewrite:
-            content_blocks_to_rewrite as unknown as Prisma.JsonValue,
-          document_metadata:
-            document_metadata as unknown as Prisma.JsonValue,
+    const aiServiceResponse = await fetch(
+      'http://localhost:8000/create-and-dispatch-task',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        progressMessage: 'Rewrite task created',
+        body: JSON.stringify({
+          task_type: 'REWRITE_CONTENT',
+          user_id: session.user.id,
+          payload: {
+            // Send as 'content_blocks' to match backend expectation
+            content_blocks: content_blocks_to_rewrite,
+            document_metadata: document_metadata,
+            correlationId: correlationId,
+          },
+        }),
       },
-    });
+    );
 
-    return NextResponse.json({ taskId: task.id }, { status: 202 });
+    if (!aiServiceResponse.ok) {
+      const errorBody = await aiServiceResponse.text();
+      console.error(
+        `Failed to dispatch rewrite task. Status: ${aiServiceResponse.status}, Body: ${errorBody}`,
+        { correlationId },
+      );
+      return NextResponse.json(
+        {
+          error: 'Failed to communicate with AI service',
+          details: errorBody,
+        },
+        { status: aiServiceResponse.status },
+      );
+    }
+
+    const responseData =
+      (await aiServiceResponse.json()) as AIServiceSuccessResponse;
+
+    return NextResponse.json({ taskId: responseData.task_id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create rewrite task:', {
       correlationId,

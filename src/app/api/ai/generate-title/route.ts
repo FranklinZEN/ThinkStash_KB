@@ -5,6 +5,14 @@ import { authOptions } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import type { GenerateTitleRequest } from '@/types/api/ai-service';
 
+const AI_WORKER_URL = process.env.AI_WORKER_URL || 'http://localhost:8000';
+
+// Define the expected structure of the successful response from the AI service
+interface AIServiceSuccessResponse {
+  message: string;
+  task_id: string;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -29,40 +37,43 @@ export async function POST(req: Request) {
       );
     }
 
-    const task = await prisma.task.create({
-      data: {
-        userId: session.user.id,
-        type: 'GENERATE_TITLE',
-        status: 'PENDING',
-        payload: {
-          content_blocks: content_blocks as unknown as Prisma.JsonValue,
-        },
-        progressMessage: 'Title generation task created',
-      },
-    });
-
-    // Dispatch the task to the Python AI worker
-    try {
-      await fetch('http://localhost:8000/dispatch-task', {
+    // The new flow: directly call the AI service to create and dispatch the task.
+    // The AI service is now responsible for creating the record in the database.
+    const aiServiceResponse = await fetch(
+      `${AI_WORKER_URL}/create-and-dispatch-task`,
+      {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          task_id: task.id,
-          task_type: task.type,
+          task_type: 'GENERATE_TITLE',
+          user_id: session.user.id,
+          payload: {
+            content_blocks: content_blocks,
+          },
         }),
-      });
-    } catch (dispatchError) {
+      },
+    );
+
+    if (!aiServiceResponse.ok) {
+      const errorBody = await aiServiceResponse.text();
       console.error(
-        'Failed to dispatch title generation task to worker:',
-        dispatchError,
+        `Failed to dispatch title generation task. Status: ${aiServiceResponse.status}, Body: ${errorBody}`,
       );
-      // If dispatch fails, we should probably mark the task as failed
-      // For now, we'll just log the error but still return 202
+      return NextResponse.json(
+        {
+          error: 'Failed to communicate with AI service',
+          details: errorBody,
+        },
+        { status: aiServiceResponse.status },
+      );
     }
 
-    return NextResponse.json({ taskId: task.id }, { status: 202 });
+    const responseData =
+      (await aiServiceResponse.json()) as AIServiceSuccessResponse;
+
+    return NextResponse.json({ taskId: responseData.task_id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create title generation task:', error);
     return new NextResponse('Internal Server Error', { status: 500 });

@@ -28,12 +28,13 @@ ENV PYTHONUNBUFFERED 1
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy the application code
-COPY aiservice/ /app/
+# Copy the application code into a subdirectory that matches the module name
+COPY aiservice/ /app/aiservice/
 
 # Expose the port the app runs on
 EXPOSE 8000
 
 # Command to run the application using uvicorn
 # Note: We use 0.0.0.0 to bind to all network interfaces, making it accessible from outside the container
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# The app is now referenced as 'aiservice.main:app' because of the directory structure
+CMD ["uvicorn", "aiservice.main:app", "--host", "0.0.0.0", "--port", "8000"] 

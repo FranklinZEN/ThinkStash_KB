@@ -61,29 +61,41 @@ def process_reconstruction_task(self, task_payload_dict: dict):
     """
     orchestrator = get_orchestrator_instance()
     
+    # The authoritative task ID comes from the Celery context
+    task_id = self.request.id
+    
     # The main payload from the API is nested inside the 'payload' key of the task data
     main_payload = task_payload_dict.get('payload', {})
     
-    # Extract necessary info
-    task_id = task_payload_dict.get('task_id')
+    # Extract other necessary info from the original payload
     user_id = task_payload_dict.get('user_id')
-    source_identifier = main_payload.get('url') # Correctly get URL from nested payload
-    source_type = 'url' if source_identifier else 'text' # Determine source type
+    source_identifier = main_payload.get('sourceUrl') or main_payload.get('url') or main_payload.get('text')
+    source_type = 'url' if main_payload.get('sourceUrl') or main_payload.get('url') else 'text'
+    
+    # Extract run flags for synchronous AI services
+    run_title_generation = main_payload.get('run_title_generation', False)
+    run_keyword_extraction = main_payload.get('run_keyword_extraction', False)
+
+    # Extract the save_to_db flag, defaulting to True if not present
+    save_to_db = main_payload.get('save_to_db', True)
     
     logger.info(f"Starting reconstruction task for task_id: {task_id}")
 
     try:
-        # Construct OrchestrationInput using the unpacked main_payload
-        # This allows flags like 'run_title_generation' to be passed through
+        # Update the payload with the correct task ID before creating the input object
+        task_payload_dict['job_id'] = task_id
+        
         orchestrator_input = OrchestrationInput(
-            source_identifier=source_identifier,
-            source_type=source_type,
-            user_id=user_id,
             job_id=task_id,
-            **main_payload  # Unpack the rest of the payload here
+            user_id=user_id,
+            source_type=source_type,
+            source_identifier=source_identifier,
+            run_title_generation=run_title_generation,
+            run_keyword_extraction=run_keyword_extraction,
+            save_to_db=save_to_db
         )
         
-        # Since orchestrator.process is async, we need to run it in an event loop
+        # Now, you can call the orchestrator with the prepared input
         result_service = asyncio.run(orchestrator.process(orchestrator_input))
         
         if not result_service.is_success() or not result_service.data:
@@ -117,17 +129,75 @@ def process_reconstruction_task(self, task_payload_dict: dict):
         raise
 
 @app.task(bind=True)
-def generate_title_task(self, task_id: str):
+def generate_title_task(self, task_payload_dict: dict):
     """
-    Celery task to generate a title for a given document/card.
-    (Implementation to follow)
+    Celery task to generate a title for a given document's content.
     """
-    logger.info(f"Received title generation task for: {task_id}")
-    # TODO: Implement title generation logic
-    # 1. Fetch card content from DB using task_id (which might be the card_id)
-    # 2. Instantiate and run the TitleGenerationCrew
-    # 3. Update the card with the new title
-    return {"status": "success", "message": f"Title generation for {task_id} completed."}
+    task_db_service, orchestrator = _initialize_services()
+    
+    task_id = self.request.id
+    if not task_id:
+        logger.error("Could not find task_id in request context.")
+        # If there's no task_id, we can't update the status, so we just log and exit.
+        return
+
+    main_payload = task_payload_dict.get('payload', {})
+    content_blocks = main_payload.get('content_blocks')
+
+    logger.info(f"Starting title generation task for task_id: {task_id}")
+
+    if not content_blocks:
+        logger.error(f"Task {task_id} failed: No 'content_blocks' found in payload.")
+        # We must use a connection to update the status to FAILED
+        conn = None
+        try:
+            conn = task_db_service.get_connection()
+            task_db_service.update_task_status_failed(task_id, "Payload missing 'content_blocks'.", conn)
+            conn.commit()
+        except Exception as db_e:
+            logger.error(f"DB Error while failing task {task_id}: {db_e}", exc_info=True)
+            if conn: conn.rollback()
+        finally:
+            if conn: task_db_service.release_connection(conn)
+        return
+
+    conn = None
+    try:
+        conn = task_db_service.get_connection()
+        task_db_service.update_task_progress_stage(task_id, "Starting AI Title Generation", conn)
+        conn.commit() # Commit progress update
+
+        generated_title = asyncio.run(
+            orchestrator._run_title_generation_pipeline(
+                content_blocks=content_blocks,
+                job_id=task_id
+            )
+        )
+        
+        # On success, update the task with the final result
+        task_db_service.update_task_with_title_result(task_id, generated_title, conn)
+        conn.commit()
+        
+        logger.info(f"Task {task_id} (title generation) completed successfully.")
+        return {"status": "success", "generated_title": generated_title}
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in title generation task {task_id}: {e}", exc_info=True)
+        if conn:
+            conn.rollback() # Rollback any partial changes from the try block
+        # Use a fresh connection for final error reporting
+        error_conn = None
+        try:
+            error_conn = task_db_service.get_connection()
+            task_db_service.update_task_status_failed(task_id, str(e), error_conn)
+            error_conn.commit()
+        except Exception as db_e:
+            logger.error(f"DB Error while failing task {task_id} on exception: {db_e}", exc_info=True)
+            if error_conn: error_conn.rollback()
+        finally:
+            if error_conn:
+                task_db_service.release_connection(error_conn)
+        raise # Re-raise the original exception for Celery to mark as failed
 
 @app.task(bind=True)
 def process_rewrite_task(self, task_payload_dict: dict):

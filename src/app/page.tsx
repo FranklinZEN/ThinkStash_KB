@@ -153,100 +153,94 @@ export default function Home() {
     return normalized;
   };
 
-  const pollTaskStatus = useCallback(async (taskId: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/tasks/${taskId}/status`);
-        if (!res.ok) {
-          clearInterval(interval);
-          setStagedError('Failed to get task status.');
-          toast({
-            title: 'Error checking task status',
-            description: 'Could not retrieve task progress. Please try again.',
-            status: 'error',
-            duration: 5000,
-            isClosable: true,
-          });
-          return;
-        }
-
-        const data = await res.json();
-
-        if (data.status === 'COMPLETED') {
-          clearInterval(interval);
-          
-          let resultPayload = null;
-          if (data.payload && typeof data.payload === 'string') {
-            try {
-              resultPayload = JSON.parse(data.payload);
-            } catch (e) {
-              console.error("Failed to parse task result payload:", e);
-              setStagedError('Could not read the processing result.');
-              toast({
-                  title: 'Content Error',
-                  description: "The AI service returned a result, but it couldn't be read.",
-                  status: 'error',
-                  duration: 5000,
-                  isClosable: true,
-              });
-              return;
-            }
-          } else if (data.payload && typeof data.payload === 'object') {
-            resultPayload = data.payload;
-          }
-          
-          if (resultPayload?.title && resultPayload?.content_blocks) {
+  const pollTaskStatus = useCallback(
+    async (taskId: string) => {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/tasks/${taskId}/status`);
+          if (!res.ok) {
+            clearInterval(interval);
+            setStagedError('Failed to get task status.');
             toast({
-              title: 'Success!',
-              description: 'Content extracted. Redirecting to the editor.',
-              status: 'success',
-              duration: 3000,
+              title: 'Error checking status',
+              description: 'Could not retrieve task progress.',
+              status: 'error',
+              duration: 5000,
               isClosable: true,
             });
-            setStagedData(resultPayload.title, resultPayload.content_blocks, null, taskId);
-            router.push('/cards/new');
-          } else {
-             setStagedError('Processing finished, but the content was empty.');
-             toast({
+            return;
+          }
+
+          const data = await res.json();
+
+          if (data.status === 'SUCCESS') {
+            clearInterval(interval);
+            const resultPayload = data.result;
+
+            if (resultPayload && resultPayload.status_code === 'success' && resultPayload.content_blocks) {
+              const contentForStaging = resultPayload.content_blocks as AppPartialBlock[];
+              const titleToSet = resultPayload.title || '';
+              const keywordsToSet: string[] = resultPayload.document_metadata?.keywords || [];
+
+              setStagedData(titleToSet, contentForStaging, keywordsToSet);
+
+              toast({
+                title: 'Content Ready!',
+                description: 'Redirecting to editor for review...',
+                status: 'success',
+                duration: 3000,
+                isClosable: true,
+              });
+              
+              router.push('/cards/new');
+            } else {
+              const errorMsg = resultPayload?.error_message || 'Processing finished, but content is missing.';
+              setStagedError(errorMsg);
+              toast({
                 title: 'Processing Error',
-                description: "The AI service couldn't extract content from the URL.",
+                description: errorMsg,
                 status: 'error',
                 duration: 5000,
                 isClosable: true,
+              });
+            }
+          } else if (data.status === 'FAILED') {
+            clearInterval(interval);
+            const errorDetails = data.result?.error_message || 'An unknown error occurred during processing.';
+            setStagedError(errorDetails);
+            toast({
+              title: 'Processing Failed',
+              description: errorDetails,
+              status: 'error',
+              duration: 5000,
+              isClosable: true,
             });
           }
-        } else if (data.status === 'FAILED') {
+          // PENDING or other statuses are ignored, we just continue polling
+        } catch (error) {
           clearInterval(interval);
-          setStagedError(data.error || 'Content processing failed.');
-           toast({
-            title: 'Processing Failed',
-            description: data.error || 'Something went wrong while processing your content.',
-            status: 'error',
+          setStagedError('An error occurred while polling for task status.');
+          console.error('Polling error:', error);
+        }
+      }, 3000);
+
+      // Timeout logic remains the same
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        if (useStagingCardStore.getState().isLoading) {
+          setStagedError('Processing is taking longer than expected.');
+          toast({
+            title: 'Processing Timed Out',
+            description: "It's taking a while. You can find the card on the home page if it eventually completes.",
+            status: 'warning',
             duration: 5000,
             isClosable: true,
           });
         }
-      } catch (error) {
-        clearInterval(interval);
-        setStagedError('An error occurred while polling for task status.');
-        console.error('Polling error:', error);
-      }
-    }, 3000);
-
-    const timeout = setTimeout(() => {
-        clearInterval(interval);
-        if (useStagingCardStore.getState().isLoading) {
-             setStagedError('Processing is taking longer than expected. Please check back later.');
-             toast({
-                title: 'Processing Timed Out',
-                description: "It's taking a while. You can find the card on the home page once it's ready.",
-                status: 'warning',
-                duration: 5000,
-                isClosable: true,
-            });
-        }
-    }, 120000); 
-  }, [router, toast, setStagedData, setStagedError, clearStagedData]);
+      }, 120000);
+    },
+    [router, toast, setStagedData, setStagedError, clearStagedData],
+  );
 
   const handleReconstructFromUrl = async () => {
     if (!reconstructUrl.trim()) {
@@ -258,42 +252,49 @@ export default function Home() {
       });
       return;
     }
-    
+
     startLoading();
     onCloseUrlModal();
-    
+
     try {
       const normalizedUrl = normalizeUrlInput(reconstructUrl.trim());
 
       const response = await fetch('/api/ai/draft-from-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceUrl: normalizedUrl }),
+        body: JSON.stringify({
+          sourceUrl: normalizedUrl,
+          save_to_db: false,
+        }),
       });
 
       if (response.status !== 202) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `Server responded with ${response.status}`);
+        throw new Error(
+          errorData.error || `Server responded with ${response.status}`,
+        );
       }
-      
+
       const { taskId } = await response.json();
       toast({
-          title: 'Processing Started',
-          description: "We're fetching the content from the URL. You'll be redirected when it's ready.",
-          status: 'info',
-          duration: 5000,
-          isClosable: true,
+        title: 'Processing Started',
+        description:
+          "We're fetching the content. You'll be redirected when it's ready.",
+        status: 'info',
+        duration: 5000,
+        isClosable: true,
       });
-      await pollTaskStatus(taskId);
 
+      await pollTaskStatus(taskId);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      const errorMessage =
+        err instanceof Error ? err.message : 'An unknown error occurred';
       setStagedError(errorMessage);
       toast({
         title: 'Failed to Start Processing',
         description: errorMessage,
         status: 'error',
-        duration: 5000,
+        duration: 9000,
         isClosable: true,
       });
     }

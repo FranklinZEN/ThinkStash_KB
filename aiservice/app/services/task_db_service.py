@@ -73,9 +73,16 @@ class TaskDBService:
         params = (TaskStatus.PROCESSING.value, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to PROCESSING")
 
-    def update_task_status_completed(self, task_id: str, result_data: Dict[str, Any], conn):
+    def update_task_status_completed(self, task_id: str, result_data: Any, conn):
         """Updates the task status to COMPLETED and stores the result data."""
-        result_data_json = json.dumps(result_data, default=json_serial_converter)
+        
+        # Check if result_data is a list of Pydantic models and serialize them
+        if isinstance(result_data, list) and result_data and hasattr(result_data[0], 'model_dump'):
+            serializable_data = [item.model_dump() for item in result_data]
+        else:
+            serializable_data = result_data
+
+        result_data_json = json.dumps(serializable_data, default=json_serial_converter)
         sql = 'UPDATE "Task" SET status = %s, payload = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
         params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with results")
@@ -103,7 +110,19 @@ class TaskDBService:
         sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
         params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
         self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with rewrite results")
-        
+
+    def update_task_with_title_result(self, task_id: str, generated_title: str, conn):
+        """Updates a COMPLETED task with the result of a title generation."""
+        result_payload = {
+            "status": "success",
+            "generated_title": generated_title
+        }
+        result_data_json = json.dumps(result_payload, default=json_serial_converter)
+        # We also update the 'result' field in the Task table.
+        sql = 'UPDATE "Task" SET status = %s, result = %s, error = NULL, "updatedAt" = %s WHERE id = %s'
+        params = (TaskStatus.COMPLETED.value, result_data_json, datetime.datetime.utcnow(), task_id)
+        self._execute_update(conn, sql, params, task_id, "update status to COMPLETED with title result")
+
     def get_task_by_id(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Fetches a single task by its ID."""
         conn = None
@@ -130,8 +149,9 @@ class TaskDBService:
         card_id = None
         try:
             with conn.cursor() as cur:
-                # The 'content' column in KnowledgeCard is JSON
-                content_json = json.dumps(blocks, default=json_serial_converter)
+                # Convert Pydantic models to dicts before serializing to JSON
+                blocks_as_dicts = [block.model_dump() for block in blocks]
+                content_json = json.dumps(blocks_as_dicts, default=json_serial_converter)
                 
                 sql = """
                     INSERT INTO "KnowledgeCard" (id, title, content, "userId", "createdAt", "updatedAt")

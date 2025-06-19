@@ -201,21 +201,35 @@ export async function getCardLogic(
 > {
   try {
     const card = await prisma.knowledgeCard.findUnique({
-      where: { id: cardId, userId: userId },
-      include: { folder: true, tags: true },
+      where: {
+        id: cardId,
+        userId: userId, // Ensure the user owns the card
+      },
+      include: {
+        folder: true, // Include the folder details
+        tags: true, // Include the associated tags
+      },
     });
 
     if (!card) {
       return {
         success: false,
-        error: 'Card not found or access denied',
+        error: 'Card not found or you do not have permission to view it.',
         status: 404,
       };
     }
+
     return { success: true, data: card, status: 200 };
   } catch (error) {
-    console.error('[cardService] Failed to fetch card:', error);
-    return { success: false, error: 'Failed to retrieve card.', status: 500 };
+    console.error(`[cardService] (getCardLogic) Error fetching card ${cardId} for user ${userId}:`, error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'An unknown error occurred';
+    return {
+      success: false,
+      error: 'Failed to fetch card due to a server error.',
+      details: errorMessage,
+      status: 500,
+    };
   }
 }
 

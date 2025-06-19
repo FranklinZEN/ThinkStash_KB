@@ -3,11 +3,14 @@ from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field, validator
 import datetime
 import uuid
+from .orchestration_models import ContentBlock
 
 class TaskType(str, Enum):
-    """Defines the types of tasks the system can handle."""
-    RECONSTRUCT_AND_ANALYZE = "RECONSTRUCT_AND_ANALYZE"
-    REWRITE_CONTENT = "REWRITE_CONTENT"
+    """Enum for the different types of tasks that can be dispatched."""
+    RECONSTRUCT_FROM_URL = "reconstruct_from_url"
+    REWRITE_CONTENT = "rewrite_content"
+    GENERATE_TITLE = "generate_title"
+    GENERATE_KEYWORDS = "generate_keywords"
 
 class TaskStatus(str, Enum):
     PENDING = "PENDING"
@@ -15,12 +18,23 @@ class TaskStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
+class TaskResult(BaseModel):
+    """Data model for the result of a task."""
+    status: TaskStatus
+    result: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+
 class TaskPayload(BaseModel):
     id: str
     userId: str
     type: str
     status: str
     payload: Dict[str, Any]
+
+class TaskRequest(BaseModel):
+    task_type: str
+    payload: Dict[str, Any]
+    user_id: str
 
 class RewriteTaskPayload(BaseModel):
     task_id: str
@@ -34,7 +48,7 @@ class TaskStatusUpdate(BaseModel):
     user_id: Optional[str] = None
     input_data_ref: Optional[str] = None # e.g., a path or URI to where input is stored if not in payload
     result_data_ref: Optional[str] = None # e.g., a path or URI to where result is stored
-    ai_rewritten_content_blocks: Optional[List[Dict[str, Any]]] = None
+    ai_rewritten_content_blocks: Optional[List[ContentBlock]] = None
     error_message: Optional[str] = None
     usage_metrics: Optional[Dict[str, Any]] = None # To store usage_metrics from RewriteContentOutput
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)

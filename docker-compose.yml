@@ -32,14 +32,22 @@ services:
     image: thinkstash-aiservice
     container_name: thinkstash-aiservice
     ports:
-      - "8000:8000"
+      - target: 8000
+        published: 8001
+        protocol: tcp
+        mode: host
     env_file:
       - ./aiservice/.env
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs_credentials.json
+    command: uvicorn aiservice.main:app --host 0.0.0.0 --port 8000 --reload
     restart: always
     depends_on:
       - postgres
       - redis
+    volumes:
+      - ./aiservice:/app/aiservice
+      - ./thinkstash-knowledge-base-94ace76cab03.json:/app/gcs_credentials.json:ro
     networks:
       - thinkstash-net
 
@@ -48,10 +56,13 @@ services:
       context: .
       dockerfile: worker.Dockerfile
     image: thinkstash-worker
-    command: celery -A celery_app.app worker --loglevel=info
+    command: celery -A aiservice.celery_app.app worker --loglevel=info
     env_file:
       - ./aiservice/.env
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs_credentials.json
     volumes:
+      - ./aiservice:/app/aiservice
       - ./thinkstash-knowledge-base-94ace76cab03.json:/app/gcs_credentials.json:ro
     container_name: thinkstash-worker
     restart: always

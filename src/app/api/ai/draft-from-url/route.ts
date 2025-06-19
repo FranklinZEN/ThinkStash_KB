@@ -1,8 +1,14 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 
 const AI_WORKER_URL = process.env.AI_WORKER_URL || 'http://localhost:8000';
+
+const DraftRequestSchema = z.object({
+  sourceUrl: z.string().url(),
+  save_to_db: z.boolean().optional(),
+});
 
 export async function POST(req: Request) {
   try {
@@ -12,21 +18,25 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { sourceUrl } = body;
+    const validation = DraftRequestSchema.safeParse(body);
 
-    if (!sourceUrl) {
-      return new NextResponse('Source URL is required', { status: 400 });
+    if (!validation.success) {
+      return new NextResponse(JSON.stringify(validation.error.format()), {
+        status: 400,
+      });
     }
 
-    // The payload for the backend endpoint that creates and dispatches
+    const { sourceUrl, save_to_db } = validation.data;
+
     const createTaskPayload = {
-      // This is a generic type the backend understands
       task_type: 'RECONSTRUCT_AND_ANALYZE',
       user_id: session.user.id,
-      // The payload specific to this task type
       payload: {
-        url: sourceUrl,
+        sourceUrl: sourceUrl,
         source_type: 'url',
+        run_title_generation: true,
+        // Default to TRUE if save_to_db is not provided or is null
+        save_to_db: save_to_db !== false,
       },
     };
 
@@ -40,16 +50,24 @@ export async function POST(req: Request) {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error('Failed to create and dispatch task:', response.status, errorBody);
-      return new NextResponse(`Error from AI service: ${errorBody}`, { status: response.status });
+      console.error(
+        'Failed to create and dispatch task:',
+        response.status,
+        errorBody,
+      );
+      return new NextResponse(`Error from AI service: ${errorBody}`, {
+        status: response.status,
+      });
     }
 
     const responseData = await response.json();
 
-    // The backend returns the taskId it created
     return NextResponse.json({ taskId: responseData.task_id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create draft task:', error);
+    if (error instanceof z.ZodError) {
+      return new NextResponse(JSON.stringify(error.issues), { status: 400 });
+    }
     return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

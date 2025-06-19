@@ -81,7 +81,6 @@ class ContentStructuringService(BaseService):
                 
                 elif p_block.type == 'image_placeholder':
                     img_ref = p_block.image_id_ref
-                    
                     if not img_ref:
                         continue
 

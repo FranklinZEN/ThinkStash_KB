@@ -831,7 +831,7 @@ export default function NewCardPage() {
       });
       return;
     }
-    if (!_editor || isEditorEmpty(_editor.document as AppPartialBlock[])) {
+    if (!_editor || isEditorEmpty(editorContent)) {
       toast({
         title: 'Content Required',
         description: 'Cannot suggest title for empty content.',
@@ -846,7 +846,7 @@ export default function NewCardPage() {
     setSuggestedTitle(null);
     try {
       const currentContentBlocks = mapPartialBlocksToAIServiceContentBlocks(
-        _editor.document as AppPartialBlock[],
+        editorContent as AppPartialBlock[],
         session.user.id,
       );
 
@@ -1048,7 +1048,7 @@ export default function NewCardPage() {
                 disabled={
                   isSuggestingTitle ||
                   !_editor ||
-                  isEditorEmpty(_editor?.document as AppPartialBlock[])
+                  isEditorEmpty(editorContent)
                 }
               >
                 Suggest Title

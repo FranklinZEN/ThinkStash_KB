@@ -5,6 +5,12 @@ import { authOptions } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import type { GenerateKeywordsRequest } from '@/types/api/ai-service';
 
+// Define the expected structure of the successful response from the AI service
+interface AIServiceSuccessResponse {
+  message: string;
+  task_id: string;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -29,19 +35,41 @@ export async function POST(req: Request) {
       );
     }
 
-    const task = await prisma.task.create({
-      data: {
-        userId: session.user.id,
-        type: 'GENERATE_KEYWORDS',
-        status: 'PENDING',
-        payload: {
-          content_blocks: content_blocks as unknown as Prisma.JsonValue,
+    const aiServiceResponse = await fetch(
+      'http://localhost:8000/create-and-dispatch-task',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        progressMessage: 'Keyword generation task created',
+        body: JSON.stringify({
+          task_type: 'GENERATE_KEYWORDS',
+          user_id: session.user.id,
+          payload: {
+            content_blocks: content_blocks,
+          },
+        }),
       },
-    });
+    );
 
-    return NextResponse.json({ taskId: task.id }, { status: 202 });
+    if (!aiServiceResponse.ok) {
+      const errorBody = await aiServiceResponse.text();
+      console.error(
+        `Failed to dispatch keyword generation task. Status: ${aiServiceResponse.status}, Body: ${errorBody}`,
+      );
+      return NextResponse.json(
+        {
+          error: 'Failed to communicate with AI service',
+          details: errorBody,
+        },
+        { status: aiServiceResponse.status },
+      );
+    }
+
+    const responseData =
+      (await aiServiceResponse.json()) as AIServiceSuccessResponse;
+
+    return NextResponse.json({ taskId: responseData.task_id }, { status: 202 });
   } catch (error) {
     console.error('Failed to create keyword generation task:', error);
     return new NextResponse('Internal Server Error', { status: 500 });
