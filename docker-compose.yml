@@ -56,13 +56,13 @@ services:
       context: .
       dockerfile: worker.Dockerfile
     image: thinkstash-worker
-    command: celery -A aiservice.celery_app.app worker --loglevel=info
+    command: celery -A celery_app:app worker --loglevel=info
     env_file:
       - ./aiservice/.env
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs_credentials.json
     volumes:
-      - ./aiservice:/app/aiservice
+      - ./aiservice:/app
       - ./thinkstash-knowledge-base-94ace76cab03.json:/app/gcs_credentials.json:ro
     container_name: thinkstash-worker
     restart: always
