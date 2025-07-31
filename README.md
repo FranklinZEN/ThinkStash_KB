@@ -24,32 +24,33 @@ This project serves as a portfolio piece to showcase the development of a full-s
 
 The power of ThinkStash lies in its backend, where a team of specialized AI agents, built with **`crewAI`** and **`Langchain`**, work together to process information.
 
-```mermaid
-graph TD;
-    subgraph User Input
-        A[URL, PDF, or Manual Text]
-    end
+#### Workflow Overview:
 
-    subgraph AI Processing Service (Python, FastAPI, Celery)
-        B(Content Fetcher Agent) -- Raw Content --> C{Knowledge Card};
-        C -- Trigger Task --> D{AI Agent Crew};
-        D -- Deconstructs & Analyzes --> E[Title Generation Agent];
-        D -- Deconstructs & Analyzes --> F[Keyword Extraction Agent];
-        D -- Deconstructs & Analyzes --> G[Content Rewrite Agent];
-    end
-    
-    subgraph Frontend (Next.js)
-        H[Updated Knowledge Card]
-    end
+1. **User Input** → URL, PDF, or Manual Text
+2. **Content Fetcher Agent** → Scrapes and extracts raw content
+3. **Knowledge Card Creation** → Stores initial content in database
+4. **AI Agent Crew Assembly** → Orchestrates multiple specialized agents:
+   - **Title Generation Agent** → Creates concise, relevant titles
+   - **Keyword Extraction Agent** → Identifies key concepts and tags
+   - **Content Rewrite Agent** → Summarizes and refines content
+5. **Enriched Knowledge Card** → Returns enhanced content to user
 
-    A --> B;
-    E -- New Title --> H;
-    F -- Keywords/Tags --> H;
-    G -- Rewritten Content --> H;
-    C --> H;
-
-    style C fill:#fff,stroke:#333,stroke-width:2px
-    style H fill:#cde4f7,stroke:#333,stroke-width:2px
+#### Technical Flow:
+```
+User Input (URL/PDF/Text)
+    ↓
+Content Fetcher Agent (Python + Playwright/PyMuPDF)
+    ↓
+Raw Content → Knowledge Card (PostgreSQL)
+    ↓
+Trigger AI Enrichment Tasks (Celery Queue)
+    ↓
+AI Agent Crew (crewAI + Langchain)
+    ├── Title Generation Agent
+    ├── Keyword Extraction Agent
+    └── Content Rewrite Agent
+    ↓
+Enriched Knowledge Card → Frontend (Next.js)
 ```
 
 1.  **Capture:** The user provides input (e.g., a URL).
