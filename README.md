@@ -1,18 +1,108 @@
-# Knowledge Cards App
+# ThinkStash: Your Intelligent, AI-Powered Personal Knowledge Base
 
-A dynamic personal knowledge base application built with Next.js and Chakra UI.
+ThinkStash is a modern web application designed to be a "second brain." It empowers users to build a consolidated, personal knowledge hub by capturing information from various sources. More than just a note-taking app, ThinkStash uses a sophisticated AI agentic backend to analyze, process, and enrich content, laying the groundwork for a future where you can have intelligent conversations with your own knowledge.
 
-## Prerequisites
+This project serves as a portfolio piece to showcase the development of a full-stack, AI-native application from concept to execution.
 
-- Node.js (Version specified in `.nvmrc` - use `nvm use` if you have Node Version Manager)
-- npm (comes with Node.js)
-- Docker Desktop (required for the local PostgreSQL database)
+---
 
-## Local Development Setup
+### Key Features
 
-This section provides the official, step-by-step instructions for running the complete ThinkStash application stack (Webapp, AI Worker, Database) on your local machine. This is the required setup for all development and debugging.
+*   **🧠 Multi-Source Knowledge Capture:** Create "Knowledge Cards" by manually writing notes, uploading PDF documents, or instantly parsing content from any URL.
+*   **🤖 AI-Powered Content Enrichment:**
+    *   **Auto-Title Generation:** Let AI suggest a concise, relevant title for your content.
+    *   **Keyword & Tag Extraction:** Automatically identify and tag key concepts within your notes for better organization and discovery.
+    *   **Content Summarization & Rewrite:** Refine and condense lengthy articles or notes into brief, memorable summaries.
+*   **✍️ Rich Text Editing:** A powerful, intuitive block-based editor for crafting and formatting notes.
+*   **🗂️ Folder Organization:** Structure your knowledge with a simple and effective folder management system.
+*   **🔐 User Authentication:** Secure user accounts and private knowledge bases.
+*   **🚀 Future-Ready for RAG:** The entire system is architected to eventually use your personal knowledge base as a source for Retrieval-Augmented Generation (RAG), enabling you to query your own data.
 
-### 1. Environment Variable Setup
+---
+
+### How It Works: The AI Agentic Pipeline
+
+The power of ThinkStash lies in its backend, where a team of specialized AI agents, built with **`crewAI`** and **`Langchain`**, work together to process information.
+
+```mermaid
+graph TD;
+    subgraph User Input
+        A[URL, PDF, or Manual Text]
+    end
+
+    subgraph AI Processing Service (Python, FastAPI, Celery)
+        B(Content Fetcher Agent) -- Raw Content --> C{Knowledge Card};
+        C -- Trigger Task --> D{AI Agent Crew};
+        D -- Deconstructs & Analyzes --> E[Title Generation Agent];
+        D -- Deconstructs & Analyzes --> F[Keyword Extraction Agent];
+        D -- Deconstructs & Analyzes --> G[Content Rewrite Agent];
+    end
+    
+    subgraph Frontend (Next.js)
+        H[Updated Knowledge Card]
+    end
+
+    A --> B;
+    E -- New Title --> H;
+    F -- Keywords/Tags --> H;
+    G -- Rewritten Content --> H;
+    C --> H;
+
+    style C fill:#fff,stroke:#333,stroke-width:2px
+    style H fill:#cde4f7,stroke:#333,stroke-width:2px
+```
+
+1.  **Capture:** The user provides input (e.g., a URL).
+2.  **Fetch & Parse:** The `Content Fetcher Agent` scrapes the URL, cleans the HTML, and extracts the core article text.
+3.  **Enrich (On-Demand):** The user can then trigger various AI enrichment tasks. A "crew" of agents is assembled to:
+    *   Generate a fitting title.
+    *   Extract relevant keywords.
+    *   Rewrite the content for brevity and clarity.
+4.  **Store:** The final, enriched content is saved as a structured "Knowledge Card" in the database.
+
+---
+
+### Core Architecture
+
+ThinkStash is built on a modern, decoupled architecture designed for scalability and maintainability.
+
+*   **Frontend Webapp:** A responsive user interface built with **Next.js**, **React**, **TypeScript**, and **Chakra UI**. It communicates with a backend-for-frontend (BFF) via API routes.
+*   **Backend API (BFF):** **Next.js API Routes** handle user authentication, data fetching, and serve as the gateway to the AI microservice.
+*   **AI Microservice:** A powerful, asynchronous backend service built with **Python**, **FastAPI**, and **Celery**. This is the heart of the AI capabilities, orchestrating the `crewAI` and `Langchain` agents to perform complex content processing tasks.
+*   **Database:** **PostgreSQL** serves as the primary data store, with **Prisma** as the ORM for type-safe database access.
+*   **File Storage:** **Google Cloud Storage (GCS)** is used for securely storing user-uploaded files like PDFs and images.
+*   **Task Queue:** **Redis** and **Celery** manage the queue for long-running AI tasks, ensuring the user interface remains fast and responsive.
+
+---
+
+### A Note on the Development Process: Built with Cursor AI
+
+This entire project was developed from ideation to implementation without any human coding, serving as a personal case study in AI-assisted software development.
+
+*   **The Vision:** The goal was to test the limits of "vibe-driven development"—translating a product vision directly into functional code by writing high-level prompts and guiding an AI partner.
+*   **The Process:** I acted as the product manager and architect, defining requirements, designing the system, and engineering prompts. **Cursor AI** served as the programmer, generating the code, debugging, and refactoring across the entire full-stack application.
+*   **The Learning:** This project was an invaluable learning experience in human-AI collaboration. It provided deep insights into prompt engineering, iterative development with LLMs, and a practical, hands-on understanding of how to build and orchestrate AI agentic workflows using frameworks like `crewAI` and `Langchain`.
+
+---
+
+### Tech Stack
+
+| Category           | Technologies                                                                                             |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| **Frontend**       | `Next.js`, `React`, `TypeScript`, `Chakra UI`, `Zustand`, `BlockNote (Editor)`, `SWR`                       |
+| **Backend (API)**  | `Next.js API Routes`, `NextAuth.js`, `Prisma ORM`, `Zod`                                                   |
+| **AI Microservice**| `Python`, `FastAPI`, `Celery`, `crewAI`, `Langchain`, `Pydantic`                                            |
+| **Database**       | `PostgreSQL`, `pgvector` (for future semantic search)                                                    |
+| **File Handling**  | `Google Cloud Storage`, `Playwright` (Scraping), `PyMuPDF` (PDFs), `OpenCV` (Image Proc.)                   |
+| **DevOps & Tools** | `Docker`, `ESLint`, `Prettier`, `Jest`, `Pytest`                                                           |
+
+---
+
+### Local Development Setup
+
+Follow these steps to run the complete ThinkStash stack on your local machine.
+
+#### 1. Environment Variable Setup
 
 You will need to create two environment files. **These files should not be committed to git.**
 
@@ -26,7 +116,7 @@ A. **Webapp Environment (`.env.local`):**
 
 B. **AI Worker Environment (`aiservice/.env.worker`):**
    - In the `aiservice/` directory, create a file named `.env.worker`.
-   - This file must contain all the environment variables the worker needs to run. You will need to get your own `GEMINI_API_KEY`.
+   - You will need to get your own `GEMINI_API_KEY` and set up a GCS bucket.
      ```
      # In aiservice/.env.worker
      DATABASE_URL="postgresql://user:password@localhost:5433/knowledge_cards?sslmode=disable"
@@ -34,10 +124,9 @@ B. **AI Worker Environment (`aiservice/.env.worker`):**
      GCS_BUCKET_NAME="your-gcs-bucket-name"
      PYTHONUNBUFFERED=1
      PYTHONDONTWRITEBYTECODE=1
-     # ... (copy all other variables from the Phoenix Plan or cloudbuild.yaml) ...
      ```
 
-### 2. Running the Application
+#### 2. Running the Application
 
 Follow these steps in order.
 
@@ -49,7 +138,7 @@ Follow these steps in order.
       ```
 
 2.  **Set Up the Database Schema:**
-    - This command applies any pending migrations to the local database, creating the necessary tables.
+    - This command applies any pending migrations to the local database.
       ```bash
       npx prisma migrate dev
       ```
@@ -57,54 +146,20 @@ Follow these steps in order.
 3.  **Start the Webapp:**
     - In a new terminal, run the Next.js development server.
       ```bash
+      npm install
       npm run dev
       ```
     - The web application will be available at `http://localhost:3000`.
 
 4.  **Start the AI Worker:**
-    - In another new terminal, run the worker startup script.
+    - In another new terminal, navigate to the `aiservice` directory and run the worker startup script. (You may need to set up a Python virtual environment and run `pip install -r requirements.txt` first).
       ```bash
-      sh aiservice/run_local_worker.sh
+      # First-time setup for the worker
+      python -m venv .venv
+      source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+      pip install -r requirements.txt
+
+      # Run the worker
+      sh ./run_local_worker.sh # On Windows, you can run the .ps1 script
       ```
-    - This will start the Python worker, which will listen for and process background tasks.
-
-## Tech Stack
-
-- Next.js (React Framework)
-- TypeScript
-- PostgreSQL (Database)
-- Prisma (ORM)
-- Chakra UI (Component Library)
-- NextAuth.js (Authentication)
-- Zustand (State Management)
-- BlockNote (Rich Text Editor)
-- React Flow (Node-based UI)
-- ESLint / Prettier / Husky / lint-staged (Code Quality)
-
-## Features
-
-- **User Authentication:** Uses NextAuth.js for user sign-up and sign-in.
-- **Knowledge Card Management (CRUD):**
-    - Create new knowledge cards with a title and rich text content.
-    - View existing cards.
-    - Edit card titles and content.
-    - Delete cards (with confirmation).
-- **Rich Text Editing:** Utilizes the BlockNote editor (`@blocknote/react` + `@blocknote/mantine`) for card content, allowing for various formatting options.
-- **Folder Management:** (Future Feature - Placeholder)
-- **Card Linking / Graph View:** (Future Feature - Uses React Flow)
-- Image Upload
-
-## Testing
-
-- Core Card CRUD operations (Create, Read, Update, Delete) involving the BlockNote editor integration have been interactively tested and confirmed to be working (as of the last debugging session).
-- Unit and integration tests are set up using Jest (see `jest.config.*.js`).
-
-## Links
-
-* (Placeholder for links to PRD, TDD, ADRs, etc.)
-
-## Contributing
-
-- (Placeholder for contribution guidelines - see `CONTRIBUTING.md` if it exists)
-
-<!-- Build trigger comment: 2024-05-15T12:00:00Z --> 
+    - This will start the Python worker, which listens for background tasks.
